@@ -1,0 +1,17 @@
+syntax = "proto3";
+package nevo.voice;
+
+// ============================================================
+// UDP 语音包头
+// ============================================================
+message VoicePacketHeader {
+    uint32 sequence_number = 1;   // 序列号（排序和丢包检测）
+    uint64 sender_id = 2;         // 发送者 UserId
+    uint64 channel_id = 3;        // 目标频道
+    uint32 timestamp = 4;         // 采集时间戳 (ms)
+    bool last_frame = 5;          // 是否为语音末尾帧
+    uint32 fec_payload_size = 6;  // FEC 冗余数据大小（0=无FEC）
+    bytes nonce = 7;              // AES-GCM nonce（12字节），每包唯一
+    bytes auth_tag = 8;           // AES-GCM 认证标签（16字节）
+    bool tcp_tunnel = 9;          // true=此包通过TCP隧道传输
+}

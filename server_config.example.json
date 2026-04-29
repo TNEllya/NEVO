@@ -1,0 +1,10 @@
+{
+    "tcp_port": 24430,
+    "udp_port": 24431,
+    "db_path": "nevo_server.db",
+    "threads": 4,
+    "log_level": "info",
+    "server_name": "NEVO Server",
+    "max_users": 100,
+    "welcome_message": "Welcome to the NEVO server!"
+}

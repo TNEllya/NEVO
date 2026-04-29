@@ -1,0 +1,60 @@
+syntax = "proto3";
+package nevo.common;
+
+// ============================================================
+// 基础 ID 类型
+// ============================================================
+
+message UserIdMsg { uint64 id = 1; }
+message ChannelIdMsg { uint64 id = 1; }
+
+// ============================================================
+// 结果码
+// ============================================================
+enum ResultCode {
+    OK = 0;
+    ERROR_UNKNOWN = 1;
+    ERROR_AUTH_FAILED = 2;
+    ERROR_PERMISSION_DENIED = 3;
+    ERROR_CHANNEL_NOT_FOUND = 4;
+    ERROR_ALREADY_IN_CHANNEL = 5;
+    ERROR_INVALID_REQUEST = 6;
+    ERROR_CONNECTION_FAILED = 7;
+    ERROR_TIMEOUT = 8;
+    ERROR_CRYPTO_ERROR = 10;
+    ERROR_NAT_TRAVERSAL_FAILED = 11;
+}
+
+// ============================================================
+// 用户状态
+// ============================================================
+enum UserStatus {
+    OFFLINE = 0;
+    ONLINE = 1;
+    AWAY = 2;
+    MUTED = 3;
+    DEAFENED = 4;
+}
+
+// ============================================================
+// 用户信息
+// ============================================================
+message UserInfo {
+    uint64 id = 1;
+    string username = 2;
+    UserStatus status = 3;
+    bool muted = 4;
+    bool deafened = 5;
+    uint32 group_id = 6;
+}
+
+// ============================================================
+// 频道信息（树状递归结构）
+// ============================================================
+message ChannelInfo {
+    uint64 id = 1;
+    string name = 2;
+    uint64 parent_id = 3;
+    repeated ChannelInfo children = 4;
+    repeated UserInfo users = 5;
+}

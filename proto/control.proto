@@ -1,0 +1,181 @@
+syntax = "proto3";
+package nevo.control;
+
+import "common.proto";
+
+// ============================================================
+// TCP 包头
+// ============================================================
+message TcpPacketHeader {
+    uint32 payload_length = 1;   // 载荷字节长度
+    uint32 message_type = 2;     // 消息类型枚举值
+    uint32 request_id = 3;       // 请求-响应关联ID（0=单向通知）
+}
+
+// ============================================================
+// 消息类型枚举（与 oneof 字段编号对应）
+// ============================================================
+enum MessageType {
+    MSG_UNKNOWN = 0;
+    MSG_LOGIN_REQUEST = 1;
+    MSG_LOGIN_RESPONSE = 2;
+    MSG_JOIN_CHANNEL = 3;
+    MSG_LEAVE_CHANNEL = 4;
+    MSG_CREATE_CHANNEL = 5;
+    MSG_DELETE_CHANNEL = 6;
+    MSG_CHANNEL_LIST = 7;
+    MSG_USER_JOINED = 8;
+    MSG_USER_LEFT = 9;
+    MSG_USER_SPEAKING = 10;
+    MSG_PTT_TOGGLE = 11;
+    MSG_MUTE_TOGGLE = 12;
+    MSG_SERVER_MESSAGE = 13;
+    MSG_STUN_BIND_REQUEST = 14;
+    MSG_STUN_BIND_RESPONSE = 15;
+    MSG_UDP_PING_REQUEST = 16;
+    MSG_UDP_PING_RESPONSE = 17;
+    MSG_KEY_ROTATION_REQUEST = 18;
+    MSG_KEY_ROTATION_RESPONSE = 19;
+    MSG_BIND_OWNER_REQUEST = 20;
+    MSG_BIND_OWNER_RESPONSE = 21;
+}
+
+// ============================================================
+// 客户端 → 服务端
+// ============================================================
+
+message LoginRequest {
+    string username = 1;
+    bytes auth_credential = 2;            // 认证凭证
+    repeated string key_exchange_methods = 3;  // 支持的密钥交换方式
+    bytes client_public_key = 4;          // 客户端 X25519 公钥
+}
+
+message JoinChannelRequest {
+    uint64 channel_id = 1;
+}
+
+message LeaveChannelRequest {}
+
+message CreateChannelRequest {
+    uint64 parent_id = 1;
+    string name = 2;
+}
+
+message DeleteChannelRequest {
+    uint64 channel_id = 1;
+}
+
+message PttToggle {
+    bool active = 1;
+}
+
+message UserMuteToggle {
+    bool muted = 1;
+}
+
+message StunBindRequest {
+    uint32 transaction_id = 1;
+}
+
+message UdpPingRequest {
+    uint32 sequence = 1;
+    bytes client_udp_key = 2;             // 客户端 UDP 加密初始密钥材料
+}
+
+// ============================================================
+// 服务端 → 客户端
+// ============================================================
+
+message LoginResponse {
+    nevo.common.ResultCode result = 1;
+    nevo.common.UserInfo user_info = 2;
+    string session_token = 3;
+    bytes server_public_key = 4;          // 服务端 X25519 公钥（兼容旧模式）
+    string key_exchange_method = 5;       // 实际选用的密钥交换方式
+    bytes encrypted_session_key = 6;      // crypto_box_seal 加密的会话密钥
+}
+
+message ChannelListUpdate {
+    repeated nevo.common.ChannelInfo channels = 1;
+}
+
+message UserJoinedChannel {
+    nevo.common.UserInfo user = 1;
+    uint64 channel_id = 2;
+}
+
+message UserLeftChannel {
+    uint64 user_id = 1;
+    uint64 channel_id = 2;
+}
+
+message UserSpeaking {
+    uint64 user_id = 1;
+    bool speaking = 2;
+}
+
+message ServerMessage {
+    string text = 1;
+}
+
+message StunBindResponse {
+    uint32 transaction_id = 1;
+    bytes mapped_address = 2;             // 客户端公网地址（IP:Port 编码）
+    uint32 nat_type = 3;                  // NAT 类型枚举值
+}
+
+message UdpPingResponse {
+    uint32 sequence = 1;
+    bool udp_reachable = 2;               // 服务端是否收到客户端 UDP 包
+}
+
+message KeyRotationRequest {
+    bytes new_server_public_key = 1;      // 新的服务端 X25519 公钥（兼容旧模式）
+    uint64 key_epoch = 2;                 // 密钥纪元号
+    bytes encrypted_session_key = 3;      // crypto_box_seal 加密的会话密钥
+}
+
+message KeyRotationResponse {
+    bytes new_client_public_key = 1;      // 新的客户端 X25519 公钥
+    uint64 key_epoch = 2;
+}
+
+message BindOwnerRequest {
+    string bind_key = 1;                  // 服主绑定密钥
+}
+
+message BindOwnerResponse {
+    nevo.common.ResultCode result = 1;
+    uint64 owner_user_id = 2;             // 绑定成功后的服主用户 ID
+    string message = 3;                   // 结果描述
+}
+
+// ============================================================
+// 联合消息类型
+// ============================================================
+message ControlMessage {
+    oneof payload {
+        LoginRequest login_request = 1;
+        LoginResponse login_response = 2;
+        JoinChannelRequest join_channel = 3;
+        LeaveChannelRequest leave_channel = 4;
+        CreateChannelRequest create_channel = 5;
+        DeleteChannelRequest delete_channel = 6;
+        ChannelListUpdate channel_list = 7;
+        UserJoinedChannel user_joined = 8;
+        UserLeftChannel user_left = 9;
+        UserSpeaking user_speaking = 10;
+        PttToggle ptt_toggle = 11;
+        UserMuteToggle mute_toggle = 12;
+        ServerMessage server_message = 13;
+        StunBindRequest stun_bind_request = 14;
+        StunBindResponse stun_bind_response = 15;
+        UdpPingRequest udp_ping_request = 16;
+        UdpPingResponse udp_ping_response = 17;
+        KeyRotationRequest key_rotation_request = 18;
+        KeyRotationResponse key_rotation_response = 19;
+        BindOwnerRequest bind_owner_request = 20;
+        BindOwnerResponse bind_owner_response = 21;
+    }
+}

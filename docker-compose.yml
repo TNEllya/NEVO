@@ -1,0 +1,25 @@
+# ============================================================
+# NEVO VoIP Server - Docker Compose
+# ============================================================
+
+version: "3.8"
+
+services:
+  nevo-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nevo-server
+    restart: unless-stopped
+    ports:
+      - "24430:24430/tcp"   # TCP control channel
+      - "24431:24431/udp"   # UDP voice channel
+    volumes:
+      - nevo-data:/var/lib/nevo
+      - ./server_config.json:/etc/nevo/server_config.json:ro
+    environment:
+      - TZ=UTC
+
+volumes:
+  nevo-data:
+    driver: local
