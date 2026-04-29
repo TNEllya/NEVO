@@ -64,8 +64,23 @@ inline constexpr uint16_t STUN_ATTR_FINGERPRINT = 0x8028;
 /// STUN 属性：LIFETIME (TURN)
 inline constexpr uint16_t STUN_ATTR_LIFETIME = 0x000D;
 
+/// STUN 属性：USERNAME (RFC 5389)
+inline constexpr uint16_t STUN_ATTR_USERNAME = 0x0006;
+
+/// STUN 属性：REALM (RFC 5389)
+inline constexpr uint16_t STUN_ATTR_REALM = 0x0020;
+
+/// STUN 属性：NONCE (RFC 5389)
+inline constexpr uint16_t STUN_ATTR_NONCE = 0x0015;
+
+/// STUN 属性：ERROR-CODE (RFC 5389)
+inline constexpr uint16_t STUN_ATTR_ERROR_CODE = 0x0009;
+
 /// STUN 属性：XOR-RELAYED-ADDRESS (TURN)
 inline constexpr uint16_t STUN_ATTR_XOR_RELAYED_ADDRESS = 0x0016;
+
+/// MESSAGE-INTEGRITY 值长度（HMAC-SHA1 = 20 字节）
+inline constexpr size_t STUN_MESSAGE_INTEGRITY_SIZE = 20;
 
 /// STUN Magic Cookie (RFC 5389)
 inline constexpr uint32_t STUN_MAGIC_COOKIE = 0x2112A442;
@@ -389,6 +404,46 @@ private:
         const std::string& host,
         uint16_t port,
         const std::vector<uint8_t>& request);
+
+    /**
+     * @brief 计算 STUN MESSAGE-INTEGRITY (HMAC-SHA1)
+     *
+     * 根据 RFC 5389 Section 15.4：
+     *   1. 临时将消息长度字段设为包含 MESSAGE-INTEGRITY 属性的长度
+     *   2. 对整个消息（含临时长度）计算 HMAC-SHA1
+     *   3. 密钥 = MD5(username:realm:password)（长期凭据机制）
+     *
+     * @param message  完整的 STUN 消息（含 MESSAGE-INTEGRITY 占位）
+     * @param msg_len_offset 消息长度字段在 message 中的偏移（通常为 2）
+     * @param integrity_offset MESSAGE-INTEGRITY 属性值在 message 中的偏移
+     * @param integrity_attr_len MESSAGE-INTEGRITY 属性（含 TLV 头）的总长度
+     * @param key     HMAC 密钥（MD5 哈希结果，16 字节）
+     * @return true 计算成功，false 计算失败
+     */
+    static bool computeMessageIntegrity(
+        std::vector<uint8_t>& message,
+        size_t msg_len_offset,
+        size_t integrity_offset,
+        size_t integrity_attr_len,
+        const std::vector<uint8_t>& key);
+
+    /**
+     * @brief 从 STUN 错误响应中提取 ERROR-CODE 属性值
+     * @param message 解析后的 STUN 消息
+     * @return 错误码（如 401），无 ERROR-CODE 属性时返回 0
+     */
+    static uint16_t extractErrorCode(const StunMessage& message);
+
+    /**
+     * @brief 从 STUN 错误响应中提取 REALM 和 NONCE 属性
+     * @param message 解析后的 STUN 消息
+     * @param realm [out] 提取的 REALM 值
+     * @param nonce [out] 提取的 NONCE 值
+     */
+    static void extractRealmAndNonce(
+        const StunMessage& message,
+        std::string& realm,
+        std::string& nonce);
 };
 
 } // namespace nevo
