@@ -34,6 +34,8 @@ from views.voice_waveform import VoiceWaveformPanel
 from views.server_quick_access import ServerQuickAccessPanel
 from per_user_volume import PerUserVolumeManager, VolumeSliderDialog
 from audio_share_engine import AudioShareEngine
+from updater import Updater, UpdateState
+from views.update_dialog import UpdateDialog
 import join_sound
 import i18n
 
@@ -191,6 +193,10 @@ class MainWindow(FluentWindow):
         self.screen_share_view = ScreenShareView()
         self.screen_share_view.setObjectName("screenSharePage")
 
+        self.updater = Updater()
+        self.updater.set_callbacks(on_state_changed=self._on_updater_state_changed)
+        self._update_dialog = None
+
         self._setup_ui()
         self._setup_callbacks()
         self._setup_navigation()
@@ -198,6 +204,9 @@ class MainWindow(FluentWindow):
 
         self.resize(1100, 750)
         self.setMinimumSize(800, 550)
+
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(3000, self._start_update_check)
 
     def _setup_ui(self):
         self.setWindowTitle("NEVO")
@@ -332,6 +341,15 @@ class MainWindow(FluentWindow):
             FluentIcon.SETTING,
             self.tr("Settings"),
             NavigationItemPosition.BOTTOM,
+        )
+
+        self.navigationInterface.addItem(
+            "update",
+            FluentIcon.SYNC,
+            self.tr("Check Update"),
+            onClick=self._show_update_dialog,
+            position=NavigationItemPosition.BOTTOM,
+            selectable=False,
         )
 
         # Language switcher at bottom
@@ -1193,7 +1211,37 @@ class MainWindow(FluentWindow):
             pix = self.avatar_manager.get_pixmap(36)
         self.chat_widget.refresh_avatars(self.client.user_id, pix)
 
+    # ---- Update ----
+
+    def _show_update_dialog(self):
+        if self._update_dialog is None or not self._update_dialog.isVisible():
+            self._update_dialog = UpdateDialog(self.updater, self)
+            self._update_dialog.check_on_open()
+            self._update_dialog.show()
+        else:
+            self._update_dialog.raise_()
+            self._update_dialog.activateWindow()
+
+    def _on_updater_state_changed(self, old_state, new_state):
+        if new_state == UpdateState.DOWNLOAD_AVAILABLE:
+            info = self.updater.latest_info
+            if info:
+                InfoBar.info(
+                    self.tr("Update Available"),
+                    self.tr("NEVO v{} is available. Click 'Check Update' to download.").format(info.version),
+                    parent=self,
+                    position=InfoBarPosition.TOP,
+                    duration=5000,
+                )
+
+    def _start_update_check(self):
+        self.updater.start_periodic_check()
+
     def closeEvent(self, event):
+        try:
+            self.updater.cleanup()
+        except Exception:
+            pass
         try:
             self.settings_page.cleanup()
         except Exception:
