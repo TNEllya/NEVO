@@ -108,15 +108,15 @@ void ConnectionBar::updateConnectionState(ConnectionState state)
 {
     switch (state) {
         case ConnectionState::Disconnected:
-            // 红灯，按钮显示 "Connect"
-            setStatusIndicatorColor(QColor(220, 50, 50));
+            // MD3 Error
+            setStatusIndicatorColor(QColor(242, 184, 181));
             connect_btn_->setText(tr("Connect"));
             is_connected_ = false;
             server_edit_->setEnabled(true);
             break;
 
         case ConnectionState::Connecting:
-            // 黄灯，按钮显示 "Cancel"
+            // MD3 Tertiary
             setStatusIndicatorColor(QColor(220, 200, 50));
             connect_btn_->setText(tr("Cancel"));
             is_connected_ = false;
@@ -125,8 +125,8 @@ void ConnectionBar::updateConnectionState(ConnectionState state)
 
         case ConnectionState::Connected:
         case ConnectionState::InChannel:
-            // 绿灯，按钮显示 "Disconnect"
-            setStatusIndicatorColor(QColor(50, 200, 50));
+            // MD3 Primary
+            setStatusIndicatorColor(QColor(168, 199, 250));
             connect_btn_->setText(tr("Disconnect"));
             is_connected_ = true;
             server_edit_->setEnabled(false);
@@ -161,21 +161,21 @@ void ConnectionBar::updateMicStatus(bool muted, bool audio_active)
     mic_muted_ = muted;
     mic_audio_active_ = audio_active;
     if (muted) {
-        // 麦克风闭麦：红色
+        // 麦克风闭麦：MD3 Error
         mic_status_bar_->setStyleSheet(QStringLiteral(
-            "QFrame { background-color: #f44336; border-radius: 3px; }"
+            "QFrame { background-color: #f2b8b5; border-radius: 3px; }"
         ));
         mic_status_bar_->setToolTip(tr("Microphone: Muted"));
     } else if (audio_active) {
-        // 麦克风开启且检测到音频输入：蓝色
+        // 麦克风开启且检测到音频输入：MD3 Primary
         mic_status_bar_->setStyleSheet(QStringLiteral(
-            "QFrame { background-color: #5c8aff; border-radius: 3px; }"
+            "QFrame { background-color: #a8c7fa; border-radius: 3px; }"
         ));
         mic_status_bar_->setToolTip(tr("Microphone: Active"));
     } else {
-        // 麦克风开启但未检测到音频输入：黄色
+        // 麦克风开启但未检测到音频输入：MD3 Surface Variant
         mic_status_bar_->setStyleSheet(QStringLiteral(
-            "QFrame { background-color: #ffc107; border-radius: 3px; }"
+            "QFrame { background-color: #8e9099; border-radius: 3px; }"
         ));
         mic_status_bar_->setToolTip(tr("Microphone: Idle"));
     }
@@ -256,12 +256,12 @@ void ConnectionBar::onConnectButtonClicked()
 
 void ConnectionBar::setupUi()
 {
-    // 卡片式背景与圆角
+    // MD3 Surface Container 卡片背景
     setStyleSheet(QStringLiteral(
         "ConnectionBar {"
-        "  background-color: #1e2227;"
-        "  border: 1px solid #2c3138;"
-        "  border-radius: 8px;"
+        "  background-color: #1d2024;"
+        "  border: 1px solid #44474f;"
+        "  border-radius: 12px;"
         "}"
     ));
 
@@ -272,7 +272,7 @@ void ConnectionBar::setupUi()
 
     // --- 状态指示灯 ---
     status_indicator_ = new QLabel(this);
-    setStatusIndicatorColor(QColor(220, 50, 50));  // 初始红色（未连接）
+    setStatusIndicatorColor(QColor(242, 184, 181));  // MD3 Error (初始未连接)
     status_indicator_->setFixedSize(20, 20);
     status_indicator_->setToolTip(tr("Disconnected"));
     layout->addWidget(status_indicator_);
@@ -284,15 +284,16 @@ void ConnectionBar::setupUi()
     server_edit_->setMinimumWidth(220);
     server_edit_->setStyleSheet(QStringLiteral(
         "QLineEdit {"
-        "  background-color: #16191d;"
-        "  border: 1px solid #2c3138;"
-        "  border-radius: 6px;"
-        "  padding: 6px 10px;"
-        "  color: #f0f0f0;"
+        "  background-color: #191c20;"
+        "  border: none;"
+        "  border-bottom: 2px solid #44474f;"
+        "  border-radius: 4px 4px 0 0;"
+        "  padding: 8px 12px 4px;"
+        "  color: #e2e2e9;"
         "  font-size: 13px;"
         "}"
         "QLineEdit:focus {"
-        "  border: 1px solid #5c8aff;"
+        "  border-bottom: 2px solid #a8c7fa;"
         "}"
     ));
     layout->addWidget(server_edit_);
@@ -303,23 +304,23 @@ void ConnectionBar::setupUi()
     connect_btn_->setCursor(Qt::PointingHandCursor);
     connect_btn_->setStyleSheet(QStringLiteral(
         "QPushButton {"
-        "  background-color: #5c8aff;"
-        "  color: #ffffff;"
+        "  background-color: #a8c7fa;"
+        "  color: #062e6f;"
         "  border: none;"
-        "  border-radius: 6px;"
-        "  padding: 8px 16px;"
+        "  border-radius: 20px;"
+        "  padding: 8px 24px;"
         "  font-size: 13px;"
         "  font-weight: 500;"
         "}"
         "QPushButton:hover {"
-        "  background-color: #7aa2ff;"
+        "  background-color: #d3e3fd;"
         "}"
         "QPushButton:pressed {"
-        "  background-color: #4a7aee;"
+        "  background-color: #8ec7ff;"
         "}"
         "QPushButton:disabled {"
-        "  background-color: #3a4048;"
-        "  color: #808080;"
+        "  background-color: #1d2024;"
+        "  color: #5e6068;"
         "}"
     ));
     connect(connect_btn_, &QPushButton::clicked,
@@ -329,14 +330,14 @@ void ConnectionBar::setupUi()
     // --- 分隔线 ---
     QFrame* separator1 = new QFrame(this);
     separator1->setFrameShape(QFrame::VLine);
-    separator1->setStyleSheet(QStringLiteral("color: #2c3138;"));
+    separator1->setStyleSheet(QStringLiteral("color: #44474f;"));
     layout->addWidget(separator1);
 
     // --- 延迟显示 ---
     latency_label_ = new QLabel(tr("Latency: --"), this);
     latency_label_->setMinimumWidth(110);
     latency_label_->setStyleSheet(QStringLiteral(
-        "color: #a0a8b8; font-size: 12px;"
+        "color: #c4c6d0; font-size: 12px;"
     ));
     layout->addWidget(latency_label_);
 
@@ -344,20 +345,20 @@ void ConnectionBar::setupUi()
     nat_type_label_ = new QLabel(tr("NAT: --"), this);
     nat_type_label_->setMinimumWidth(130);
     nat_type_label_->setStyleSheet(QStringLiteral(
-        "color: #a0a8b8; font-size: 12px;"
+        "color: #c4c6d0; font-size: 12px;"
     ));
     layout->addWidget(nat_type_label_);
 
     // --- 分隔线 ---
     QFrame* separator2 = new QFrame(this);
     separator2->setFrameShape(QFrame::VLine);
-    separator2->setStyleSheet(QStringLiteral("color: #2c3138;"));
+    separator2->setStyleSheet(QStringLiteral("color: #44474f;"));
     layout->addWidget(separator2);
 
     // --- 音量标签 ---
     volume_label_ = new QLabel(tr("Vol:"), this);
     volume_label_->setStyleSheet(QStringLiteral(
-        "color: #a0a8b8; font-size: 12px;"
+        "color: #c4c6d0; font-size: 12px;"
     ));
     layout->addWidget(volume_label_);
 
@@ -370,22 +371,22 @@ void ConnectionBar::setupUi()
     volume_slider_->setStyleSheet(QStringLiteral(
         "QSlider::groove:horizontal {"
         "  height: 4px;"
-        "  background: #2c3138;"
+        "  background: #44474f;"
         "  border-radius: 2px;"
         "}"
         "QSlider::sub-page:horizontal {"
-        "  background: #5c8aff;"
+        "  background: #a8c7fa;"
         "  border-radius: 2px;"
         "}"
         "QSlider::handle:horizontal {"
         "  width: 14px;"
         "  height: 14px;"
         "  margin: -5px 0;"
-        "  background: #ffffff;"
+        "  background: #a8c7fa;"
         "  border-radius: 7px;"
         "}"
         "QSlider::handle:horizontal:hover {"
-        "  background: #e0e0e0;"
+        "  background: #d3e3fd;"
         "}"
     ));
     connect(volume_slider_, &QSlider::valueChanged,
@@ -396,7 +397,7 @@ void ConnectionBar::setupUi()
     QLabel* volume_value = new QLabel(
         tr("%1%").arg(volume_slider_->value()), this);
     volume_value->setStyleSheet(QStringLiteral(
-        "color: #a0a8b8; font-size: 12px; min-width: 32px;"
+        "color: #c4c6d0; font-size: 12px; min-width: 32px;"
     ));
     connect(volume_slider_, &QSlider::valueChanged,
             volume_value, [volume_value](int value) {
@@ -409,7 +410,7 @@ void ConnectionBar::setupUi()
     mic_status_bar_->setFixedHeight(6);
     mic_status_bar_->setMinimumWidth(80);
     mic_status_bar_->setStyleSheet(QStringLiteral(
-        "QFrame { background-color: #ffc107; border-radius: 3px; }"
+        "QFrame { background-color: #8e9099; border-radius: 3px; }"
     ));
     mic_status_bar_->setToolTip(tr("Microphone: Idle"));
     layout->addWidget(mic_status_bar_);
@@ -426,13 +427,13 @@ void ConnectionBar::setStatusIndicatorColor(const QColor& color)
 
     status_indicator_->setPixmap(createIndicatorPixmap(color, 20));
 
-    if (color == QColor(220, 50, 50)) {
+    if (color == QColor(242, 184, 181)) {
         status_indicator_->setToolTip(tr("Disconnected"));
         status_indicator_->setStyleSheet(QStringLiteral("QLabel { background: transparent; }"));
     } else if (color == QColor(220, 200, 50)) {
         status_indicator_->setToolTip(tr("Connecting"));
         status_indicator_->setStyleSheet(QStringLiteral("QLabel { background: transparent; }"));
-    } else if (color == QColor(50, 200, 50)) {
+    } else if (color == QColor(168, 199, 250)) {
         status_indicator_->setToolTip(tr("Connected"));
         status_indicator_->setStyleSheet(QStringLiteral("QLabel { background: transparent; }"));
     }

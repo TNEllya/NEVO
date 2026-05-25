@@ -20,6 +20,10 @@
 #endif
 #endif
 
+#ifdef NEVO_HAS_SODIUM
+#include <sodium.h>
+#endif
+
 #include <cstring>
 #include <chrono>
 #include <random>
@@ -100,6 +104,66 @@ Result<void> Database::initialize(const std::string& db_path) {
             }
             sqlite3_free(err_msg);
         }
+    }
+
+    // 迁移：移除 channels 表的外键约束
+    // SQLite 不支持 ALTER TABLE DROP CONSTRAINT，需要重建表
+    {
+        bool need_migration = false;
+        {
+            sqlite3_exec(db_, "PRAGMA foreign_keys=OFF", nullptr, nullptr, nullptr);
+            sqlite3_stmt* check_stmt = nullptr;
+            const char* check_sql = "SELECT sql FROM sqlite_master WHERE type='table' AND name='channels'";
+            int rc = sqlite3_prepare_v2(db_, check_sql, -1, &check_stmt, nullptr);
+            if (rc == SQLITE_OK) {
+                rc = sqlite3_step(check_stmt);
+                if (rc == SQLITE_ROW) {
+                    const char* schema = reinterpret_cast<const char*>(sqlite3_column_text(check_stmt, 0));
+                    if (schema && (std::string(schema).find("FOREIGN KEY (created_by)") != std::string::npos ||
+                                   std::string(schema).find("FOREIGN KEY (parent_id)") != std::string::npos)) {
+                        need_migration = true;
+                    }
+                }
+                sqlite3_finalize(check_stmt);
+            }
+        }
+
+        if (need_migration) {
+            NEVO_LOG_INFO("server", "Migrating channels table: removing foreign key constraints");
+            const char* migrate_sqls[] = {
+                "ALTER TABLE channels RENAME TO channels_old",
+                R"(CREATE TABLE channels (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name            TEXT    NOT NULL,
+                    parent_id       INTEGER NOT NULL DEFAULT 0,
+                    created_by      INTEGER NOT NULL DEFAULT 0,
+                    is_permanent    INTEGER NOT NULL DEFAULT 1,
+                    created_at      INTEGER NOT NULL DEFAULT 0
+                ))",
+                "INSERT INTO channels SELECT * FROM channels_old",
+                "DROP TABLE channels_old",
+                "CREATE INDEX IF NOT EXISTS idx_channels_parent ON channels(parent_id)",
+            };
+
+            bool migration_ok = true;
+            for (const char* sql : migrate_sqls) {
+                char* err_msg = nullptr;
+                int rc = sqlite3_exec(db_, sql, nullptr, nullptr, &err_msg);
+                if (rc != SQLITE_OK) {
+                    std::string err = err_msg ? err_msg : "unknown error";
+                    NEVO_LOG_ERROR("server", "Channel migration failed: {}", err);
+                    sqlite3_free(err_msg);
+                    migration_ok = false;
+                    break;
+                }
+            }
+            if (migration_ok) {
+                NEVO_LOG_INFO("server", "Channels table migrated successfully");
+            }
+        }
+
+        // 重新启用外键检查
+        sqlite3_exec(db_, "PRAGMA foreign_keys=ON", nullptr, nullptr, nullptr);
     }
 
     initialized_ = true;
@@ -459,6 +523,51 @@ Result<ChannelId> Database::createChannel(const std::string& name,
     return Ok(new_id);
 }
 
+Result<ChannelId> Database::createChannelWithId(ChannelId id,
+                                                  const std::string& name,
+                                                  ChannelId parent_id,
+                                                  UserId created_by) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (!initialized_) {
+        return Err<ChannelId>(ResultCode::DatabaseError, "Database not initialized");
+    }
+
+    NEVO_LOG_INFO("server", "Creating channel: {} (id={}, parent_id={})", name, id.value, parent_id.value);
+
+    auto now = std::chrono::system_clock::now();
+    int64_t timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+        now.time_since_epoch()).count();
+
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "INSERT INTO channels (id, name, parent_id, created_by, is_permanent, created_at) "
+                      "VALUES (?, ?, ?, ?, ?, ?)";
+    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        NEVO_LOG_ERROR("server", "Failed to prepare insert: {}", sqlite3_errmsg(db_));
+        return Err<ChannelId>(ResultCode::DatabaseError, sqlite3_errmsg(db_));
+    }
+
+    sqlite3_bind_int64(stmt, 1, id.value);
+    sqlite3_bind_text(stmt, 2, name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 3, parent_id.value);
+    sqlite3_bind_int64(stmt, 4, created_by.value);
+    sqlite3_bind_int(stmt, 5, 1);  // is_permanent = true
+    sqlite3_bind_int64(stmt, 6, timestamp);
+
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        std::string err = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        NEVO_LOG_ERROR("server", "Failed to insert channel: {}", err);
+        return Err<ChannelId>(ResultCode::DatabaseError, err);
+    }
+    sqlite3_finalize(stmt);
+
+    NEVO_LOG_INFO("server", "Channel created: {} (id={})", name, id.value);
+    return Ok(id);
+}
+
 Result<void> Database::deleteChannel(ChannelId id) {
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -773,6 +882,169 @@ bool Database::isBanned(UserId user_id, const std::string& ip_address) {
 }
 
 // ============================================================
+// 文件管理
+// ============================================================
+
+Result<int64_t> Database::addFileRecord(int64_t channel_id, int64_t uploader_id,
+                                        const std::string& filename, const std::string& file_path,
+                                        int64_t file_size) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (!initialized_) {
+        return Err<int64_t>(ResultCode::DatabaseError, "Database not initialized");
+    }
+
+    NEVO_LOG_INFO("server", "Adding file record: filename={}, channel_id={}, size={}",
+                  filename, channel_id, file_size);
+
+    auto now = std::chrono::system_clock::now();
+    int64_t timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+        now.time_since_epoch()).count();
+
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "INSERT INTO files (channel_id, uploader_id, filename, file_path, file_size, upload_time) "
+                      "VALUES (?, ?, ?, ?, ?, ?)";
+    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        NEVO_LOG_ERROR("server", "Failed to prepare addFileRecord: {}", sqlite3_errmsg(db_));
+        return Err<int64_t>(ResultCode::DatabaseError, sqlite3_errmsg(db_));
+    }
+
+    sqlite3_bind_int64(stmt, 1, channel_id);
+    sqlite3_bind_int64(stmt, 2, uploader_id);
+    sqlite3_bind_text(stmt, 3, filename.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, file_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 5, file_size);
+    sqlite3_bind_int64(stmt, 6, timestamp);
+
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        std::string err = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        NEVO_LOG_ERROR("server", "Failed to insert file record: {}", err);
+        return Err<int64_t>(ResultCode::DatabaseError, err);
+    }
+    sqlite3_finalize(stmt);
+
+    int64_t new_id = sqlite3_last_insert_rowid(db_);
+    NEVO_LOG_INFO("server", "File record added: id={}, filename={}", new_id, filename);
+    return Ok(new_id);
+}
+
+std::vector<FileRecord> Database::getFileList(int64_t channel_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (!initialized_) {
+        return {};
+    }
+
+    std::vector<FileRecord> results;
+
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT id, channel_id, uploader_id, filename, file_path, file_size, upload_time "
+                      "FROM files WHERE channel_id = ? ORDER BY upload_time DESC";
+    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        NEVO_LOG_ERROR("server", "Failed to prepare getFileList: {}", sqlite3_errmsg(db_));
+        return results;
+    }
+
+    sqlite3_bind_int64(stmt, 1, channel_id);
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        FileRecord record;
+        record.id = sqlite3_column_int64(stmt, 0);
+        record.channel_id = sqlite3_column_int64(stmt, 1);
+        record.uploader_id = sqlite3_column_int64(stmt, 2);
+        record.filename = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+        record.file_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+        record.file_size = sqlite3_column_int64(stmt, 5);
+        record.upload_time = sqlite3_column_int64(stmt, 6);
+        results.push_back(std::move(record));
+    }
+
+    sqlite3_finalize(stmt);
+    return results;
+}
+
+Result<void> Database::deleteFile(int64_t file_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (!initialized_) {
+        return Err<void>(ResultCode::DatabaseError, "Database not initialized");
+    }
+
+    NEVO_LOG_INFO("server", "Deleting file record: id={}", file_id);
+
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "DELETE FROM files WHERE id = ?";
+    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        NEVO_LOG_ERROR("server", "Failed to prepare deleteFile: {}", sqlite3_errmsg(db_));
+        return Err<void>(ResultCode::DatabaseError, sqlite3_errmsg(db_));
+    }
+
+    sqlite3_bind_int64(stmt, 1, file_id);
+
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        std::string err = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        NEVO_LOG_ERROR("server", "Failed to delete file record: {}", err);
+        return Err<void>(ResultCode::DatabaseError, err);
+    }
+
+    int changes = sqlite3_changes(db_);
+    sqlite3_finalize(stmt);
+
+    if (changes == 0) {
+        NEVO_LOG_WARN("server", "File record not found for deletion: id={}", file_id);
+        return Err<void>(ResultCode::InvalidRequest, "File not found");
+    }
+
+    NEVO_LOG_INFO("server", "File record deleted: id={}", file_id);
+    return Ok();
+}
+
+Result<FileRecord> Database::getFile(int64_t file_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (!initialized_) {
+        return Err<FileRecord>(ResultCode::DatabaseError, "Database not initialized");
+    }
+
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT id, channel_id, uploader_id, filename, file_path, file_size, upload_time "
+                      "FROM files WHERE id = ?";
+    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        NEVO_LOG_ERROR("server", "Failed to prepare getFile: {}", sqlite3_errmsg(db_));
+        return Err<FileRecord>(ResultCode::DatabaseError, sqlite3_errmsg(db_));
+    }
+
+    sqlite3_bind_int64(stmt, 1, file_id);
+
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        NEVO_LOG_WARN("server", "File record not found: id={}", file_id);
+        return Err<FileRecord>(ResultCode::InvalidRequest, "File not found");
+    }
+
+    FileRecord record;
+    record.id = sqlite3_column_int64(stmt, 0);
+    record.channel_id = sqlite3_column_int64(stmt, 1);
+    record.uploader_id = sqlite3_column_int64(stmt, 2);
+    record.filename = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+    record.file_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+    record.file_size = sqlite3_column_int64(stmt, 5);
+    record.upload_time = sqlite3_column_int64(stmt, 6);
+
+    sqlite3_finalize(stmt);
+    return Ok(record);
+}
+
+// ============================================================
 // 内部方法
 // ============================================================
 
@@ -793,6 +1065,8 @@ Result<void> Database::createTables() {
     )";
 
     // 创建频道表
+    // 注意：不设外键约束。created_by=0 表示系统创建，parent_id=0 表示根频道（无父级）
+    // 频道的父子关系和创建者由 ChannelManager 应用层逻辑保证
     const char* create_channels_sql = R"(
         CREATE TABLE IF NOT EXISTS channels (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -800,9 +1074,7 @@ Result<void> Database::createTables() {
             parent_id       INTEGER NOT NULL DEFAULT 0,
             created_by      INTEGER NOT NULL DEFAULT 0,
             is_permanent    INTEGER NOT NULL DEFAULT 1,
-            created_at      INTEGER NOT NULL DEFAULT 0,
-            FOREIGN KEY (parent_id) REFERENCES channels(id),
-            FOREIGN KEY (created_by) REFERENCES users(id)
+            created_at      INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_channels_parent ON channels(parent_id);
     )";
@@ -829,6 +1101,21 @@ Result<void> Database::createTables() {
         CREATE INDEX IF NOT EXISTS idx_bans_ip ON bans(ip_address);
     )";
 
+    // 创建文件记录表
+    const char* create_files_sql = R"(
+        CREATE TABLE IF NOT EXISTS files (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id      INTEGER NOT NULL,
+            uploader_id     INTEGER NOT NULL,
+            filename        TEXT    NOT NULL,
+            file_path       TEXT    NOT NULL,
+            file_size       INTEGER NOT NULL,
+            upload_time     INTEGER NOT NULL,
+            FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_files_channel ON files(channel_id);
+    )";
+
     auto result = executeSql(create_users_sql);
     if (!result) return result;
 
@@ -839,6 +1126,9 @@ Result<void> Database::createTables() {
     if (!result) return result;
 
     result = executeSql(create_bans_sql);
+    if (!result) return result;
+
+    result = executeSql(create_files_sql);
     if (!result) return result;
 
     NEVO_LOG_INFO("server", "Database tables created/verified");
@@ -888,66 +1178,34 @@ Result<void> Database::setWalMode() {
 }
 
 std::string Database::hashPassword(const std::string& password) {
-#ifdef HAVE_ARGON2
-    // Argon2id 参数
-    const uint32_t t_cost = 3;          // 迭代次数
-    const uint32_t m_cost = 65536;      // 内存开销（64MB）
-    const uint32_t parallelism = 2;     // 并行度
-    const uint32_t hash_len = 32;       // 输出哈希长度
-    const uint32_t salt_len = 16;       // 盐值长度
-
-    // 生成随机盐值
-    std::vector<uint8_t> salt(salt_len);
-    // 使用随机设备生成盐值
-    std::random_device rd;
-    for (uint32_t i = 0; i < salt_len; ++i) {
-        salt[i] = static_cast<uint8_t>(rd());
-    }
-
-    // 输出缓冲区
-    std::vector<char> encoded_hash(argon2_encodedlen(t_cost, m_cost, parallelism,
-                                                       salt_len, hash_len, Argon2_id));
-
-    // 执行 Argon2id 哈希
-    int result = argon2id_hash_encoded(t_cost, m_cost, parallelism,
-                                       password.data(), password.size(),
-                                       salt.data(), salt_len,
-                                       hash_len,
-                                       encoded_hash.data(), encoded_hash.size());
-
-    if (result != ARGON2_OK) {
-        NEVO_LOG_ERROR("server", "Argon2id hashing failed: {}", argon2_error_message(result));
+#ifdef NEVO_HAS_SODIUM
+    // Use libsodium's crypto_pwhash_str for secure password hashing (Argon2id)
+    char hashed_password[crypto_pwhash_STRBYTES];
+    if (crypto_pwhash_str(hashed_password,
+                         password.c_str(), password.size(),
+                         crypto_pwhash_OPSLIMIT_MODERATE,
+                         crypto_pwhash_MEMLIMIT_MODERATE) != 0) {
+        NEVO_LOG_ERROR("server", "Failed to hash password (crypto_pwhash_str)");
         return "";
     }
-
-    return std::string(encoded_hash.data());
+    return std::string(hashed_password);
 #else
-    // Fallback: simple hash when argon2 is not available
-    NEVO_LOG_WARN("server", "Argon2 not available, using simple hash (not secure for production)");
-    std::hash<std::string> hasher;
-    return std::to_string(hasher(password));
+    // No secure password hashing available!
+    NEVO_LOG_ERROR("server", "Cannot hash password: libsodium not available!");
+    return "";
 #endif
 }
 
 bool Database::verifyPassword(const std::string& hash, const std::string& password) {
-#ifdef HAVE_ARGON2
-    // 使用 Argon2id 验证密码
-    int result = argon2id_verify(hash.c_str(), password.data(), password.size());
-
-    if (result == ARGON2_OK) {
+#ifdef NEVO_HAS_SODIUM
+    // Use libsodium's crypto_pwhash_str_verify
+    if (crypto_pwhash_str_verify(hash.c_str(), password.c_str(), password.size()) == 0) {
         return true;
     }
-
-    if (result != ARGON2_VERIFY_MISMATCH) {
-        // 非"密码不匹配"的错误，记录日志
-        NEVO_LOG_ERROR("server", "Argon2id verification error: {}", argon2_error_message(result));
-    }
-
     return false;
 #else
-    // Fallback: simple comparison when argon2 is not available
-    std::hash<std::string> hasher;
-    return hash == std::to_string(hasher(password));
+    NEVO_LOG_ERROR("server", "Cannot verify password: libsodium not available!");
+    return false;
 #endif
 }
 
@@ -963,6 +1221,31 @@ Result<void> Database::executeSql(const std::string& sql) {
     }
 
     return Ok();
+}
+
+std::optional<int64_t> Database::getAutoIncrementValue(const std::string& table_name) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (!initialized_) {
+        return std::nullopt;
+    }
+
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT seq FROM sqlite_sequence WHERE name = ?";
+    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        return std::nullopt;
+    }
+
+    sqlite3_bind_text(stmt, 1, table_name.c_str(), -1, SQLITE_TRANSIENT);
+
+    rc = sqlite3_step(stmt);
+    std::optional<int64_t> result;
+    if (rc == SQLITE_ROW) {
+        result = sqlite3_column_int64(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    return result;
 }
 
 #else // !NEVO_HAS_SQLITE
@@ -1048,6 +1331,28 @@ Result<void> Database::addBan(UserId /*user_id*/, const std::string& /*ip_addres
 
 bool Database::isBanned(UserId /*user_id*/, const std::string& /*ip_address*/) {
     return false;
+}
+
+Result<int64_t> Database::addFileRecord(int64_t /*channel_id*/, int64_t /*uploader_id*/,
+                                        const std::string& /*filename*/, const std::string& /*file_path*/,
+                                        int64_t /*file_size*/) {
+    return Err<int64_t>(ResultCode::DatabaseError, "SQLite3 not available");
+}
+
+std::vector<FileRecord> Database::getFileList(int64_t /*channel_id*/) {
+    return {};
+}
+
+Result<void> Database::deleteFile(int64_t /*file_id*/) {
+    return Err<void>(ResultCode::DatabaseError, "SQLite3 not available");
+}
+
+Result<FileRecord> Database::getFile(int64_t /*file_id*/) {
+    return Err<FileRecord>(ResultCode::DatabaseError, "SQLite3 not available");
+}
+
+std::optional<int64_t> Database::getAutoIncrementValue(const std::string& /*table_name*/) {
+    return std::nullopt;
 }
 
 #endif // NEVO_HAS_SQLITE

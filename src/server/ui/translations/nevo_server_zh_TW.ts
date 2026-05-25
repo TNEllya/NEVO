@@ -29,6 +29,12 @@
     <message><source>&amp;Settings</source><translation>設定(&amp;S)</translation></message>
     <message><source>&amp;Language</source><translation>語言(&amp;L)</translation></message>
     <message><source>%1 - %2 clients</source><translation>%1 - %2 個用戶端</translation></message>
+    <message><source>Owner Bound</source><translation>服主綁定成功</translation></message>
+    <message><source>User %1 (ID: %2) has successfully bound as server owner.</source><translation>使用者 %1（ID: %2）已成功綁定為伺服器服主。</translation></message>
+    <message><source>NEVO - No Server Owner</source><translation>NEVO - 伺服器無服主</translation></message>
+    <message><source>This server has no owner (administrator).</source><translation>此伺服器尚無服主（管理員）。</translation></message>
+    <message><source>Use the following bind key in the client to claim ownership.\n\nThis key is ONE-TIME USE and will be invalidated after binding.\nKeep it secret!</source><translation>請在用戶端中使用以下綁定金鑰認領服主身份。\n\n此金鑰為一次性使用，綁定後將自動失效。\n請妥善保管！</translation></message>
+    <message><source>Copy to Clipboard</source><translation>複製到剪貼簿</translation></message>
 </context>
 <context>
     <name>nevo::ServerStatusBar</name>

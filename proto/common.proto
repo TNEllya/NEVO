@@ -23,6 +23,7 @@ enum ResultCode {
     ERROR_TIMEOUT = 8;
     ERROR_CRYPTO_ERROR = 10;
     ERROR_NAT_TRAVERSAL_FAILED = 11;
+    ERROR_USER_NOT_FOUND = 12;
 }
 
 // ============================================================

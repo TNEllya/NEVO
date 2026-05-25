@@ -43,8 +43,39 @@
     <message><source>Bind key cannot be empty.</source><translation>綁定密鑰不能為空。</translation></message>
     <message><source>Successfully bound as server owner!</source><translation>成功綁定為服主！</translation></message>
     <message><source>Failed to bind as owner: %1</source><translation>綁定服主失敗：%1</translation></message>
+    <message><source>Enter the owner bind key displayed on the server console.
+This is a one-time use key that grants full server ownership.</source><translation>輸入伺服器主控台顯示的服主綁定金鑰。
+此金鑰為一次性使用，綁定後即失效。</translation></message>
+    <message><source>WARNING: This key should be kept secret. After successful binding, the key will be invalidated and cannot be reused.</source><translation>警告：此金鑰應保密。綁定成功後金鑰將失效且無法重複使用。</translation></message>
+    <message><source>Enter 64-character bind key (hex)</source><translation>輸入 64 字元綁定金鑰（十六進位）</translation></message>
+    <message><source>The bind key is a 64-character hexadecimal string shown in the server console at startup</source><translation>綁定金鑰為伺服器啟動時主控台顯示的 64 字元十六進位字串</translation></message>
+    <message><source>Invalid Key Format</source><translation>金鑰格式無效</translation></message>
+    <message><source>The bind key must be a 64-character hexadecimal string.
+Please check the key displayed on the server console.</source><translation>綁定金鑰必須為 64 字元的十六進位字串。
+請檢查伺服器主控台顯示的金鑰。</translation></message>
+    <message><source>Successfully bound as server owner!
+
+You now have full administrative privileges.</source><translation>成功綁定為服主！
+
+您現在擁有完整的管理權限。</translation></message>
+    <message><source>Failed to bind as server owner:
+%1
+
+The key may be invalid, expired, or already used.</source><translation>服主綁定失敗：
+%1
+
+金鑰可能無效、過期或已被使用。</translation></message>
     <message><source>Set as Admin</source><translation>設為管理員</translation></message>
     <message><source>Remove Admin</source><translation>移除管理員</translation></message>
+    <message><source>Kick User</source><translation>踢出使用者</translation></message>
+    <message><source>Ban User</source><translation>封禁使用者</translation></message>
+    <message><source>Move User</source><translation>移動使用者</translation></message>
+    <message><source>Admin Action</source><translation>管理操作</translation></message>
+    <message><source>Admin Action Failed</source><translation>管理操作失敗</translation></message>
+    <message><source>Enter target channel ID:</source><translation>輸入目標頻道 ID：</translation></message>
+    <message><source>Are you sure you want to kick %1?</source><translation>確定要踢出 %1 嗎？</translation></message>
+    <message><source>Are you sure you want to ban %1?</source><translation>確定要封禁 %1 嗎？</translation></message>
+    <message><source>Chat</source><translation>聊天</translation></message>
 </context>
 <context>
     <name>nevo::LoginDialog</name>
@@ -105,5 +136,13 @@
     <message><source>\nStatus: Speaking</source><translation>\n狀態：說話中</translation></message>
     <message><source>\nMicrophone: Muted</source><translation>\n麥克風：已閉麥</translation></message>
     <message><source>\nAudio: Muted</source><translation>\n音訊：已靜音</translation></message>
+</context>
+<context>
+    <name>nevo::ChatWidget</name>
+    <message><source>Type a message...</source><translation>輸入訊息...</translation></message>
+    <message><source>Send</source><translation>傳送</translation></message>
+    <message><source>You</source><translation>你</translation></message>
+    <message><source>Enter to send, Shift+Enter for new line</source><translation>按 Enter 傳送，Shift+Enter 換行</translation></message>
+    <message><source>Connect to a channel to chat</source><translation>請先加入頻道以開始聊天</translation></message>
 </context>
 </TS>

@@ -33,6 +33,7 @@
 #include "nevo/core/common/Types.h"
 #include "nevo/core/common/Result.h"
 #include "nevo/core/model/Permission.h"
+#include "nevo/server/ServerConfig.h"
 #include "nevo/network/TcpConnection.h"
 #include "nevo/network/UdpSocket.h"
 #include "nevo/network/VoiceCrypto.h"
@@ -41,6 +42,7 @@
 #include "common.pb.h"
 
 #include <boost/asio.hpp>
+#include <boost/asio/ssl.hpp>
 
 #include <memory>
 #include <vector>
@@ -62,6 +64,7 @@ class Database;
 class ChannelManager;
 class ClientSession;
 class AudioRelay;
+class VideoRelay;
 class ControlServer;
 
 // ============================================================
@@ -174,6 +177,12 @@ public:
      */
     bool isRunning() const;
 
+    /**
+     * @brief Get the UDP listening port
+     * @return UDP port number
+     */
+    uint16_t udpPort() const { return udp_port_; }
+
     // ============================================================
     // Client event callbacks
     // ============================================================
@@ -261,11 +270,14 @@ public:
     std::function<void(const SessionSnapshot&, bool connected)> onClientEvent;
     std::function<void(bool running)> onServerStateChanged;
     std::function<void(const std::string& level, const std::string& message)> onLogMessage;
-    std::function<void(UserId user_id, const std::string& username)> onOwnerBound;
+    std::function<void(UserId user_id, const std::string& username)> onAdminAuthenticated;
 
     // ============================================================
     // Hot-applicable configuration setters
     // ============================================================
+
+    /// Relay a TCP voice frame to AudioRelay (called by ClientSession)
+    void relayTcpVoicePacket(const uint8_t* data, uint32_t size, UserId sender_id);
 
     /// Set max users limit (takes effect immediately)
     void setMaxUsers(int max_users);
@@ -284,6 +296,25 @@ public:
 
     /// Get current log level
     std::string logLevel() const;
+
+    // ============================================================
+    // SSL/TLS configuration
+    // ============================================================
+
+    /// Enable or disable TLS on the TCP control channel (must call before start())
+    void setSslEnabled(bool enabled);
+
+    /// Check if TLS is enabled
+    bool isSslEnabled() const;
+
+    /// Set the server TLS certificate file (PEM format, must call before start())
+    void setSslCertificateFile(const std::string& cert_path);
+
+    /// Set the server TLS private key file (PEM format, must call before start())
+    void setSslPrivateKeyFile(const std::string& key_path);
+
+    /// Set the CA certificate file for client certificate verification (mTLS, optional)
+    void setSslCaFile(const std::string& ca_path);
 
     // ============================================================
     // Control server (for Python GUI IPC)
@@ -342,6 +373,14 @@ public:
     void removeClientSessionKey(UserId user_id);
 
     /**
+     * @brief 直接设置客户端的会话密钥（用于共享密钥回退模式）
+     * @param user_id 用户 ID
+     * @param key 密钥数据指针
+     * @param key_size 密钥长度（必须为 CRYPTO_KEY_SIZE）
+     */
+    void setClientSessionKey(UserId user_id, const uint8_t* key, size_t key_size);
+
+    /**
      * @brief Broadcast channel list update to all connected clients
      *
      * Sends a ChannelListUpdate protobuf message to every authenticated
@@ -349,6 +388,24 @@ public:
      * (create, delete, rename, user join/leave).
      */
     void broadcastChannelListUpdate();
+
+    /**
+     * @brief Update AudioRelay channel mapping for a user
+     *
+     * Called when a user joins/leaves a channel to keep AudioRelay's
+     * client_map_ channel information in sync.
+     *
+     * @param user_id    User ID
+     * @param channel_id New channel ID
+     */
+    void updateAudioRelayChannel(UserId user_id, ChannelId channel_id);
+
+    void updateVideoRelayChannel(UserId user_id, ChannelId channel_id);
+    void addVideoRelayMapping(UserId user_id,
+                              const boost::asio::ip::udp::endpoint& ep,
+                              ChannelId channel_id);
+    void removeVideoRelayMapping(UserId user_id);
+    uint16_t videoUdpPort() const { return video_udp_port_; }
 
     /**
      * @brief Broadcast user joined channel notification to all clients
@@ -370,6 +427,18 @@ public:
      * @param speaking Whether the user is speaking
      */
     void broadcastUserSpeaking(UserId user_id, bool speaking);
+
+    /**
+     * @brief Broadcast a chat message to all users in a specific channel
+     * @param sender_id Sender user ID
+     * @param sender_name Sender username
+     * @param channel_id Target channel ID
+     * @param text Chat message text
+     */
+    void broadcastChatMessage(UserId sender_id,
+                               const std::string& sender_name,
+                               ChannelId channel_id,
+                               const std::string& text);
 
     /**
      * @brief Perform a key rotation and notify all clients
@@ -394,43 +463,38 @@ public:
     std::shared_ptr<ClientSession> getClientSession(UserId user_id);
 
     // ============================================================
-    // 服主与管理员管理
+    // 管理员管理
     // ============================================================
 
     /**
-     * @brief 生成服主绑定密钥
+     * @brief 验证管理员密码
      *
-     * 生成 64 字符 hex 随机密钥，存入 server_config 表。
-     * 仅在无服主时可生成。密钥一次性使用，绑定成功后自动清空。
+     * 比对客户端提供的密码与服务器配置的管理员密码。
+     * 匹配成功则将用户提升为管理员权限组。
      *
-     * @return 生成的密钥字符串，失败返回空字符串
-     */
-    std::string generateOwnerBindKey();
-
-    /**
-     * @brief 获取当前服主用户 ID
-     * @return 服主用户 ID，无服主时返回 UserId(0)
-     */
-    UserId getOwnerUserId();
-
-    /**
-     * @brief 检查指定用户是否为服主
-     * @param user_id 用户 ID
-     * @return true 表示该用户为服主
-     */
-    bool isOwner(UserId user_id);
-
-    /**
-     * @brief 绑定服主身份
-     *
-     * 验证客户端提供的绑定密钥，若与数据库中存储的 owner_bind_key 匹配，
-     * 则将当前用户设为服主，并清空绑定密钥（一次性使用）。
-     *
-     * @param user_id  申请绑定的用户 ID
-     * @param bind_key 客户端提供的绑定密钥
+     * @param user_id   申请认证的用户 ID
+     * @param password  客户端提供的管理员密码
      * @return Result<void> 成功或错误信息
      */
-    Result<void> bindOwner(UserId user_id, const std::string& bind_key);
+    Result<void> authenticateAdmin(UserId user_id, const std::string& password);
+
+    /**
+     * @brief 设置服务器名称
+     * @param server_name 新的服务器名称
+     * @return Result<void>
+     */
+    Result<void> setServerName(const std::string& server_name);
+
+    /// Get current server name
+    std::string serverName() const;
+
+    /// Set admin password (via IPC config)
+    void setAdminPassword(const std::string& password);
+
+    /// Check if admin password is set
+    bool isAdminPasswordSet() const;
+
+    ServerConfig config() const;
 
 private:
     // ============================================================
@@ -451,6 +515,8 @@ private:
      * Continuously receives UDP voice data packets and forwards them to AudioRelay.
      */
     boost::asio::awaitable<void> receiveUdpLoop();
+
+    boost::asio::awaitable<void> receiveVideoUdpLoop();
 
     /**
      * @brief Start the periodic key rotation timer
@@ -496,6 +562,10 @@ private:
     /// Audio relay
     std::shared_ptr<AudioRelay> audio_relay_;
 
+    uint16_t video_udp_port_ = 0;
+    std::shared_ptr<UdpSocket> video_udp_socket_;
+    std::shared_ptr<VideoRelay> video_relay_;
+
     /// Active client sessions: SessionId -> ClientSession
     std::unordered_map<SessionId, std::shared_ptr<ClientSession>> sessions_;
 
@@ -531,6 +601,8 @@ private:
     int max_users_ = 100;
     std::string welcome_message_ = "Welcome to the NEVO server!";
     std::string log_level_ = "info";
+    std::string server_name_ = "NEVO Server";
+    std::string admin_password_hash_;
 
     /// Control server for Python GUI IPC
     uint16_t control_port_ = 24432;
@@ -541,6 +613,13 @@ private:
 
     /// Key epoch counter (incremented on each rotation)
     uint64_t key_epoch_ = 0;
+
+    /// SSL/TLS configuration
+    bool ssl_enabled_ = false;
+    std::string ssl_cert_file_;
+    std::string ssl_key_file_;
+    std::string ssl_ca_file_;
+    std::unique_ptr<boost::asio::ssl::context> ssl_ctx_;
 };
 
 } // namespace nevo

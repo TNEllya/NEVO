@@ -36,8 +36,48 @@ enum MessageType {
     MSG_UDP_PING_RESPONSE = 17;
     MSG_KEY_ROTATION_REQUEST = 18;
     MSG_KEY_ROTATION_RESPONSE = 19;
-    MSG_BIND_OWNER_REQUEST = 20;
-    MSG_BIND_OWNER_RESPONSE = 21;
+    MSG_ADMIN_AUTH_REQUEST = 20;
+    MSG_ADMIN_AUTH_RESPONSE = 21;
+    MSG_SET_ADMIN_REQUEST = 22;
+    MSG_SET_ADMIN_RESPONSE = 23;
+    MSG_KICK_USER_REQUEST = 24;
+    MSG_KICK_USER_RESPONSE = 25;
+    MSG_BAN_USER_REQUEST = 26;
+    MSG_BAN_USER_RESPONSE = 27;
+    MSG_MOVE_USER_REQUEST = 28;
+    MSG_MOVE_USER_RESPONSE = 29;
+
+    // 文字聊天
+    MSG_CHAT_SEND = 30;
+    MSG_CHAT_BROADCAST = 31;
+
+    // 管理员操作
+    MSG_SET_SERVER_NAME_REQUEST = 32;
+    MSG_SET_SERVER_NAME_RESPONSE = 33;
+    MSG_RENAME_CHANNEL_REQUEST = 34;
+    MSG_RENAME_CHANNEL_RESPONSE = 35;
+
+    // 语音状态报告
+    MSG_SPEAKING_STATE = 36;
+
+    // 文件传输
+    MSG_FILE_LIST_REQUEST = 40;
+    MSG_FILE_LIST_RESPONSE = 41;
+    MSG_FILE_UPLOAD_REQUEST = 42;
+    MSG_FILE_UPLOAD_RESPONSE = 43;
+    MSG_FILE_DOWNLOAD_REQUEST = 46;
+    MSG_FILE_DOWNLOAD_RESPONSE = 47;
+    MSG_FILE_DELETE_REQUEST = 49;
+    MSG_FILE_DELETE_RESPONSE = 50;
+
+    // Screen sharing
+    MSG_SCREEN_SHARE_START = 60;
+    MSG_SCREEN_SHARE_STOP = 61;
+    MSG_SCREEN_SHARE_STATE = 62;
+
+    // 服主绑定
+    MSG_BIND_OWNER_REQUEST = 70;
+    MSG_BIND_OWNER_RESPONSE = 71;
 }
 
 // ============================================================
@@ -49,6 +89,8 @@ message LoginRequest {
     bytes auth_credential = 2;            // 认证凭证
     repeated string key_exchange_methods = 3;  // 支持的密钥交换方式
     bytes client_public_key = 4;          // 客户端 X25519 公钥
+    uint32 client_udp_port = 5;           // 客户端 UDP 端口（用于语音传输）
+    uint32 client_video_udp_port = 6;     // 客户端 UDP 端口（用于视频/屏幕共享传输）
 }
 
 message JoinChannelRequest {
@@ -64,6 +106,16 @@ message CreateChannelRequest {
 
 message DeleteChannelRequest {
     uint64 channel_id = 1;
+}
+
+message RenameChannelRequest {
+    uint64 channel_id = 1;
+    string new_name = 2;
+}
+
+message RenameChannelResponse {
+    nevo.common.ResultCode result = 1;
+    string message = 2;
 }
 
 message PttToggle {
@@ -94,6 +146,9 @@ message LoginResponse {
     bytes server_public_key = 4;          // 服务端 X25519 公钥（兼容旧模式）
     string key_exchange_method = 5;       // 实际选用的密钥交换方式
     bytes encrypted_session_key = 6;      // crypto_box_seal 加密的会话密钥
+    bool owner_exists = 7;                // 服务器是否已有服主
+    uint32 server_udp_port = 8;           // 服务端 UDP 端口（用于语音传输）
+    uint32 server_video_udp_port = 9;     // 服务端 UDP 端口（用于视频/屏幕共享传输）
 }
 
 message ChannelListUpdate {
@@ -141,14 +196,175 @@ message KeyRotationResponse {
     uint64 key_epoch = 2;
 }
 
+message AdminAuthRequest {
+    string password = 1;                  // 管理员密码
+}
+
+message AdminAuthResponse {
+    nevo.common.ResultCode result = 1;
+    string message = 2;
+}
+
+message SetAdminRequest {
+    uint64 user_id = 1;                   // 目标用户 ID
+    bool set_admin = 2;                   // true=设为管理员, false=取消管理员
+}
+
+message SetAdminResponse {
+    nevo.common.ResultCode result = 1;
+    string message = 2;
+}
+
+message SetServerNameRequest {
+    string server_name = 1;                // 新的服务器名称
+}
+
+message SetServerNameResponse {
+    nevo.common.ResultCode result = 1;
+    string message = 2;
+}
+
+message KickUserRequest {
+    uint64 user_id = 1;                   // 被踢出的用户 ID
+    string reason = 2;                    // 踢出原因
+}
+
+message KickUserResponse {
+    nevo.common.ResultCode result = 1;
+    string message = 2;
+}
+
+message BanUserRequest {
+    uint64 user_id = 1;                   // 被封禁的用户 ID
+    string reason = 2;                    // 封禁原因
+    uint64 expires_at = 3;                 // 封禁过期时间（Unix 时间戳，0=永久）
+}
+
+message BanUserResponse {
+    nevo.common.ResultCode result = 1;
+    string message = 2;
+}
+
+message MoveUserRequest {
+    uint64 user_id = 1;                   // 被移动的用户 ID
+    uint64 channel_id = 2;               // 目标频道 ID
+}
+
+message MoveUserResponse {
+    nevo.common.ResultCode result = 1;
+    string message = 2;
+}
+
+// ============================================================
+// 文字聊天
+// ============================================================
+
+/// 客户端 → 服务端：发送聊天消息
+message ChatSendRequest {
+    uint64 channel_id = 1;              // 目标频道 ID（0=当前频道）
+    string text = 2;                    // 聊天文本内容
+}
+
+/// 服务端 → 客户端：广播聊天消息
+message ChatBroadcast {
+    uint64 sender_id = 1;               // 发送者用户 ID
+    string sender_name = 2;             // 发送者用户名
+    uint64 channel_id = 3;              // 频道 ID
+    string text = 4;                    // 聊天文本内容
+    uint64 timestamp = 5;               // 消息时间戳（Unix 毫秒）
+}
+
+// ============================================================
+// 文件传输
+// ============================================================
+
+/// 文件条目（用于文件列表响应）
+message FileEntry {
+    uint64 id = 1;                      // 文件记录 ID
+    uint64 channel_id = 2;              // 所属频道 ID
+    uint64 uploader_id = 3;             // 上传者用户 ID
+    string filename = 4;                // 文件名
+    uint64 file_size = 5;               // 文件大小（字节）
+    uint64 upload_time = 6;             // 上传时间戳（Unix 秒）
+}
+
+/// 客户端 → 服务端：请求文件列表
+message SpeakingState {
+    bool speaking = 1;
+}
+
 message BindOwnerRequest {
-    string bind_key = 1;                  // 服主绑定密钥
+    string bind_key = 1;
 }
 
 message BindOwnerResponse {
     nevo.common.ResultCode result = 1;
-    uint64 owner_user_id = 2;             // 绑定成功后的服主用户 ID
-    string message = 3;                   // 结果描述
+    string message = 2;
+    uint64 owner_user_id = 3;
+}
+
+message FileListRequest {
+    uint64 channel_id = 1;              // 频道 ID
+}
+
+/// 服务端 → 客户端：文件列表响应
+message FileListResponse {
+    repeated FileEntry entries = 1;     // 文件条目列表
+}
+
+/// 客户端 → 服务端：上传文件请求
+message FileUploadRequest {
+    uint64 channel_id = 1;              // 目标频道 ID
+    string filename = 2;                // 文件名
+    uint64 file_size = 3;               // 文件大小（字节）
+}
+
+/// 服务端 → 客户端：上传文件响应
+message FileUploadResponse {
+    nevo.common.ResultCode result = 1;  // 操作结果
+    string message = 2;                 // 附带消息
+    uint64 file_id = 3;                 // 新创建的文件记录 ID
+}
+
+/// 客户端 → 服务端：删除文件请求
+message FileDeleteRequest {
+    uint64 file_id = 1;                 // 文件记录 ID
+}
+
+/// 服务端 → 客户端：删除文件响应
+message FileDeleteResponse {
+    nevo.common.ResultCode result = 1;  // 操作结果
+    string message = 2;                 // 附带消息
+}
+
+// ============================================================
+// Screen sharing
+// ============================================================
+
+message ScreenShareStartRequest {
+    uint32 channel_id = 1;
+    uint32 source_type = 2;     // 0=screen, 1=window, 2=tab
+    string source_name = 3;
+    uint32 width = 4;
+    uint32 height = 5;
+    uint32 fps = 6;
+    bool share_audio = 7;
+    uint32 audio_source = 8;    // 0=none, 1=system, 2=application
+    uint32 audio_app_pid = 9;
+}
+
+message ScreenShareStopRequest {
+    uint32 channel_id = 1;
+}
+
+message ScreenShareState {
+    uint64 user_id = 1;
+    bool sharing = 2;
+    uint32 source_type = 3;
+    string source_name = 4;
+    uint32 width = 5;
+    uint32 height = 6;
+    bool has_audio = 7;
 }
 
 // ============================================================
@@ -175,7 +391,32 @@ message ControlMessage {
         UdpPingResponse udp_ping_response = 17;
         KeyRotationRequest key_rotation_request = 18;
         KeyRotationResponse key_rotation_response = 19;
-        BindOwnerRequest bind_owner_request = 20;
-        BindOwnerResponse bind_owner_response = 21;
+        AdminAuthRequest admin_auth_request = 20;
+        AdminAuthResponse admin_auth_response = 21;
+        SetAdminRequest set_admin_request = 22;
+        SetAdminResponse set_admin_response = 23;
+        KickUserRequest kick_user_request = 24;
+        KickUserResponse kick_user_response = 25;
+        BanUserRequest ban_user_request = 26;
+        BanUserResponse ban_user_response = 27;
+        MoveUserRequest move_user_request = 28;
+        MoveUserResponse move_user_response = 29;
+        ChatSendRequest chat_send = 30;
+        ChatBroadcast chat_broadcast = 31;
+        SetServerNameRequest set_server_name_request = 32;
+        SetServerNameResponse set_server_name_response = 33;
+        RenameChannelRequest rename_channel = 34;
+        RenameChannelResponse rename_channel_response = 35;
+        FileListRequest file_list_request = 40;
+        FileListResponse file_list_response = 41;
+        FileUploadRequest file_upload_request = 42;
+        FileUploadResponse file_upload_response = 43;
+        FileDeleteRequest file_delete_request = 49;
+        FileDeleteResponse file_delete_response = 50;
+        ScreenShareStartRequest screen_share_start = 60;
+        ScreenShareStopRequest screen_share_stop = 61;
+        ScreenShareState screen_share_state = 62;
+        BindOwnerRequest bind_owner_request = 70;
+        BindOwnerResponse bind_owner_response = 71;
     }
 }

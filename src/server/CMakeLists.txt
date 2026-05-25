@@ -7,6 +7,7 @@ add_executable(nevo_server
     src/ClientSession.cpp
     src/ChannelManager.cpp
     src/AudioRelay.cpp
+    src/VideoRelay.cpp
     src/ControlServer.cpp
     src/Database.cpp
     src/ServerConfig.cpp
@@ -21,6 +22,10 @@ set(NEVO_SERVER_LINK_LIBS nevo_core nevo_network)
 
 if(NEVO_HAS_SQLITE)
     list(APPEND NEVO_SERVER_LINK_LIBS SQLite3::SQLite3)
+endif()
+
+if(NEVO_HAS_SODIUM)
+    list(APPEND NEVO_SERVER_LINK_LIBS sodium::sodium)
 endif()
 
 # argon2 is needed for password hashing - keep as required if available
@@ -44,6 +49,22 @@ target_link_libraries(nevo_server PRIVATE ${NEVO_SERVER_LINK_LIBS})
 nevo_set_compiler_warnings(nevo_server)
 nevo_platform_setup(nevo_server)
 
+# Copy vcpkg DLLs to output directory after build (Windows only)
+if(WIN32)
+    set(NEVO_VCPKG_DLLS
+        sqlite3.dll libprotobuf.dll libsodium.dll
+        libssl-3-x64.dll libcrypto-3-x64.dll abseil_dll.dll
+    )
+    foreach(dll ${NEVO_VCPKG_DLLS})
+        add_custom_command(TARGET nevo_server POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/${dll}"
+                "$<TARGET_FILE_DIR:nevo_server>/${dll}"
+            COMMENT "Copying ${dll} to output directory"
+        )
+    endforeach()
+endif()
+
 # ============================================================
 # Server GUI (optional, requires Qt6)
 # ============================================================
@@ -60,6 +81,7 @@ add_executable(nevo_server_gui WIN32
     src/ClientSession.cpp
     src/ChannelManager.cpp
     src/AudioRelay.cpp
+    src/VideoRelay.cpp
     src/ControlServer.cpp
     src/Database.cpp
     src/ServerConfig.cpp

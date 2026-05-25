@@ -184,6 +184,18 @@ public:
      */
     void setNatInfo(const NatInfo& info);
 
+    /**
+     * @brief 更新用户的权限组 ID
+     * @param group_id 新的权限组 ID
+     */
+    void updateUserGroupId(GroupId group_id);
+
+    /**
+     * @brief 更新用户当前所在频道
+     * @param channel_id 新频道 ID
+     */
+    void updateUserChannel(ChannelId channel_id);
+
 private:
     // ============================================================
     // 消息处理
@@ -236,6 +248,13 @@ private:
     void handleDeleteChannel(const control::ControlMessage& msg, uint32_t request_id);
 
     /**
+     * @brief 处理重命名频道请求
+     * @param msg 控制消息（包含 RenameChannelRequest）
+     * @param request_id 请求 ID
+     */
+    void handleRenameChannel(const control::ControlMessage& msg, uint32_t request_id);
+
+    /**
      * @brief 处理 PTT 切换
      * @param msg 控制消息（包含 PttToggle）
      * @param request_id 请求 ID
@@ -257,11 +276,80 @@ private:
     void handleUdpPing(const control::ControlMessage& msg, uint32_t request_id);
 
     /**
-     * @brief 处理服主绑定请求
-     * @param msg 控制消息（包含 BindOwnerRequest）
+     * @brief 处理管理员认证请求
+     * @param msg 控制消息（包含 AdminAuthRequest）
      * @param request_id 请求 ID
      */
-    void handleBindOwner(const control::ControlMessage& msg, uint32_t request_id);
+    void handleAdminAuth(const control::ControlMessage& msg, uint32_t request_id);
+
+    /**
+     * @brief 处理设置管理员请求
+     * @param msg 控制消息（包含 SetAdminRequest）
+     * @param request_id 请求 ID
+     */
+    void handleSetAdmin(const control::ControlMessage& msg, uint32_t request_id);
+
+    /**
+     * @brief 处理踢出用户请求
+     * @param msg 控制消息（包含 KickUserRequest）
+     * @param request_id 请求 ID
+     */
+    void handleKickUser(const control::ControlMessage& msg, uint32_t request_id);
+
+    /**
+     * @brief 处理封禁用户请求
+     * @param msg 控制消息（包含 BanUserRequest）
+     * @param request_id 请求 ID
+     */
+    void handleBanUser(const control::ControlMessage& msg, uint32_t request_id);
+
+    /**
+     * @brief 处理移动用户请求
+     * @param msg 控制消息（包含 MoveUserRequest）
+     * @param request_id 请求 ID
+     */
+    void handleMoveUser(const control::ControlMessage& msg, uint32_t request_id);
+
+    /**
+     * @brief 处理聊天消息发送请求
+     *
+     * 将聊天消息广播到同频道的所有用户。
+     *
+     * @param msg 控制消息（包含 ChatSendRequest）
+     * @param request_id 请求 ID
+     */
+    void handleChatSend(const control::ControlMessage& msg, uint32_t request_id);
+
+    /**
+     * @brief 处理 STUN 绑定请求
+     *
+     * 返回客户端的公网映射地址和 NAT 类型。
+     *
+     * @param msg 控制消息（包含 StunBindRequest）
+     * @param request_id 请求 ID
+     */
+    void handleStunBind(const control::ControlMessage& msg, uint32_t request_id);
+
+    /**
+     * @brief 处理密钥轮换响应
+     *
+     * 客户端确认密钥轮换成功。
+     *
+     * @param msg 控制消息（包含 KeyRotationResponse）
+     * @param request_id 请求 ID
+     */
+    void handleKeyRotationResponse(const control::ControlMessage& msg, uint32_t request_id);
+
+    /**
+     * @brief 处理设置服务器名称请求
+     * @param msg 控制消息（包含 SetServerNameRequest）
+     * @param request_id 请求 ID
+     */
+    void handleSetServerName(const control::ControlMessage& msg, uint32_t request_id);
+
+    void handleFileListRequest(const control::ControlMessage& msg, uint32_t request_id);
+    void handleFileUploadRequest(const control::ControlMessage& msg, uint32_t request_id);
+    void handleFileDeleteRequest(const control::ControlMessage& msg, uint32_t request_id);
 
     // ============================================================
     // 成员变量

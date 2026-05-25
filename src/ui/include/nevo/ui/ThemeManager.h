@@ -50,6 +50,14 @@ public:
     void applyDarkTheme();
 
     /**
+     * @brief 应用亮色主题
+     *
+     * 加载 themes/light_theme.qss 并应用到 QApplication。
+     * 如果 QSS 文件不存在，则使用 QPalette 作为回退。
+     */
+    void applyLightTheme();
+
+    /**
      * @brief ?????????? QSS ??
      * @param qss_path QSS ???????????????
      * @return ??????

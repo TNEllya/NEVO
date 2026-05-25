@@ -12,6 +12,7 @@
 #include "nevo/server/Database.h"
 #include "nevo/server/ChannelManager.h"
 #include "nevo/server/AudioRelay.h"
+#include "nevo/server/VideoRelay.h"
 #include "nevo/core/common/Logger.h"
 #include "nevo/network/VoiceCrypto.h"
 #include "nevo/core/protocol/PacketTypes.h"
@@ -27,6 +28,9 @@
 
 namespace nevo {
 
+// Type alias for readability
+using SessionPtr = std::shared_ptr<ClientSession>;
+
 // ============================================================
 // Construction / Destruction
 // ============================================================
@@ -37,6 +41,7 @@ ServerCore::ServerCore(boost::asio::io_context& io_ctx,
     : io_ctx_(io_ctx)
     , tcp_port_(tcp_port)
     , udp_port_(udp_port)
+    , video_udp_port_(udp_port + 1)
     , tcp_acceptor_(io_ctx)
 {
     NEVO_LOG_INFO("server", "ServerCore created (tcp={}, udp={})", tcp_port, udp_port);
@@ -77,6 +82,10 @@ Result<void> ServerCore::initialize(const std::string& db_path) {
     audio_relay_->setChannelManager(channel_mgr_);
     audio_relay_->setIoContext(io_ctx_);
 
+    video_relay_ = std::make_shared<VideoRelay>();
+    video_relay_->setChannelManager(channel_mgr_);
+    video_relay_->setIoContext(io_ctx_);
+
     // Initialize permission manager
     perm_mgr_ = std::make_unique<PermissionManager>();
 
@@ -111,6 +120,23 @@ Result<void> ServerCore::initialize(const std::string& db_path) {
     }
     NEVO_LOG_WARN("server", "Server session key generated (std::random_device, libsodium not available)");
 #endif
+
+    // Load SSL/TLS configuration from database
+    auto ssl_enabled_str = db_->getConfig("ssl_enabled");
+    if (ssl_enabled_str && ssl_enabled_str.value() == "1") {
+        ssl_enabled_ = true;
+
+        auto cert_str = db_->getConfig("ssl_cert_file");
+        auto key_str = db_->getConfig("ssl_key_file");
+        auto ca_str = db_->getConfig("ssl_ca_file");
+
+        if (cert_str) ssl_cert_file_ = cert_str.value();
+        if (key_str) ssl_key_file_ = key_str.value();
+        if (ca_str) ssl_ca_file_ = ca_str.value();
+
+        NEVO_LOG_INFO("server", "SSL/TLS configuration loaded from database (enabled={}, cert={}, key={})",
+            ssl_enabled_, ssl_cert_file_, ssl_key_file_);
+    }
 
     NEVO_LOG_INFO("server", "ServerCore initialized successfully");
     return Ok();
@@ -147,6 +173,29 @@ void ServerCore::start() {
                 co_await receiveUdpLoop();
             } catch (const std::exception& e) {
                 NEVO_LOG_ERROR("server", "UDP receive loop exception: {}", e.what());
+            }
+        },
+        boost::asio::detached);
+
+    video_udp_socket_ = std::make_shared<UdpSocket>(io_ctx_);
+    auto ec = video_udp_socket_->bind(video_udp_port_);
+    if (ec) {
+        NEVO_LOG_CRITICAL("server", "FAILED to bind video UDP port {}: {}", video_udp_port_, ec.message());
+        throw std::runtime_error("Failed to bind video UDP port " + std::to_string(video_udp_port_) + ": " + ec.message());
+    }
+    NEVO_LOG_INFO("server", "Video UDP relay bound on port {}", video_udp_port_);
+    video_relay_->setUdpSocket(video_udp_socket_);
+    video_relay_->setSessionKeyQuery(
+        [this](UserId user_id) -> const uint8_t* {
+            return this->getClientSessionKey(user_id);
+        });
+
+    boost::asio::co_spawn(io_ctx_,
+        [this]() -> boost::asio::awaitable<void> {
+            try {
+                co_await receiveVideoUdpLoop();
+            } catch (const std::exception& e) {
+                NEVO_LOG_ERROR("server", "Video UDP receive loop exception: {}", e.what());
             }
         },
         boost::asio::detached);
@@ -446,12 +495,33 @@ void ServerCore::onClientDisconnected(std::shared_ptr<ClientSession> session) {
     {
         std::lock_guard<std::mutex> lock(sessions_mutex_);
 
+        // 检查用户数量限制
+        int authenticated_count = 0;
+        for (const auto& [sid, sess] : sessions_) {
+            if (sess && sess->isAuthenticated()) {
+                ++authenticated_count;
+            }
+        }
+        if (max_users_ > 0 && authenticated_count >= max_users_) {
+            NEVO_LOG_WARN("server", "Rejecting connection: max users limit reached ({}/{})",
+                          authenticated_count, max_users_);
+            // 在锁外断开连接以避免死锁
+            boost::asio::post(io_ctx_, [session]() {
+                session->disconnect();
+            });
+            return;
+        }
+
         uid = session->userId();
         sid = session->sessionId();
 
         // Remove from AudioRelay mapping
         if (audio_relay_ && uid) {
             audio_relay_->removeClientMapping(uid);
+        }
+
+        if (video_relay_) {
+            video_relay_->removeClientMapping(uid);
         }
 
         // Remove from session list
@@ -543,8 +613,8 @@ std::vector<uint8_t> ServerCore::generateSessionKeyForClient(
         return {};
     }
 
-    std::array<uint8_t, CRYPTO_KEY_SIZE> session_key{};
 #ifdef NEVO_HAS_SODIUM
+    std::array<uint8_t, CRYPTO_KEY_SIZE> session_key{};
     randombytes_buf(session_key.data(), CRYPTO_KEY_SIZE);
 
     // 使用 crypto_box_seal 加密会话密钥
@@ -567,22 +637,8 @@ std::vector<uint8_t> ServerCore::generateSessionKeyForClient(
     NEVO_LOG_INFO("server", "Generated per-client session key for user_id={}", user_id.value);
     return encrypted;
 #else
-    // Fallback: 不使用加密，直接返回明文（仅用于编译通过，生产环境不安全）
-    std::random_device rd;
-    std::uniform_int_distribution<uint32_t> dist;
-    for (size_t i = 0; i < CRYPTO_KEY_SIZE; i += sizeof(uint32_t)) {
-        uint32_t val = dist(rd);
-        std::memcpy(session_key.data() + i, &val,
-                    std::min(sizeof(uint32_t), CRYPTO_KEY_SIZE - i));
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(client_keys_mutex_);
-        client_session_keys_[user_id] = session_key;
-    }
-
-    NEVO_LOG_WARN("server", "libsodium not available, session key sent in plaintext (INSECURE)");
-    return std::vector<uint8_t>(session_key.begin(), session_key.end());
+    NEVO_LOG_ERROR("server", "libsodium not available, cannot generate session key!");
+    return {};
 #endif
 }
 
@@ -609,125 +665,83 @@ void ServerCore::removeClientSessionKey(UserId user_id) {
     }
 }
 
+void ServerCore::setClientSessionKey(UserId user_id, const uint8_t* key, size_t key_size) {
+    if (!key || key_size != CRYPTO_KEY_SIZE) {
+        NEVO_LOG_WARN("server", "Invalid key size for setClientSessionKey: {} (expected {})",
+                     key_size, CRYPTO_KEY_SIZE);
+        return;
+    }
+    std::lock_guard<std::mutex> lock(client_keys_mutex_);
+    std::memcpy(client_session_keys_[user_id].data(), key, CRYPTO_KEY_SIZE);
+    NEVO_LOG_DEBUG("server", "Set session key for user_id={}", user_id.value);
+}
+
 // ============================================================
-// 服主与管理员管理
+// 管理员管理
 // ============================================================
 
-std::string ServerCore::generateOwnerBindKey() {
-    if (!db_) {
-        NEVO_LOG_ERROR("server", "Cannot generate bind key: database not available");
-        return "";
+Result<void> ServerCore::authenticateAdmin(UserId user_id, const std::string& password) {
+    if (admin_password_hash_.empty()) {
+        return Error(ResultCode::Unknown, "Admin password not set on server");
     }
 
-    // Check if owner already exists
-    auto owner_id_str = db_->getConfig("owner_user_id");
-    if (owner_id_str && !owner_id_str.value().empty() && owner_id_str.value() != "0") {
-        NEVO_LOG_WARN("server", "Cannot generate bind key: owner already exists (user_id={})",
-                      owner_id_str.value());
-        return "";
+#ifdef NEVO_HAS_SODIUM
+    if (crypto_pwhash_str_verify(admin_password_hash_.c_str(), password.c_str(), password.size()) != 0) {
+        return Error(ResultCode::AuthFailed, "Incorrect admin password");
+    }
+#else
+    NEVO_LOG_ERROR("server", "Cannot verify admin password: libsodium not available!");
+    return Error(ResultCode::Unknown, "Cannot verify admin password");
+#endif
+
+    auto session = getClientSession(user_id);
+    if (!session) {
+        return Error(ResultCode::UserNotFound, "User session not found");
     }
 
-    // Generate 32 bytes of random data as hex string (64 characters)
-    std::random_device rd;
-    std::mt19937_64 gen(rd());
-    std::uniform_int_distribution<uint64_t> dist;
-
-    std::string hex_key;
-    for (int i = 0; i < 4; ++i) {
-        uint64_t val = dist(gen);
-        char buf[17];
-        std::snprintf(buf, sizeof(buf), "%016llx", static_cast<unsigned long long>(val));
-        hex_key += buf;
-    }
-
-    // Store in database
-    auto result = db_->setConfig("owner_bind_key", hex_key);
-    if (!result) {
-        NEVO_LOG_ERROR("server", "Failed to store bind key in database");
-        return "";
-    }
-
-    NEVO_LOG_INFO("server", "Generated owner bind key (length={})", hex_key.size());
-    return hex_key;
+    session->updateUserGroupId(GROUP_ADMIN);
+    return {};
 }
 
-UserId ServerCore::getOwnerUserId() {
-    if (!db_) {
-        return UserId(0);
-    }
-
-    auto owner_id_str = db_->getConfig("owner_user_id");
-    if (!owner_id_str || owner_id_str.value().empty() || owner_id_str.value() == "0") {
-        return UserId(0);
-    }
-
-    try {
-        uint64_t uid = std::stoull(owner_id_str.value());
-        return UserId(uid);
-    } catch (const std::exception& e) {
-        NEVO_LOG_ERROR("server", "Failed to parse owner_user_id '{}': {}",
-                       owner_id_str.value(), e.what());
-        return UserId(0);
-    }
+Result<void> ServerCore::setServerName(const std::string& server_name) {
+    server_name_ = server_name;
+    return {};
 }
 
-bool ServerCore::isOwner(UserId user_id) {
-    return getOwnerUserId() == user_id;
+std::string ServerCore::serverName() const {
+    return server_name_;
 }
 
-Result<void> ServerCore::bindOwner(UserId user_id, const std::string& bind_key) {
-    if (!db_) {
-        return Err<void>(ResultCode::DatabaseError, "Database not available");
+void ServerCore::setAdminPassword(const std::string& password) {
+#ifdef NEVO_HAS_SODIUM
+    char hashed_password[crypto_pwhash_STRBYTES];
+    if (crypto_pwhash_str(hashed_password,
+                         password.c_str(), password.size(),
+                         crypto_pwhash_OPSLIMIT_MODERATE,
+                         crypto_pwhash_MEMLIMIT_MODERATE) != 0) {
+        NEVO_LOG_ERROR("server", "Failed to hash admin password");
+        admin_password_hash_.clear();
+        return;
     }
+    admin_password_hash_ = hashed_password;
+#else
+    NEVO_LOG_ERROR("server", "Cannot set admin password: libsodium not available!");
+    admin_password_hash_.clear();
+#endif
+}
 
-    if (!user_id) {
-        return Err<void>(ResultCode::InvalidRequest, "Invalid user ID");
-    }
+// Remove adminPassword() function since we don't store plaintext anymore
 
-    if (bind_key.empty()) {
-        return Err<void>(ResultCode::InvalidRequest, "Bind key is empty");
-    }
+bool ServerCore::isAdminPasswordSet() const {
+    return !admin_password_hash_.empty();
+}
 
-    // Check if owner already exists
-    auto existing_owner = getOwnerUserId();
-    if (existing_owner) {
-        return Err<void>(ResultCode::PermissionDenied, "Server owner already exists");
-    }
-
-    // Retrieve stored bind key
-    auto stored_key_opt = db_->getConfig("owner_bind_key");
-    if (!stored_key_opt || stored_key_opt.value().empty()) {
-        return Err<void>(ResultCode::InvalidRequest, "No owner bind key available");
-    }
-
-    // Compare keys (constant-time comparison not strictly necessary for hex keys,
-    // but we use simple string comparison here)
-    if (bind_key != stored_key_opt.value()) {
-        return Err<void>(ResultCode::AuthFailed, "Invalid bind key");
-    }
-
-    // Store owner user ID
-    auto set_result = db_->setConfig("owner_user_id", std::to_string(user_id.value));
-    if (!set_result) {
-        return Err<void>(ResultCode::DatabaseError,
-                         "Failed to store owner user ID: " + set_result.error().message());
-    }
-
-    // Clear the bind key (one-time use)
-    auto clear_result = db_->setConfig("owner_bind_key", "");
-    if (!clear_result) {
-        NEVO_LOG_WARN("server", "Failed to clear owner bind key after successful bind");
-    }
-
-    // Promote owner to Admin group
-    auto group_result = db_->updateUserGroupId(user_id, GROUP_ADMIN);
-    if (!group_result) {
-        NEVO_LOG_WARN("server", "Failed to promote owner to admin group: {}",
-                      group_result.error().message());
-    }
-
-    NEVO_LOG_INFO("server", "User {} bound as server owner", user_id.value);
-    return Ok();
+ServerConfig ServerCore::config() const {
+    ServerConfig cfg;
+    cfg.max_users = max_users_;
+    cfg.welcome_message = welcome_message_;
+    cfg.server_name = server_name_;
+    return cfg;
 }
 
 // ============================================================
@@ -735,6 +749,7 @@ Result<void> ServerCore::bindOwner(UserId user_id, const std::string& bind_key) 
 // ============================================================
 
 boost::asio::awaitable<void> ServerCore::acceptTcpLoop() {
+
     // Open TCP acceptor
     boost::asio::ip::tcp::endpoint tcp_endpoint(
         boost::asio::ip::tcp::v4(), tcp_port_);
@@ -763,6 +778,61 @@ boost::asio::awaitable<void> ServerCore::acceptTcpLoop() {
 
     NEVO_LOG_INFO("server", "TCP acceptor listening on port {}", tcp_port_);
 
+    // ---- Initialize SSL context if TLS is enabled ----
+    if (ssl_enabled_) {
+        if (ssl_cert_file_.empty() || ssl_key_file_.empty()) {
+            NEVO_LOG_ERROR("server",
+                "TLS enabled but certificate/key files not configured. "
+                "Use setSslCertificateFile() and setSslPrivateKeyFile() before start().");
+            co_return;
+        }
+
+        ssl_ctx_ = std::make_unique<boost::asio::ssl::context>(boost::asio::ssl::context::tls_server);
+
+        // Set minimum TLS version to TLS 1.2
+        SSL_CTX_set_min_proto_version(ssl_ctx_->native_handle(), TLS1_2_VERSION);
+
+        // Load server certificate
+        boost::system::error_code cert_ec;
+        ssl_ctx_->use_certificate_file(ssl_cert_file_,
+            boost::asio::ssl::context::pem, cert_ec);
+        if (cert_ec) {
+            NEVO_LOG_ERROR("server", "Failed to load TLS certificate '{}': {}",
+                ssl_cert_file_, cert_ec.message());
+            co_return;
+        }
+
+        // Load server private key
+        ssl_ctx_->use_private_key_file(ssl_key_file_,
+            boost::asio::ssl::context::pem, cert_ec);
+        if (cert_ec) {
+            NEVO_LOG_ERROR("server", "Failed to load TLS private key '{}': {}",
+                ssl_key_file_, cert_ec.message());
+            co_return;
+        }
+
+        // Load CA certificate for client verification (mTLS, optional)
+        if (!ssl_ca_file_.empty()) {
+            ssl_ctx_->load_verify_file(ssl_ca_file_, cert_ec);
+            if (cert_ec) {
+                NEVO_LOG_ERROR("server", "Failed to load CA cert '{}': {}",
+                    ssl_ca_file_, cert_ec.message());
+                co_return;
+            }
+            // Require client certificate verification
+            ssl_ctx_->set_verify_mode(
+                boost::asio::ssl::verify_peer | boost::asio::ssl::verify_fail_if_no_peer_cert);
+            NEVO_LOG_INFO("server", "mTLS enabled: client certificates required");
+        }
+
+        // Disable insecure cipher suites
+        SSL_CTX_set_cipher_list(ssl_ctx_->native_handle(),
+            "HIGH:!aNULL:!MD5:!DSS");
+
+        NEVO_LOG_INFO("server", "TLS initialized (cert={}, key={})",
+            ssl_cert_file_, ssl_key_file_);
+    }
+
     // Loop accepting connections
     while (!shutdown_requested_) {
         // Create new TCP connection object
@@ -786,6 +856,23 @@ boost::asio::awaitable<void> ServerCore::acceptTcpLoop() {
 
         NEVO_LOG_INFO("server", "New TCP connection from: {}",
                       tcp_conn->remoteEndpointString());
+
+        // ---- Perform server-side TLS handshake if enabled ----
+        if (ssl_enabled_ && ssl_ctx_) {
+            NEVO_LOG_INFO("server", "Starting TLS handshake for {}",
+                tcp_conn->remoteEndpointString());
+
+            auto ssl_ec = co_await tcp_conn->asyncSslServerHandshake(*ssl_ctx_);
+            if (ssl_ec) {
+                NEVO_LOG_ERROR("server", "TLS handshake failed for {}: {}",
+                    tcp_conn->remoteEndpointString(), ssl_ec.message());
+                // Handshake failed, skip this connection
+                continue;
+            }
+
+            NEVO_LOG_INFO("server", "TLS handshake succeeded for {}",
+                tcp_conn->remoteEndpointString());
+        }
 
         // Create ClientSession
         auto session = std::make_shared<ClientSession>(
@@ -865,12 +952,63 @@ std::string ServerCore::logLevel() const {
     return log_level_;
 }
 
+// ============================================================
+// SSL/TLS configuration
+// ============================================================
+
+void ServerCore::setSslEnabled(bool enabled) {
+#ifndef NEVO_HAS_OPENSSL
+    if (enabled) {
+        NEVO_LOG_ERROR("server", "Cannot enable TLS: OpenSSL not available at build time");
+        return;
+    }
+#endif
+    ssl_enabled_ = enabled;
+    NEVO_LOG_INFO("server", "TLS {}", enabled ? "enabled" : "disabled");
+}
+
+bool ServerCore::isSslEnabled() const {
+    return ssl_enabled_;
+}
+
+void ServerCore::setSslCertificateFile(const std::string& cert_path) {
+    ssl_cert_file_ = cert_path;
+    NEVO_LOG_INFO("server", "TLS certificate file set to {}", cert_path);
+}
+
+void ServerCore::setSslPrivateKeyFile(const std::string& key_path) {
+    ssl_key_file_ = key_path;
+    NEVO_LOG_INFO("server", "TLS private key file set to {}", key_path);
+}
+
+void ServerCore::setSslCaFile(const std::string& ca_path) {
+    ssl_ca_file_ = ca_path;
+    NEVO_LOG_INFO("server", "TLS CA file set to {}", ca_path);
+}
+
 void ServerCore::setControlPort(uint16_t port) {
     control_port_ = port;
 }
 
 ControlServer* ServerCore::controlServer() {
     return control_server_.get();
+}
+
+void ServerCore::updateAudioRelayChannel(UserId user_id, ChannelId channel_id) {
+    if (audio_relay_) {
+        audio_relay_->updateClientChannel(user_id, channel_id);
+    }
+
+    if (video_relay_) {
+        video_relay_->updateClientChannel(user_id, channel_id);
+    }
+}
+
+void ServerCore::relayTcpVoicePacket(const uint8_t* data, uint32_t size, UserId sender_id) {
+    if (audio_relay_ && data && size > 0) {
+        boost::asio::ip::udp::endpoint dummy_endpoint;
+        audio_relay_->handleVoicePacket(data, size, dummy_endpoint, sender_id);
+    }
 }
 
 void ServerCore::broadcastChannelListUpdate() {
@@ -888,6 +1026,12 @@ void ServerCore::broadcastChannelListUpdate() {
         for (const auto& uid : ch.user_ids) {
             auto* ui = ci->add_users();
             ui->set_id(uid.value);
+            if (auto session = getClientSession(uid)) {
+                ui->set_username(session->user().username());
+                ui->set_muted(session->user().isMuted());
+                ui->set_deafened(session->user().isDeafened());
+                ui->set_group_id(session->user().groupId().value);
+            }
         }
     }
 
@@ -948,6 +1092,32 @@ void ServerCore::broadcastUserSpeaking(UserId user_id, bool speaking) {
     }
 }
 
+void ServerCore::broadcastChatMessage(UserId sender_id,
+                                       const std::string& sender_name,
+                                       ChannelId channel_id,
+                                       const std::string& text) {
+    control::ControlMessage msg;
+    auto* chat = msg.mutable_chat_broadcast();
+    chat->set_sender_id(sender_id.value);
+    chat->set_sender_name(sender_name);
+    chat->set_channel_id(channel_id.value);
+    chat->set_text(text);
+    chat->set_timestamp(static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count()));
+
+    std::lock_guard<std::mutex> lock(sessions_mutex_);
+    for (const auto& [sid, session] : sessions_) {
+        if (session->isAuthenticated()) {
+            // 只广播给同频道的用户
+            const auto& user = session->user();
+            if (user.currentChannel() == channel_id) {
+                session->sendControl(msg, ControlMessageType::ChatBroadcast, 0);
+            }
+        }
+    }
+}
+
 // ============================================================
 // Key Rotation
 // ============================================================
@@ -959,7 +1129,7 @@ void ServerCore::rotateSessionKey() {
     ++key_epoch_;
 
     // 获取所有已认证会话的快照
-    std::vector<std::pair<UserId, std::shared_ptr<ClientSession>>> authenticated_sessions;
+    std::vector<std::pair<UserId, SessionPtr>> authenticated_sessions;
     {
         std::lock_guard<std::mutex> lock(sessions_mutex_);
         for (const auto& [sid, session] : sessions_) {
@@ -1035,6 +1205,63 @@ void ServerCore::stopKeyRotationTimer() {
         key_rotation_timer_->cancel();
         key_rotation_timer_.reset();
         NEVO_LOG_DEBUG("server", "Key rotation timer stopped");
+    }
+}
+
+boost::asio::awaitable<void> ServerCore::receiveVideoUdpLoop() {
+    NEVO_LOG_INFO("server", "Video UDP receive loop starting on port {}", video_udp_port_);
+
+    std::atomic<uint64_t> video_udp_pkt_count{0};
+    std::string last_sender;
+
+    video_udp_socket_->onPacket = [this, &video_udp_pkt_count, &last_sender](const uint8_t* data, uint32_t size,
+                                          const boost::asio::ip::udp::endpoint& sender) {
+        uint64_t count = ++video_udp_pkt_count;
+        auto sender_str = sender.address().to_string() + ":" + std::to_string(sender.port());
+        last_sender = sender_str;
+
+        if (count <= 5 || count % 50 == 0) {
+            NEVO_LOG_INFO("server", "VIDEO UDP: Packet #{} received from {} (size={})", count, sender_str, size);
+        }
+        if (count % 100 == 0) {
+            NEVO_LOG_INFO("server", "VIDEO UDP: {} packets received, last from {} (size={}), "
+                           "relay stats: received={} relayed={} dropped={}",
+                           count, sender_str, size,
+                           video_relay_ ? video_relay_->packetsReceived() : 0,
+                           video_relay_ ? video_relay_->packetsRelayed() : 0,
+                           video_relay_ ? video_relay_->packetsDropped() : 0);
+        }
+
+        if (video_relay_) {
+            video_relay_->handleVideoPacket(data, size, sender);
+        } else {
+            NEVO_LOG_WARN("server", "VIDEO UDP: received {} bytes from {} but video_relay is NULL!", size, sender_str);
+        }
+    };
+
+    co_await video_udp_socket_->asyncReceiveFrom();
+
+    NEVO_LOG_INFO("server", "Video UDP receive loop exited (total packets={}, last sender={})",
+                  video_udp_pkt_count.load(), last_sender);
+}
+
+void ServerCore::addVideoRelayMapping(UserId user_id,
+                                       const boost::asio::ip::udp::endpoint& ep,
+                                       ChannelId channel_id) {
+    if (video_relay_) {
+        video_relay_->addClientMapping(user_id, ep, channel_id);
+    }
+}
+
+void ServerCore::removeVideoRelayMapping(UserId user_id) {
+    if (video_relay_) {
+        video_relay_->removeClientMapping(user_id);
+    }
+}
+
+void ServerCore::updateVideoRelayChannel(UserId user_id, ChannelId channel_id) {
+    if (video_relay_) {
+        video_relay_->updateClientChannel(user_id, channel_id);
     }
 }
 

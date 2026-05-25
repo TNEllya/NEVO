@@ -3,6 +3,8 @@
 
 function(nevo_set_compiler_warnings target)
     set(MSVC_WARNINGS
+        /utf-8  # 强制使用 UTF-8 编码处理源文件
+        /D_WIN32_WINNT=0x0A00  # Windows 10+ 目标平台（Boost ASIO 要求）
         /W4     # 高级别警告
         /w14242 # 'identifier': conversion from 'type1' to 'type2', possible loss of data
         /w14254 # 'operator': conversion from 'type1:field_bits' to 'type2:field_bits'

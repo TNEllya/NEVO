@@ -29,13 +29,16 @@
 #include <boost/asio/use_awaitable.hpp>
 
 #include <cstring>
+#include <fstream>
 
 #ifdef NEVO_HAS_SODIUM
 #include <sodium.h>
 #endif
 
+#ifdef NEVO_HAS_QT
 #include <QSettings>
 #include <QByteArray>
+#endif
 
 namespace nevo {
 
@@ -100,6 +103,7 @@ void ClientCore::ensureIdentityKeys()
 
 bool ClientCore::loadIdentityKeys()
 {
+#ifdef NEVO_HAS_QT
     QSettings settings("NEVO", "NEVOClient");
     QByteArray pub_b64 = settings.value("identity/publicKey").toByteArray();
     QByteArray sec_b64 = settings.value("identity/secretKey").toByteArray();
@@ -120,6 +124,18 @@ bool ClientCore::loadIdentityKeys()
     std::memcpy(client_public_key_.data(), pub.data(), IDENTITY_PUBLIC_KEY_SIZE);
     std::memcpy(client_secret_key_.data(), sec.data(), IDENTITY_SECRET_KEY_SIZE);
     return true;
+#else
+    std::ifstream ifs("nevo_identity.key", std::ios::binary);
+    if (!ifs) return false;
+
+    std::vector<uint8_t> buf(IDENTITY_PUBLIC_KEY_SIZE + IDENTITY_SECRET_KEY_SIZE);
+    ifs.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(buf.size()));
+    if (!ifs || static_cast<size_t>(ifs.gcount()) != buf.size()) return false;
+
+    std::memcpy(client_public_key_.data(), buf.data(), IDENTITY_PUBLIC_KEY_SIZE);
+    std::memcpy(client_secret_key_.data(), buf.data() + IDENTITY_PUBLIC_KEY_SIZE, IDENTITY_SECRET_KEY_SIZE);
+    return true;
+#endif
 }
 
 void ClientCore::generateIdentityKeys()
@@ -127,12 +143,12 @@ void ClientCore::generateIdentityKeys()
 #ifdef NEVO_HAS_SODIUM
     crypto_box_keypair(client_public_key_.data(), client_secret_key_.data());
 #else
-    // Fallback: 不安全的占位实现（仅用于无 libsodium 时的编译通过）
     std::memset(client_public_key_.data(), 0, IDENTITY_PUBLIC_KEY_SIZE);
     std::memset(client_secret_key_.data(), 0, IDENTITY_SECRET_KEY_SIZE);
     NEVO_LOG_WARN("client", "libsodium not available, identity keys are zeroed (INSECURE)");
 #endif
 
+#ifdef NEVO_HAS_QT
     QSettings settings("NEVO", "NEVOClient");
     settings.setValue("identity/publicKey",
                       QByteArray(reinterpret_cast<const char*>(client_public_key_.data()),
@@ -140,6 +156,15 @@ void ClientCore::generateIdentityKeys()
     settings.setValue("identity/secretKey",
                       QByteArray(reinterpret_cast<const char*>(client_secret_key_.data()),
                                  static_cast<int>(IDENTITY_SECRET_KEY_SIZE)).toBase64());
+#else
+    std::ofstream ofs("nevo_identity.key", std::ios::binary);
+    if (ofs) {
+        ofs.write(reinterpret_cast<const char*>(client_public_key_.data()),
+                  static_cast<std::streamsize>(IDENTITY_PUBLIC_KEY_SIZE));
+        ofs.write(reinterpret_cast<const char*>(client_secret_key_.data()),
+                  static_cast<std::streamsize>(IDENTITY_SECRET_KEY_SIZE));
+    }
+#endif
 }
 
 // ============================================================
@@ -165,6 +190,12 @@ boost::asio::awaitable<Result<void>> ClientCore::connect(
 
     NEVO_LOG_INFO("client", "Connecting to {}:{} as user '{}' ...",
                  host, tcp_port, username);
+
+    // 重置登录 Promise
+    {
+        std::lock_guard<std::mutex> lock(login_promise_mutex_);
+        login_promise_ = std::promise<Result<void>>();
+    }
 
     // ------------------------------------------------------------------
     // 1. 状态切换：Disconnected → Connecting
@@ -200,7 +231,7 @@ boost::asio::awaitable<Result<void>> ClientCore::connect(
     login_req->set_auth_credential(auth_credential_);
     if (has_identity_keypair_) {
         login_req->set_client_public_key(
-            std::vector<uint8_t>(client_public_key_.begin(), client_public_key_.end()));
+            std::string(client_public_key_.begin(), client_public_key_.end()));
     }
 
     auto send_result = co_await network_mgr_->sendControl(
@@ -215,12 +246,23 @@ boost::asio::awaitable<Result<void>> ClientCore::connect(
     // ------------------------------------------------------------------
     // 4. 等待登录响应
     // ------------------------------------------------------------------
-    // 注意：登录响应由 handleControlMessage 异步处理。
-    // 在生产实现中，这里应使用 promise/future 或条件变量等待响应。
-    // 当前简化实现：假设 handleLoginResponse 会被调用并设置状态。
-    //
-    // 简化方案：登录请求发送成功即视为登录成功。
-    // 实际的登录响应由 handleControlMessage 异步处理。
+    {
+        std::unique_lock<std::mutex> lock(login_promise_mutex_);
+        auto future = login_promise_.get_future();
+        lock.unlock();
+
+        if (future.wait_for(std::chrono::seconds(10)) != std::future_status::ready) {
+            NEVO_LOG_ERROR("client", "Login timed out (10s)");
+            setState(ClientState::Disconnected);
+            co_return Err<void>(ResultCode::Timeout, "Login timed out");
+        }
+        auto login_result = future.get();
+        if (!login_result) {
+            NEVO_LOG_ERROR("client", "Login failed: {}", login_result.error().message());
+            setState(ClientState::Disconnected);
+            co_return Err<void>(login_result.error().code(), login_result.error().message());
+        }
+    }
 
     // ------------------------------------------------------------------
     // 5. 建立 UDP 语音通道
@@ -398,10 +440,13 @@ boost::asio::awaitable<Result<void>> ClientCore::leaveChannel()
     }
 
     // ------------------------------------------------------------------
-    // 3. 重置频道状态
+    // 3. 重置频道状态（线程安全：使用 state_mutex_ 保护）
     // ------------------------------------------------------------------
-    current_channel_ = INVALID_CHANNEL_ID;
-    current_channel_name_.clear();
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        current_channel_ = INVALID_CHANNEL_ID;
+        current_channel_name_.clear();
+    }
 
     // 状态切换：InChannel → Connected
     setState(ClientState::Connected);
@@ -647,6 +692,57 @@ void ClientCore::handleControlMessage(const control::ControlMessage& message,
             handleBindOwnerResponse(message);
             break;
 
+        // ------------------------------------------------------------------
+        // 管理操作响应
+        // ------------------------------------------------------------------
+        case ControlMessageType::SetAdminResponse: {
+            if (message.has_set_admin_response()) {
+                const auto& resp = message.set_admin_response();
+                handleAdminActionResponse(
+                    resp.result() == common::ResultCode::OK, resp.message());
+            }
+            break;
+        }
+        case ControlMessageType::KickUserResponse: {
+            if (message.has_kick_user_response()) {
+                const auto& resp = message.kick_user_response();
+                handleAdminActionResponse(
+                    resp.result() == common::ResultCode::OK, resp.message());
+            }
+            break;
+        }
+        case ControlMessageType::BanUserResponse: {
+            if (message.has_ban_user_response()) {
+                const auto& resp = message.ban_user_response();
+                handleAdminActionResponse(
+                    resp.result() == common::ResultCode::OK, resp.message());
+            }
+            break;
+        }
+        case ControlMessageType::MoveUserResponse: {
+            if (message.has_move_user_response()) {
+                const auto& resp = message.move_user_response();
+                handleAdminActionResponse(
+                    resp.result() == common::ResultCode::OK, resp.message());
+            }
+            break;
+        }
+
+        // ------------------------------------------------------------------
+        // 聊天消息
+        // ------------------------------------------------------------------
+        case ControlMessageType::ChatBroadcast: {
+            if (message.has_chat_broadcast()) {
+                const auto& chat = message.chat_broadcast();
+                if (onChatMessage) {
+                    onChatMessage(chat.sender_id(), chat.sender_name(),
+                                  chat.channel_id(), chat.text(),
+                                  chat.timestamp());
+                }
+            }
+            break;
+        }
+
         default:
             NEVO_LOG_DEBUG("client", "Unhandled control message type={}",
                           controlMessageTypeToString(type));
@@ -657,6 +753,9 @@ void ClientCore::handleControlMessage(const control::ControlMessage& message,
 void ClientCore::handleDisconnected()
 {
     NEVO_LOG_WARN("client", "Connection lost");
+
+    // 停止 ping 定时器（防止定时器回调访问已销毁状态）
+    stopPingTimer();
 
     // 清理音频子系统
     shutdownAudioSubsystem();
@@ -676,7 +775,19 @@ void ClientCore::handleDisconnected()
         local_user_id_ = INVALID_USER_ID;
     }
 
-    setState(ClientState::Disconnected);
+    // 使用 compare_exchange 防止重复触发断开逻辑
+    ClientState expected = state_.load(std::memory_order_acquire);
+    while (expected != ClientState::Disconnected) {
+        if (state_.compare_exchange_weak(expected, ClientState::Disconnected,
+                                          std::memory_order_acq_rel)) {
+            // 成功切换到 Disconnected，触发回调
+            if (onStateChanged) {
+                onStateChanged(ClientState::Disconnected, expected);
+            }
+            break;
+        }
+        // expected 已被更新为当前值，继续循环
+    }
 
     // 触发错误回调
     if (onError) {
@@ -717,7 +828,7 @@ Result<void> ClientCore::handleLoginResponse(const control::ControlMessage& mess
                     std::vector<uint8_t> decrypted(CRYPTO_KEY_SIZE);
                     int rc = crypto_box_seal_open(
                         decrypted.data(),
-                        resp.encrypted_session_key().data(),
+                        reinterpret_cast<const unsigned char*>(resp.encrypted_session_key().data()),
                         resp.encrypted_session_key().size(),
                         client_public_key_.data(),
                         client_secret_key_.data());
@@ -752,18 +863,45 @@ Result<void> ClientCore::handleLoginResponse(const control::ControlMessage& mess
                 }
             }
 
+            // 配置服务器语音 UDP 端口
+            if (resp.server_udp_port() > 0) {
+                network_mgr_->setVoiceServerUdpPort(
+                    static_cast<uint16_t>(resp.server_udp_port()));
+            }
+
             NEVO_LOG_INFO("client", "Login successful: user_id={}",
                          local_user_id_.value);
+
+            // 通知 connect() 协程登录成功
+            {
+                std::lock_guard<std::mutex> lock(login_promise_mutex_);
+                try { login_promise_.set_value(Ok()); } catch (...) {}
+            }
+
             return Ok();
         } else {
             NEVO_LOG_ERROR("client", "Login failed: result_code={}",
                           static_cast<int>(resp.result()));
+
+            // 通知 connect() 协程登录失败
+            {
+                std::lock_guard<std::mutex> lock(login_promise_mutex_);
+                try { login_promise_.set_value(Err<void>(ResultCode::AuthFailed, "Login failed")); } catch (...) {}
+            }
+
             return Err<void>(ResultCode::AuthFailed, "Login failed");
         }
     }
 
     // 兼容简化实现：如果没有 LoginResponse 扩展，假设登录成功
     NEVO_LOG_INFO("client", "Login response received (simplified)");
+
+    // 通知 connect() 协程登录成功
+    {
+        std::lock_guard<std::mutex> lock(login_promise_mutex_);
+        try { login_promise_.set_value(Ok()); } catch (...) {}
+    }
+
     return Ok();
 }
 
@@ -804,11 +942,18 @@ void ClientCore::handleChannelEvent(const control::ControlMessage& message,
 
         case ControlMessageType::CreateChannel: {
             NEVO_LOG_INFO("client", "Channel created event");
+            // 通知 UI 频道列表可能已变化（服务端通常会随后发送完整列表）
+            if (onChannelList) {
+                // 触发回调让 UI 请求更新，或等待后续 ChannelList 消息
+            }
             break;
         }
 
         case ControlMessageType::DeleteChannel: {
             NEVO_LOG_INFO("client", "Channel deleted event");
+            if (onChannelList) {
+                // 触发回调让 UI 请求更新，或等待后续 ChannelList 消息
+            }
             break;
         }
 
@@ -918,11 +1063,22 @@ void ClientCore::handleUserEvent(const control::ControlMessage& message,
             break;
         }
 
-        case ControlMessageType::PttToggle:
+        case ControlMessageType::PttToggle: {
+            // 其他用户的 PTT 状态变更
+            if (message.has_ptt_toggle()) {
+                const auto& ptt = message.ptt_toggle();
+                // PTT 激活意味着用户正在说话
+                NEVO_LOG_DEBUG("client", "User PTT toggle: active={}", ptt.active());
+            }
+            break;
+        }
+
         case ControlMessageType::MuteToggle: {
-            // 其他用户的 PTT/静音状态变更
-            NEVO_LOG_DEBUG("client", "User state change event: {}",
-                          controlMessageTypeToString(type));
+            // 其他用户的静音状态变更
+            if (message.has_mute_toggle()) {
+                const auto& mute = message.mute_toggle();
+                NEVO_LOG_DEBUG("client", "User mute toggle: muted={}", mute.muted());
+            }
             break;
         }
 
@@ -946,7 +1102,7 @@ void ClientCore::handleKeyRotation(const control::ControlMessage& message)
                 std::vector<uint8_t> decrypted(CRYPTO_KEY_SIZE);
                     int rc = crypto_box_seal_open(
                         decrypted.data(),
-                        req.encrypted_session_key().data(),
+                        reinterpret_cast<const unsigned char*>(req.encrypted_session_key().data()),
                         req.encrypted_session_key().size(),
                         client_public_key_.data(),
                         client_secret_key_.data());
@@ -1178,24 +1334,31 @@ void ClientCore::sendPing()
         return;
     }
 
-    if (!network_mgr_ || !network_mgr_->isTcpConnected()) {
+    // 使用临时局部变量，防止 network_mgr_ 在协程等待期间被销毁
+    auto* net_mgr = network_mgr_.get();
+    if (!net_mgr || !net_mgr->isTcpConnected()) {
         return;
     }
 
-    // 记录发送时间
-    ping_send_time_ = std::chrono::steady_clock::now();
+    // 记录发送时间（原子存储纳秒时间戳）
+    auto now_tp = std::chrono::steady_clock::now();
+    ping_send_time_ns_.store(
+        static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                now_tp.time_since_epoch()).count()),
+        std::memory_order_release);
 
     // 通过协程发送 UdpPingRequest
     uint32_t seq = ping_sequence_;
     ++ping_sequence_;
 
     boost::asio::co_spawn(io_ctx_,
-        [this, seq]() -> boost::asio::awaitable<void> {
+        [net_mgr, seq]() -> boost::asio::awaitable<void> {
             control::ControlMessage ping_msg;
             auto* req = ping_msg.mutable_udp_ping_request();
             req->set_sequence(seq);
 
-            auto send_result = co_await network_mgr_->sendControl(
+            auto send_result = co_await net_mgr->sendControl(
                 ping_msg, ControlMessageType::UdpPingRequest, 0);
             if (!send_result) {
                 NEVO_LOG_DEBUG("client", "Failed to send UdpPing: {}",
@@ -1223,10 +1386,14 @@ void ClientCore::handleUdpPingResponse(const control::ControlMessage& message)
     uint32_t seq = resp.sequence();
     bool udp_reachable = resp.udp_reachable();
 
-    // 计算 RTT
+    // 计算 RTT（从原子纳秒时间戳还原 time_point）
     auto now = std::chrono::steady_clock::now();
+    auto send_ns = ping_send_time_ns_.load(std::memory_order_acquire);
+    auto send_tp = std::chrono::steady_clock::time_point(
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::nanoseconds(send_ns)));
     auto rtt = std::chrono::duration_cast<std::chrono::milliseconds>(
-        now - ping_send_time_).count();
+        now - send_tp).count();
     int latency_ms = static_cast<int>(rtt);
 
     last_latency_ms_.store(latency_ms, std::memory_order_release);
@@ -1294,6 +1461,148 @@ void ClientCore::handleBindOwnerResponse(const control::ControlMessage& message)
     if (onOwnerBound) {
         onOwnerBound(success, resp.message());
     }
+}
+
+void ClientCore::sendSetAdminRequest(uint64_t user_id, bool set_admin)
+{
+    if (!network_mgr_ || !network_mgr_->isTcpConnected()) {
+        NEVO_LOG_WARN("client", "Cannot send set admin request: not connected");
+        handleAdminActionResponse(false, "Not connected to server");
+        return;
+    }
+
+    control::ControlMessage msg;
+    auto* req = msg.mutable_set_admin_request();
+    req->set_user_id(user_id);
+    req->set_set_admin(set_admin);
+
+    boost::asio::co_spawn(io_ctx_,
+        [this, msg]() mutable -> boost::asio::awaitable<void> {
+            auto result = co_await network_mgr_->sendControl(
+                msg, ControlMessageType::SetAdminRequest, 0);
+            if (!result) {
+                NEVO_LOG_WARN("client", "Failed to send SetAdminRequest: {}",
+                              result.error().message());
+                handleAdminActionResponse(false, result.error().message());
+            }
+        },
+        boost::asio::detached);
+}
+
+void ClientCore::sendKickUserRequest(uint64_t user_id, const std::string& reason)
+{
+    if (!network_mgr_ || !network_mgr_->isTcpConnected()) {
+        NEVO_LOG_WARN("client", "Cannot send kick user request: not connected");
+        handleAdminActionResponse(false, "Not connected to server");
+        return;
+    }
+
+    control::ControlMessage msg;
+    auto* req = msg.mutable_kick_user_request();
+    req->set_user_id(user_id);
+    req->set_reason(reason);
+
+    boost::asio::co_spawn(io_ctx_,
+        [this, msg]() mutable -> boost::asio::awaitable<void> {
+            auto result = co_await network_mgr_->sendControl(
+                msg, ControlMessageType::KickUserRequest, 0);
+            if (!result) {
+                NEVO_LOG_WARN("client", "Failed to send KickUserRequest: {}",
+                              result.error().message());
+                handleAdminActionResponse(false, result.error().message());
+            }
+        },
+        boost::asio::detached);
+}
+
+void ClientCore::sendBanUserRequest(uint64_t user_id, const std::string& reason, uint64_t expires_at)
+{
+    if (!network_mgr_ || !network_mgr_->isTcpConnected()) {
+        NEVO_LOG_WARN("client", "Cannot send ban user request: not connected");
+        handleAdminActionResponse(false, "Not connected to server");
+        return;
+    }
+
+    control::ControlMessage msg;
+    auto* req = msg.mutable_ban_user_request();
+    req->set_user_id(user_id);
+    req->set_reason(reason);
+    req->set_expires_at(expires_at);
+
+    boost::asio::co_spawn(io_ctx_,
+        [this, msg]() mutable -> boost::asio::awaitable<void> {
+            auto result = co_await network_mgr_->sendControl(
+                msg, ControlMessageType::BanUserRequest, 0);
+            if (!result) {
+                NEVO_LOG_WARN("client", "Failed to send BanUserRequest: {}",
+                              result.error().message());
+                handleAdminActionResponse(false, result.error().message());
+            }
+        },
+        boost::asio::detached);
+}
+
+void ClientCore::sendMoveUserRequest(uint64_t user_id, uint64_t channel_id)
+{
+    if (!network_mgr_ || !network_mgr_->isTcpConnected()) {
+        NEVO_LOG_WARN("client", "Cannot send move user request: not connected");
+        handleAdminActionResponse(false, "Not connected to server");
+        return;
+    }
+
+    control::ControlMessage msg;
+    auto* req = msg.mutable_move_user_request();
+    req->set_user_id(user_id);
+    req->set_channel_id(channel_id);
+
+    boost::asio::co_spawn(io_ctx_,
+        [this, msg]() mutable -> boost::asio::awaitable<void> {
+            auto result = co_await network_mgr_->sendControl(
+                msg, ControlMessageType::MoveUserRequest, 0);
+            if (!result) {
+                NEVO_LOG_WARN("client", "Failed to send MoveUserRequest: {}",
+                              result.error().message());
+                handleAdminActionResponse(false, result.error().message());
+            }
+        },
+        boost::asio::detached);
+}
+
+void ClientCore::handleAdminActionResponse(bool success, const std::string& message)
+{
+    NEVO_LOG_INFO("client", "Admin action response: success={}, message='{}'", success, message);
+
+    if (onAdminActionResult) {
+        onAdminActionResult(success, message);
+    }
+}
+
+void ClientCore::sendChatMessage(const std::string& text, uint64_t channel_id)
+{
+    if (!network_mgr_ || !network_mgr_->isTcpConnected()) {
+        NEVO_LOG_WARN("client", "Cannot send chat message: not connected");
+        return;
+    }
+
+    if (text.empty()) {
+        return;
+    }
+
+    control::ControlMessage msg;
+    auto* req = msg.mutable_chat_send();
+    req->set_channel_id(channel_id);
+    req->set_text(text);
+
+    boost::asio::co_spawn(io_ctx_,
+        [this, msg]() mutable -> boost::asio::awaitable<void> {
+            auto result = co_await network_mgr_->sendControl(
+                msg, ControlMessageType::ChatSend, 0);
+            if (!result) {
+                NEVO_LOG_WARN("client", "Failed to send ChatSend: {}",
+                              result.error().message());
+            }
+        },
+        boost::asio::detached);
 }
 
 } // namespace nevo

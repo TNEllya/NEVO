@@ -20,6 +20,7 @@ set(TS_FILES
 add_executable(nevo_client_ui WIN32
     src/main.cpp
     src/MainWindow.cpp
+    src/LoginDialog.cpp
     src/ChannelTreeModel.cpp
     src/ChannelItemDelegate.cpp
     src/UserListModel.cpp
@@ -27,7 +28,9 @@ add_executable(nevo_client_ui WIN32
     src/ConnectionBar.cpp
     src/ThemeManager.cpp
     src/IconProvider.cpp
+    src/ChatWidget.cpp
     include/nevo/ui/MainWindow.h
+    include/nevo/ui/LoginDialog.h
     include/nevo/ui/ChannelTreeModel.h
     include/nevo/ui/ChannelItemDelegate.h
     include/nevo/ui/UserListModel.h
@@ -35,6 +38,7 @@ add_executable(nevo_client_ui WIN32
     include/nevo/ui/AudioSettingsWidget.h
     include/nevo/ui/ThemeManager.h
     include/nevo/ui/IconProvider.h
+    include/nevo/ui/ChatWidget.h
 )
 
 set_target_properties(nevo_client_ui PROPERTIES

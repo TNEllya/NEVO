@@ -52,13 +52,13 @@ Result<void> ChannelManager::initialize() {
         channels_[ChannelId(2)] = std::move(lobby);
         next_channel_id_ = ChannelId(3);
 
-        // 持久化到数据库
+        // 持久化到数据库（使用显式 ID，确保内存 ID 与 DB ID 一致）
         if (db_) {
-            auto r1 = db_->createChannel("Root", ChannelId(0), UserId(0));
+            auto r1 = db_->createChannelWithId(ChannelId(1), "Root", ChannelId(0), UserId(0));
             if (!r1) {
                 NEVO_LOG_ERROR("server", "Failed to create root channel in DB: {}", r1.error().message());
             }
-            auto r2 = db_->createChannel("Lobby", ChannelId(1), UserId(0));
+            auto r2 = db_->createChannelWithId(ChannelId(2), "Lobby", ChannelId(1), UserId(0));
             if (!r2) {
                 NEVO_LOG_ERROR("server", "Failed to create lobby channel in DB: {}", r2.error().message());
             }
@@ -99,7 +99,7 @@ Result<ChannelId> ChannelManager::createChannel(ChannelId parent_id,
 
     // 持久化到数据库
     if (db_) {
-        auto db_result = db_->createChannel(name, parent->id(), created_by);
+        auto db_result = db_->createChannelWithId(new_id, name, parent->id(), created_by);
         if (!db_result) {
             // 回滚内存操作
             parent->removeChild(channel_ptr);
@@ -400,6 +400,15 @@ Result<void> ChannelManager::loadChannelsFromDb() {
     }
 
     next_channel_id_ = max_id.value > 0 ? max_id : ChannelId(1);
+
+    // 查询 sqlite_sequence 获取真实 AUTOINCREMENT 值（包含已删除行的最大 ID）
+    if (db_) {
+        auto seq_val = db_->getAutoIncrementValue("channels");
+        if (seq_val && *seq_val >= next_channel_id_.value) {
+            next_channel_id_ = ChannelId(*seq_val + 1);
+            NEVO_LOG_INFO("server", "Adjusted next_channel_id from sqlite_sequence: {}", next_channel_id_.value);
+        }
+    }
 
     NEVO_LOG_INFO("server", "Loaded {} channels from database", channels_.size());
     return Ok();

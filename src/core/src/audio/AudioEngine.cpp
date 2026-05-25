@@ -412,6 +412,8 @@ void AudioEngine::shutdown() {
     //    必须在停止 miniaudio 设备之前，避免回调访问已释放资源
     if (encode_thread_.joinable()) {
         encode_thread_.request_stop();
+        // 唤醒编码线程（可能正在条件变量等待中）
+        encode_cv_.notify_all();
         encode_thread_.join();
     }
 
@@ -590,6 +592,9 @@ void AudioEngine::maInputCallback(ma_device* p_device,
         // 宁可丢帧也不让延迟无限增长。
         // 注意：此处不能打日志（实时线程禁止 I/O）
     }
+    // 通知编码线程有新数据（原子写入 + notify_one 均为实时安全）
+    self->encode_notify_.store(true, std::memory_order_release);
+    self->encode_cv_.notify_one();
 #else
     // Fallback: mutex-protected push (NOT real-time safe)
     {
@@ -598,6 +603,8 @@ void AudioEngine::maInputCallback(ma_device* p_device,
             self->input_fifo_.push_back(frame);
         }
     }
+    self->encode_notify_.store(true, std::memory_order_release);
+    self->encode_cv_.notify_one();
 #endif
 
     // ----------------------------------------------------------
@@ -846,22 +853,19 @@ void AudioEngine::encodeThreadFunc(std::stop_token stop_token) {
     while (!stop_token.stop_requested()) {
         processEncodeCycle();
 
-#ifdef NEVO_HAS_BOOST
-        if (input_fifo_.empty()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-#else
+        // 替换 sleep_for(1ms) 为条件变量等待，降低 CPU 占用
         {
-            bool has_data = false;
-            {
-                std::lock_guard<std::mutex> lock(input_fifo_mutex_);
-                has_data = !input_fifo_.empty();
-            }
-            if (!has_data) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            }
+            std::unique_lock<std::mutex> lock(encode_mutex_);
+            encode_cv_.wait_for(lock, std::chrono::milliseconds(1), [&] {
+                return encode_notify_.load(std::memory_order_acquire) || !running_.load(std::memory_order_acquire);
+            });
+            encode_notify_.store(false, std::memory_order_release);
         }
-#endif
+
+        // 如果引擎已停止，退出循环
+        if (!running_.load(std::memory_order_acquire)) {
+            break;
+        }
     }
 
     // 处理线程退出前 FIFO 中可能残留的帧

@@ -68,7 +68,7 @@ inline constexpr uint16_t STUN_ATTR_LIFETIME = 0x000D;
 inline constexpr uint16_t STUN_ATTR_USERNAME = 0x0006;
 
 /// STUN 属性：REALM (RFC 5389)
-inline constexpr uint16_t STUN_ATTR_REALM = 0x0020;
+inline constexpr uint16_t STUN_ATTR_REALM = 0x0014;
 
 /// STUN 属性：NONCE (RFC 5389)
 inline constexpr uint16_t STUN_ATTR_NONCE = 0x0015;
@@ -369,42 +369,6 @@ public:
         const StunMessage& message,
         const std::array<uint8_t, STUN_TRANSACTION_ID_SIZE>& transaction_id);
 
-private:
-    /**
-     * @brief 生成随机事务 ID
-     * @param transaction_id [out] 12 字节事务 ID
-     */
-    static void generateTransactionId(
-        std::array<uint8_t, STUN_TRANSACTION_ID_SIZE>& transaction_id);
-
-    /**
-     * @brief 解码 MAPPED-ADDRESS 或 XOR-MAPPED-ADDRESS 属性值
-     *
-     * 内部辅助：处理 IPv4/IPv6 地址族，XOR 解码逻辑。
-     *
-     * @param value          属性值字节
-     * @param is_xor         是否为 XOR 编码
-     * @param transaction_id 事务 ID（XOR 解码需要）
-     * @return std::optional<boost::asio::ip::udp::endpoint> 解码后的端点
-     */
-    static std::optional<boost::asio::ip::udp::endpoint> decodeAddressAttribute(
-        const std::vector<uint8_t>& value,
-        bool is_xor,
-        const std::array<uint8_t, STUN_TRANSACTION_ID_SIZE>& transaction_id);
-
-    /**
-     * @brief 向指定 STUN/TURN 服务器发送请求并等待响应
-     *
-     * @param host 服务器主机名
-     * @param port 服务器端口
-     * @param request 发送的数据
-     * @return awaitable<std::optional<std::vector<uint8_t>>> 响应数据，超时返回 nullopt
-     */
-    boost::asio::awaitable<std::optional<std::vector<uint8_t>>> sendAndReceive(
-        const std::string& host,
-        uint16_t port,
-        const std::vector<uint8_t>& request);
-
     /**
      * @brief 计算 STUN MESSAGE-INTEGRITY (HMAC-SHA1)
      *
@@ -444,6 +408,42 @@ private:
         const StunMessage& message,
         std::string& realm,
         std::string& nonce);
+
+private:
+    /**
+     * @brief 生成随机事务 ID
+     * @param transaction_id [out] 12 字节事务 ID
+     */
+    static void generateTransactionId(
+        std::array<uint8_t, STUN_TRANSACTION_ID_SIZE>& transaction_id);
+
+    /**
+     * @brief 解码 MAPPED-ADDRESS 或 XOR-MAPPED-ADDRESS 属性值
+     *
+     * 内部辅助：处理 IPv4/IPv6 地址族，XOR 解码逻辑。
+     *
+     * @param value          属性值字节
+     * @param is_xor         是否为 XOR 编码
+     * @param transaction_id 事务 ID（XOR 解码需要）
+     * @return std::optional<boost::asio::ip::udp::endpoint> 解码后的端点
+     */
+    static std::optional<boost::asio::ip::udp::endpoint> decodeAddressAttribute(
+        const std::vector<uint8_t>& value,
+        bool is_xor,
+        const std::array<uint8_t, STUN_TRANSACTION_ID_SIZE>& transaction_id);
+
+    /**
+     * @brief 向指定 STUN/TURN 服务器发送请求并等待响应
+     *
+     * @param host 服务器主机名
+     * @param port 服务器端口
+     * @param request 发送的数据
+     * @return awaitable<std::optional<std::vector<uint8_t>>> 响应数据，超时返回 nullopt
+     */
+    boost::asio::awaitable<std::optional<std::vector<uint8_t>>> sendAndReceive(
+        const std::string& host,
+        uint16_t port,
+        const std::vector<uint8_t>& request);
 };
 
 } // namespace nevo

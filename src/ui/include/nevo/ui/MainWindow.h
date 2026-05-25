@@ -61,6 +61,8 @@
 #include "nevo/ui/ConnectionBar.h"
 #include "nevo/ui/AudioSettingsWidget.h"
 #include "nevo/ui/ChannelItemDelegate.h"
+#include "nevo/ui/ChatWidget.h"
+#include "nevo/ui/LoginDialog.h"
 
 #ifdef NEVO_HAS_BOOST
 #include "nevo/client/ClientCore.h"
@@ -68,29 +70,6 @@
 #endif
 
 namespace nevo {
-
-// ============================================================
-// LoginDialog - 登录对话框
-// ============================================================
-
-/**
- * @class LoginDialog
- * @brief 登录对话框，输入用户名
- *
- * 简单的模态对话框，包含用户名输入框和确认/取消按钮。
- */
-class LoginDialog : public QDialog {
-    Q_OBJECT
-
-public:
-    explicit LoginDialog(QWidget* parent = nullptr);
-
-    /// 获取输入的用户名
-    QString username() const;
-
-private:
-    QLineEdit* username_edit_;
-};
 
 // ============================================================
 // OwnerBindDialog - 服主绑定对话框
@@ -113,6 +92,7 @@ public:
 
 private:
     QLineEdit* bind_key_edit_;
+    QLabel* status_label_;
 };
 
 // ============================================================
@@ -237,6 +217,9 @@ private slots:
     /// Channel tree selection changed — update join/leave button states
     void onChannelSelectionChanged();
 
+    /// 聊天消息发送
+    void onChatMessageSent(const QString& text);
+
 private:
 
     // ============================================================
@@ -317,6 +300,10 @@ private:
     // --- 停靠窗口 ---
     QDockWidget* channel_dock_;                 ///< 频道树停靠窗口
     QDockWidget* user_dock_;                    ///< 用户列表停靠窗口
+    QDockWidget* chat_dock_;                    ///< 聊天面板停靠窗口
+
+    // --- 聊天面板 ---
+    ChatWidget* chat_widget_;                   ///< 聊天面板
 
     // --- 底部栏 ---
     ConnectionBar* connection_bar_;             ///< 连接状态栏

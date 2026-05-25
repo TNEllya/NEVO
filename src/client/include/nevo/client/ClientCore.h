@@ -36,6 +36,7 @@
 
 #include <atomic>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -119,6 +120,18 @@ using UserSpeakingCallback = std::function<void(UserId user_id, bool is_speaking
 
 /// 服务器消息回调
 using ServerMessageCallback = std::function<void(const std::string& message)>;
+
+/// 聊天消息回调
+/// @param sender_id 发送者用户 ID
+/// @param sender_name 发送者用户名
+/// @param channel_id 频道 ID
+/// @param text 聊天文本内容
+/// @param timestamp 消息时间戳（Unix 毫秒）
+using ChatMessageCallback = std::function<void(uint64_t sender_id,
+                                                const std::string& sender_name,
+                                                uint64_t channel_id,
+                                                const std::string& text,
+                                                uint64_t timestamp)>;
 
 /// 频道列表更新回调
 using ChannelListCallback = std::function<void(const std::vector<ChannelInfo>& channels)>;
@@ -384,6 +397,9 @@ public:
     /// 服务器消息回调
     ServerMessageCallback onServerMessage;
 
+    /// 聊天消息回调
+    ChatMessageCallback onChatMessage;
+
     /// 频道列表更新回调
     ChannelListCallback onChannelList;
 
@@ -399,6 +415,9 @@ public:
     /// 服务器无管理员，需要客户端进行服主绑定回调
     std::function<void()> onOwnerBindRequired;
 
+    /// 管理操作结果回调 (success, message)
+    std::function<void(bool, const std::string&)> onAdminActionResult;
+
     /**
      * @brief 发送服主绑定请求
      *
@@ -408,6 +427,50 @@ public:
      * @param bind_key 绑定密钥（64 字符 hex 字符串）
      */
     void sendBindOwnerRequest(const std::string& bind_key);
+
+    /**
+     * @brief 发送设置管理员请求
+     *
+     * @param user_id 目标用户 ID
+     * @param set_admin true=设为管理员, false=取消管理员
+     */
+    void sendSetAdminRequest(uint64_t user_id, bool set_admin);
+
+    /**
+     * @brief 发送踢出用户请求
+     *
+     * @param user_id 目标用户 ID
+     * @param reason 踢出原因
+     */
+    void sendKickUserRequest(uint64_t user_id, const std::string& reason = "");
+
+    /**
+     * @brief 发送封禁用户请求
+     *
+     * @param user_id 目标用户 ID
+     * @param reason 封禁原因
+     * @param expires_at 过期时间（Unix时间戳，0=永久）
+     */
+    void sendBanUserRequest(uint64_t user_id, const std::string& reason = "", uint64_t expires_at = 0);
+
+    /**
+     * @brief 发送移动用户请求
+     *
+     * @param user_id 目标用户 ID
+     * @param channel_id 目标频道 ID
+     */
+    void sendMoveUserRequest(uint64_t user_id, uint64_t channel_id);
+
+    /**
+     * @brief 发送聊天消息
+     *
+     * 向当前所在频道（或指定频道）发送文字消息。
+     * 服务器会将消息广播给同频道的所有用户。
+     *
+     * @param text 聊天文本内容
+     * @param channel_id 目标频道 ID（0=当前频道）
+     */
+    void sendChatMessage(const std::string& text, uint64_t channel_id = 0);
 
 private:
     // ============================================================
@@ -522,6 +585,14 @@ private:
      */
     void handleBindOwnerResponse(const control::ControlMessage& message);
 
+    /**
+     * @brief 处理管理员操作响应（SetAdmin/Kick/Ban/Move）
+     *
+     * @param success 是否成功
+     * @param message 响应消息
+     */
+    void handleAdminActionResponse(bool success, const std::string& message);
+
     // ============================================================
     // 数据成员
     // ============================================================
@@ -576,6 +647,11 @@ private:
     /// 保护登录等待状态
     std::mutex login_mutex_;
 
+    /// 登录 Promise（用于等待登录响应）
+    std::promise<Result<void>> login_promise_;
+    /// 保护 login_promise_ 的互斥锁
+    std::mutex login_promise_mutex_;
+
     // --- 子组件（拥有所有权） ---
     std::unique_ptr<NetworkManager> network_mgr_;
     std::unique_ptr<AudioEngine> audio_engine_;
@@ -588,7 +664,7 @@ private:
     // --- Ping / 延迟测量 ---
     boost::asio::steady_timer ping_timer_;           ///< 定时发送 UdpPing 的定时器
     uint32_t ping_sequence_ = 0;                     ///< Ping 序列号
-    std::chrono::steady_clock::time_point ping_send_time_;  ///< 最近一次 ping 发送时间
+    std::atomic<uint64_t> ping_send_time_ns_{0};  ///< 最近一次 ping 发送时间（纳秒时间戳，steady_clock）
     std::atomic<int> last_latency_ms_{-1};           ///< 最近测量的延迟（毫秒）
 };
 

@@ -19,6 +19,13 @@
 #include <QTranslator>
 #include <QApplication>
 #include <QFile>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QTextEdit>
+#include <QPushButton>
+#include <QClipboard>
+#include <QGuiApplication>
+#include <QHBoxLayout>
 
 #include "nevo/server/ui/ServerConfigPanel.h"
 #include "nevo/server/ui/ServerStatusBar.h"
@@ -385,11 +392,11 @@ void ServerMainWindow::setupCallbacks() {
         }, Qt::QueuedConnection);
     };
 
-    server_core_->onOwnerBound = [this](UserId user_id, const std::string& username) {
+    server_core_->onAdminAuthenticated = [this](UserId user_id, const std::string& username) {
         QMetaObject::invokeMethod(this, [this, user_id, username]() {
             QMessageBox::information(this,
-                tr("Owner Bound"),
-                tr("User %1 (ID: %2) has successfully bound as server owner.")
+                tr("Admin Authenticated"),
+                tr("User %1 (ID: %2) has successfully authenticated as administrator.")
                     .arg(QString::fromStdString(username))
                     .arg(static_cast<qulonglong>(user_id.value)));
         }, Qt::QueuedConnection);
@@ -471,7 +478,7 @@ void ServerMainWindow::onApplyConfig() {
         recreateServerCore();
     } else if ((ports_changed || restart_fields_changed) && !running_) {
         statusBar()->showMessage(
-            tr("Configuration updated â€?some changes will apply on next start"));
+            tr("Configuration updated ï¿½?some changes will apply on next start"));
     } else {
         statusBar()->showMessage(tr("Configuration applied"));
     }
@@ -598,7 +605,7 @@ void ServerMainWindow::onLanguageChanged(const QString& lang_code)
     // does not take ownership; if the translator's parent is a QWidget that gets destroyed before
     // the QCoreApplication, the dangling pointer causes a use-after-free.
     // Instead, give no parent and manage lifetime via qApp property + explicit delete.
-    QTranslator* translator = new QTranslator();  // no parent â€?we manage lifetime ourselves
+    QTranslator* translator = new QTranslator();  // no parent ï¿½?we manage lifetime ourselves
 
     QString qm_path = QStringLiteral(":/i18n/nevo_server_%1.qm").arg(lang_code);
     QFile qm_file(qm_path);

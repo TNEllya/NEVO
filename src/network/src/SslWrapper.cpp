@@ -18,6 +18,7 @@
 
 #include <boost/asio/use_awaitable.hpp>
 #include <boost/asio/as_tuple.hpp>
+#include <boost/asio/ssl/host_name_verification.hpp>
 
 namespace nevo {
 
@@ -75,13 +76,24 @@ SslWrapper::wrapSocket(boost::asio::ip::tcp::socket tcp_socket)
         // 设置验证模式：验证对端证书
         ssl_stream->set_verify_mode(boost::asio::ssl::verify_peer);
 
-        // 设置验证回调
-        ssl_stream->set_verify_callback(
-            [this](bool preverified, boost::asio::ssl::verify_context& ctx) {
-                return verifyCertificate(preverified, ctx);
-            });
+        // 使用 RFC 6125 主机名验证 + 自定义日志回调
+        if (!options_.hostname.empty()) {
+            auto host_verify = boost::asio::ssl::host_name_verification(options_.hostname);
+            ssl_stream->set_verify_callback(
+                [this, host_verify](bool preverified, boost::asio::ssl::verify_context& ctx) mutable {
+                    // 先执行自定义验证（记录证书链信息）
+                    verifyCertificate(preverified, ctx);
+                    // 再执行主机名验证
+                    return host_verify(preverified, ctx);
+                });
+        } else {
+            ssl_stream->set_verify_callback(
+                [this](bool preverified, boost::asio::ssl::verify_context& ctx) {
+                    return verifyCertificate(preverified, ctx);
+                });
+        }
 
-        NEVO_LOG_DEBUG("network", "SSL verify mode: full (verify_peer)");
+        NEVO_LOG_DEBUG("network", "SSL verify mode: full (verify_peer, host_name_verification)");
     } else {
         // 跳过证书验证（仅用于开发/测试）
         ssl_stream->set_verify_mode(boost::asio::ssl::verify_none);
@@ -219,15 +231,6 @@ bool SslWrapper::verifyCertificate(bool preverified,
     NEVO_LOG_TRACE("network",
                    "SSL verify OK at depth {} (subject: {})",
                    depth, subject_buf);
-
-    // 如果是叶子证书（depth == 0），验证主机名
-    if (depth == 0 && !options_.hostname.empty()) {
-        // 使用 Boost.Asio 内置的主机名验证
-        // 这里直接返回 preverified，主机名验证已在
-        // set_verify_callback 中由 rfc2818_verification 处理
-        // 如需更严格的主机名验证，可使用：
-        // boost::asio::ssl::rfc2818_verification(options_.hostname)
-    }
 
     return true;
 }

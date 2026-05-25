@@ -67,6 +67,16 @@ ServerConfigPanel::ServerConfigPanel(QWidget* parent)
     , apply_btn_(nullptr)
     , save_btn_(nullptr)
     , hint_label_(nullptr)
+    , ft_group_(nullptr)
+    , ft_title_label_(nullptr)
+    , limit_upload_check_(nullptr)
+    , limit_upload_desc_(nullptr)
+    , limit_download_check_(nullptr)
+    , limit_download_desc_(nullptr)
+    , max_upload_label_(nullptr)
+    , max_upload_spin_(nullptr)
+    , max_download_label_(nullptr)
+    , max_download_spin_(nullptr)
 {
     setupUi();
 }
@@ -85,6 +95,11 @@ void ServerConfigPanel::setConfig(const ServerConfig& config) {
         log_level_combo_->setCurrentIndex(idx);
     }
     threads_spin_->setValue(config.threads);
+
+    if (limit_upload_check_) limit_upload_check_->setChecked(config.file_transfer.limit_upload_speed);
+    if (limit_download_check_) limit_download_check_->setChecked(config.file_transfer.limit_download_speed);
+    if (max_upload_spin_) max_upload_spin_->setValue(config.file_transfer.max_concurrent_uploads);
+    if (max_download_spin_) max_download_spin_->setValue(config.file_transfer.max_concurrent_downloads);
 }
 
 ServerConfig ServerConfigPanel::getConfig() const {
@@ -99,6 +114,12 @@ ServerConfig ServerConfigPanel::getConfig() const {
     config.welcome_message = welcome_edit_->text().toStdString();
     config.log_level = log_level_combo_->currentText().toStdString();
     config.threads = threads_spin_->value();
+
+    config.file_transfer.limit_upload_speed = limit_upload_check_ ? limit_upload_check_->isChecked() : false;
+    config.file_transfer.limit_download_speed = limit_download_check_ ? limit_download_check_->isChecked() : false;
+    config.file_transfer.max_concurrent_uploads = max_upload_spin_ ? max_upload_spin_->value() : 3;
+    config.file_transfer.max_concurrent_downloads = max_download_spin_ ? max_download_spin_->value() : 3;
+
     return config;
 }
 
@@ -249,6 +270,93 @@ void ServerConfigPanel::setupUi() {
 
     main_layout->addWidget(adv_group_);
 
+    // ---- File Transfer group ----
+    ft_group_ = new QGroupBox(tr("Transfer Limits"), this);
+    ft_group_->setStyleSheet(QStringLiteral(
+        "QGroupBox { color: #8fa0c0; font-weight: bold; font-size: 12px; border: 1px solid #2c3138; border-radius: 6px; margin-top: 8px; padding-top: 16px; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
+    ));
+
+    QVBoxLayout* ft_layout = new QVBoxLayout(ft_group_);
+    ft_layout->setSpacing(10);
+    ft_layout->setContentsMargins(12, 20, 12, 12);
+
+    // Limit upload speed
+    QHBoxLayout* upload_limit_row = new QHBoxLayout();
+    upload_limit_row->setSpacing(8);
+    limit_upload_check_ = new QCheckBox(tr("Limit Upload Speed"), this);
+    limit_upload_check_->setStyleSheet(QStringLiteral(
+        "QCheckBox { color: #c5c8d4; font-size: 12px; spacing: 6px; }"
+        "QCheckBox::indicator { width: 36px; height: 18px; border-radius: 9px; "
+        "  background-color: #3a3f4b; border: none; }"
+        "QCheckBox::indicator:checked { background-color: #4a9eff; }"
+        "QCheckBox::indicator::handle { width: 14px; height: 14px; border-radius: 7px; "
+        "  background-color: #c5c8d4; margin: 2px; }"
+        "QCheckBox::indicator:checked::handle { background-color: #ffffff; margin-left: 20px; }"
+    ));
+    upload_limit_row->addWidget(limit_upload_check_);
+    upload_limit_row->addStretch();
+    ft_layout->addLayout(upload_limit_row);
+
+    limit_upload_desc_ = new QLabel(tr("Whether to limit bandwidth used for uploads"), this);
+    limit_upload_desc_->setStyleSheet(QStringLiteral("color: #6d7078; font-size: 11px; padding-left: 4px;"));
+    ft_layout->addWidget(limit_upload_desc_);
+
+    // Limit download speed
+    QHBoxLayout* download_limit_row = new QHBoxLayout();
+    download_limit_row->setSpacing(8);
+    limit_download_check_ = new QCheckBox(tr("Limit Download Speed"), this);
+    limit_download_check_->setStyleSheet(limit_upload_check_->styleSheet());
+    download_limit_row->addWidget(limit_download_check_);
+    download_limit_row->addStretch();
+    ft_layout->addLayout(download_limit_row);
+
+    limit_download_desc_ = new QLabel(tr("Whether to limit bandwidth used for downloads"), this);
+    limit_download_desc_->setStyleSheet(QStringLiteral("color: #6d7078; font-size: 11px; padding-left: 4px;"));
+    ft_layout->addWidget(limit_download_desc_);
+
+    // Concurrent uploads
+    QHBoxLayout* upload_concurrent_row = new QHBoxLayout();
+    upload_concurrent_row->setSpacing(8);
+    max_upload_label_ = new QLabel(tr("Concurrent Uploads"), this);
+    max_upload_label_->setStyleSheet(kLabelStyle);
+    max_upload_label_->setFixedWidth(140);
+    upload_concurrent_row->addWidget(max_upload_label_);
+    max_upload_spin_ = new QSpinBox(this);
+    max_upload_spin_->setRange(1, 20);
+    max_upload_spin_->setValue(3);
+    max_upload_spin_->setFixedWidth(80);
+    max_upload_spin_->setStyleSheet(kInputStyle);
+    upload_concurrent_row->addWidget(max_upload_spin_);
+    upload_concurrent_row->addStretch();
+    ft_layout->addLayout(upload_concurrent_row);
+
+    QLabel* upload_concurrent_desc = new QLabel(tr("Limit concurrent uploads per server"), this);
+    upload_concurrent_desc->setStyleSheet(QStringLiteral("color: #6d7078; font-size: 11px; padding-left: 4px;"));
+    ft_layout->addWidget(upload_concurrent_desc);
+
+    // Concurrent downloads
+    QHBoxLayout* download_concurrent_row = new QHBoxLayout();
+    download_concurrent_row->setSpacing(8);
+    max_download_label_ = new QLabel(tr("Concurrent Downloads"), this);
+    max_download_label_->setStyleSheet(kLabelStyle);
+    max_download_label_->setFixedWidth(140);
+    download_concurrent_row->addWidget(max_download_label_);
+    max_download_spin_ = new QSpinBox(this);
+    max_download_spin_->setRange(1, 20);
+    max_download_spin_->setValue(3);
+    max_download_spin_->setFixedWidth(80);
+    max_download_spin_->setStyleSheet(kInputStyle);
+    download_concurrent_row->addWidget(max_download_spin_);
+    download_concurrent_row->addStretch();
+    ft_layout->addLayout(download_concurrent_row);
+
+    QLabel* download_concurrent_desc = new QLabel(tr("Limit concurrent downloads per server"), this);
+    download_concurrent_desc->setStyleSheet(QStringLiteral("color: #6d7078; font-size: 11px; padding-left: 4px;"));
+    ft_layout->addWidget(download_concurrent_desc);
+
+    main_layout->addWidget(ft_group_);
+
     // ---- Bottom row: buttons + hint ----
     QHBoxLayout* bottom_row = new QHBoxLayout();
     bottom_row->setSpacing(12);
@@ -323,6 +431,15 @@ void ServerConfigPanel::retranslateUi()
     if (hint_label_ && !hint_label_->text().isEmpty()) {
         hint_label_->setText(tr("Server is running — port and thread changes will take effect after restart"));
     }
+
+    // File Transfer group
+    if (ft_group_) ft_group_->setTitle(tr("Transfer Limits"));
+    if (limit_upload_check_) limit_upload_check_->setText(tr("Limit Upload Speed"));
+    if (limit_upload_desc_) limit_upload_desc_->setText(tr("Whether to limit bandwidth used for uploads"));
+    if (limit_download_check_) limit_download_check_->setText(tr("Limit Download Speed"));
+    if (limit_download_desc_) limit_download_desc_->setText(tr("Whether to limit bandwidth used for downloads"));
+    if (max_upload_label_) max_upload_label_->setText(tr("Concurrent Uploads"));
+    if (max_download_label_) max_download_label_->setText(tr("Concurrent Downloads"));
 }
 
 void ServerConfigPanel::changeEvent(QEvent* event)

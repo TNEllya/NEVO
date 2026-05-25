@@ -31,3 +31,21 @@ if(Qt6_FOUND)
 else()
     message(STATUS "Skipping UI module: Qt6 not found")
 endif()
+
+# 语音通信模拟测试（独立可执行文件，不依赖 GTest）
+if(NEVO_HAS_BOOST AND NEVO_HAS_SODIUM AND NEVO_HAS_OPUS)
+    add_executable(voice_relay_sim
+        voice_relay_sim.cpp
+    )
+    target_link_libraries(voice_relay_sim
+        PRIVATE
+        nevo_network
+        nevo_core
+        nevo_config
+    )
+    nevo_set_compiler_warnings(voice_relay_sim)
+    nevo_platform_setup(voice_relay_sim)
+    message(STATUS "Voice relay simulation test: ENABLED")
+else()
+    message(STATUS "Skipping voice_relay_sim: Boost=${NEVO_HAS_BOOST}, Sodium=${NEVO_HAS_SODIUM}, Opus=${NEVO_HAS_OPUS}")
+endif()

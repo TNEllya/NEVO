@@ -16,7 +16,7 @@
 
 #include "nevo/core/audio/AudioEngine.h"
 #include "nevo/core/common/Logger.h"
-#include "nevo/core/protocol/PacketCodec.h"
+#include "nevo/core/common/Types.h"
 
 // Protobuf 头文件
 #include "voice.pb.h"
@@ -55,8 +55,8 @@ Result<void> AudioOutput::start(AudioEngine& engine, NetworkManager& network)
     // 向 NetworkManager 注册语音包回调
     // 当收到并解密语音包后，NetworkManager 会调用此回调
     network_->onVoicePacket = [this](const uint8_t* data, uint32_t size,
-                                      const boost::asio::ip::udp::endpoint& sender) {
-        onVoicePacketReceived(data, size, sender);
+                                      UserId sender_id) {
+        onVoicePacketReceived(data, size, sender_id);
     };
 
     running_.store(true, std::memory_order_release);
@@ -185,7 +185,7 @@ void AudioOutput::resetStats()
 void AudioOutput::onVoicePacketReceived(
     const uint8_t* data,
     uint32_t size,
-    const boost::asio::ip::udp::endpoint& sender)
+    UserId sender_id)
 {
     if (!running_.load(std::memory_order_acquire)) {
         return;
@@ -209,43 +209,10 @@ void AudioOutput::onVoicePacketReceived(
     }
 
     // ------------------------------------------------------------------
-    // 3. 解析语音包头，提取发送者 user_id
+    // 3. 检查发送者是否为已知远端用户
     // ------------------------------------------------------------------
-    // 语音包格式（已解密后）：
-    //   [VoicePacketHeader (Protobuf)][Opus 编码载荷]
-    //
-    // VoicePacketHeader 包含：
-    //   - sender_id: 发送者的 UserId
-    //   - sequence:  序列号
-    //   - timestamp: 时间戳
-
-    UserId sender_id;
-    uint32_t header_size = 0;
-    const uint8_t* opus_payload = data;
-    uint32_t opus_payload_size = size;
-
-    // 尝试解析 Protobuf 语音包头
-    auto voice_header = decodeVoicePacketHeader(data, size, header_size);
-    if (voice_header.has_value()) {
-        // 从 Protobuf 头中提取 sender_id
-        sender_id = UserId(voice_header->sender_id());
-
-        // 获取 Opus 载荷
-        auto [payload_ptr, payload_sz] = getVoicePayload(data, header_size, size);
-        if (payload_ptr && payload_sz > 0) {
-            opus_payload = payload_ptr;
-            opus_payload_size = payload_sz;
-        }
-    } else {
-        // 无法解析语音包头，使用默认 sender_id
-        // 这种情况可能出现在未使用 Protobuf 头的简化协议中
-        NEVO_LOG_TRACE("audio", "Voice packet without header, using default sender_id");
-        sender_id = UserId(0);  // unknown sender
-    }
-
-    // ------------------------------------------------------------------
-    // 4. 检查发送者是否为已知远端用户
-    // ------------------------------------------------------------------
+    // sender_id 由 NetworkManager 从语音包头中解析并传入
+    // data 已是解密后的原始 Opus 载荷
     {
         std::lock_guard<std::mutex> lock(users_mutex_);
         if (sender_id && remote_users_.count(sender_id) == 0) {
@@ -257,11 +224,11 @@ void AudioOutput::onVoicePacketReceived(
     }
 
     // ------------------------------------------------------------------
-    // 5. 通过 AudioEngine 送入解码管线
+    // 4. 通过 AudioEngine 送入解码管线
     // ------------------------------------------------------------------
-    if (engine_ != nullptr && sender_id && opus_payload_size > 0) {
+    if (engine_ != nullptr && sender_id && size > 0) {
         auto result = engine_->queueAudioData(
-            sender_id, opus_payload, opus_payload_size);
+            sender_id, data, size);
 
         if (result) {
             std::lock_guard<std::mutex> lock(stats_mutex_);

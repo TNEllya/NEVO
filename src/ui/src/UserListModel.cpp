@@ -132,6 +132,13 @@ QVariant UserListModel::data(const QModelIndex& index, int role) const
                 return display_name;
             }
 
+        case Qt::ForegroundRole:
+            // MD3: 说话时 Primary，否则 On Surface
+            if (user.is_speaking) {
+                return QColor(168, 199, 250);  // MD3 Primary
+            }
+            return QColor(226, 226, 233);  // MD3 On Surface
+
         case Qt::ToolTipRole:
             // 工具提示
             {
@@ -204,7 +211,8 @@ void UserListModel::setSpeakingUser(UserId user_id, bool speaking)
     QModelIndex changed_index = index(row);
     emit dataChanged(changed_index, changed_index,
                      {IsSpeakingRole, DisplayIconRole,
-                      Qt::DisplayRole, Qt::DecorationRole});
+                      Qt::DisplayRole, Qt::DecorationRole,
+                      Qt::ForegroundRole});
 }
 
 // ============================================================

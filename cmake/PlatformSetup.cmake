@@ -9,6 +9,9 @@ function(nevo_platform_setup target)
             NOMINMAX
             _WINSOCK_DEPRECATED_NO_WARNINGS
         )
+        if(MSVC)
+            target_compile_options(${target} PRIVATE /Zc:__cplusplus)
+        endif()
         # 链接 Winsock（网络模块需要）+ mswsock（AcceptEx 等扩展函数）
         target_link_libraries(${target} PRIVATE ws2_32 mswsock)
     endif()

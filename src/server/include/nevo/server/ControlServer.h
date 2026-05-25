@@ -105,7 +105,7 @@ private:
     void doAccept();
 
     /// Handle a connected client
-    void handleClient(std::shared_ptr<Tcp::socket> socket);
+    boost::asio::awaitable<void> handleClient(std::shared_ptr<Tcp::socket> socket);
 
     /// Process a single JSON command
     ControlJson handleCommand(const ControlJson& request);
@@ -119,8 +119,9 @@ private:
     ControlJson cmdShutdown(const ControlJson& params);
     ControlJson cmdGetConfig(const ControlJson& params);
     ControlJson cmdBanUser(const ControlJson& params);
-    ControlJson cmdGenerateBindKey(const ControlJson& params);
+    ControlJson cmdSetAdminPassword(const ControlJson& params);
     ControlJson cmdSetConfig(const ControlJson& params);
+    ControlJson cmdConfigureSsl(const ControlJson& params);
 
     boost::asio::io_context& io_ctx_;
     Tcp::acceptor acceptor_;

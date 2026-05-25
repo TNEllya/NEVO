@@ -1,0 +1,16 @@
+syntax = "proto3";
+package nevo.video;
+
+message VideoPacketHeader {
+    uint32 sequence_number = 1;
+    uint64 sender_id = 2;
+    uint64 channel_id = 3;
+    uint32 timestamp = 4;
+    uint32 frame_type = 5;       // 0=KeyFrame, 1=DeltaFrame
+    uint32 fragment_index = 6;   // Fragment index within NAL
+    uint32 fragment_total = 7;   // Total fragments for this NAL
+    uint32 width = 8;
+    uint32 height = 9;
+    uint32 fps = 10;
+    bool tcp_tunnel = 11;
+}

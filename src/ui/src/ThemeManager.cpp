@@ -63,6 +63,43 @@ void ThemeManager::applyDarkTheme()
     }
 }
 
+void ThemeManager::applyLightTheme()
+{
+    // Set modern application font
+    QFont font = QApplication::font();
+    font.setPointSize(10);
+    font.setStyleStrategy(QFont::PreferAntialias);
+    QApplication::setFont(font);
+
+    // Apply light palette as fallback/base
+    QPalette palette;
+    palette.setColor(QPalette::Window, QColor(245, 245, 245));
+    palette.setColor(QPalette::WindowText, QColor(30, 30, 30));
+    palette.setColor(QPalette::Base, QColor(255, 255, 255));
+    palette.setColor(QPalette::AlternateBase, QColor(235, 235, 235));
+    palette.setColor(QPalette::ToolTipBase, QColor(255, 255, 220));
+    palette.setColor(QPalette::ToolTipText, QColor(30, 30, 30));
+    palette.setColor(QPalette::Text, QColor(30, 30, 30));
+    palette.setColor(QPalette::Button, QColor(230, 230, 230));
+    palette.setColor(QPalette::ButtonText, QColor(30, 30, 30));
+    palette.setColor(QPalette::BrightText, QColor(255, 0, 0));
+    palette.setColor(QPalette::Highlight, QColor(42, 130, 218));
+    palette.setColor(QPalette::HighlightedText, QColor(255, 255, 255));
+    palette.setColor(QPalette::Link, QColor(42, 130, 218));
+    palette.setColor(QPalette::LinkVisited, QColor(100, 100, 180));
+
+    palette.setColor(QPalette::Disabled, QPalette::WindowText, QColor(160, 160, 160));
+    palette.setColor(QPalette::Disabled, QPalette::Text, QColor(160, 160, 160));
+    palette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(160, 160, 160));
+
+    qApp->setPalette(palette);
+
+    // Load and apply QSS stylesheet
+    if (!loadAndApplyStyleSheet(QStringLiteral("themes/light_theme.qss"))) {
+        qWarning() << "Failed to load light_theme.qss, using palette only";
+    }
+}
+
 bool ThemeManager::loadAndApplyStyleSheet(const QString& qss_path)
 {
     QStringList searchPaths;

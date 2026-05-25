@@ -107,6 +107,10 @@ public:
     /// @return 1400 字节
     static constexpr uint32_t getMaxPayloadSize() { return UDP_MAX_PACKET_SIZE; }
 
+    /// 获取视频 UDP 最大载荷大小
+    /// @return 128KB（足以容纳任何 H.264 NAL 单元）
+    static constexpr uint32_t getMaxVideoPayloadSize() { return 128 * 1024; }
+
     // ============================================================
     // 回调设置
     // ============================================================

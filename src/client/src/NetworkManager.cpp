@@ -52,6 +52,71 @@ NetworkManager::~NetworkManager()
     NEVO_LOG_INFO("network", "NetworkManager destroyed");
 }
 
+void NetworkManager::setVoiceServerUdpPort(uint16_t udp_port)
+{
+    if (udp_port == 0 || !tcp_conn_) {
+        return;
+    }
+    boost::system::error_code ec;
+    auto remote_ep = tcp_conn_->socket().remote_endpoint(ec);
+    if (ec) {
+        NEVO_LOG_WARN("network", "Cannot get TCP remote endpoint for voice_server_endpoint: {}",
+                      ec.message());
+        return;
+    }
+    config_.voice_server_endpoint = boost::asio::ip::udp::endpoint(
+        remote_ep.address(), udp_port);
+    NEVO_LOG_INFO("network", "Voice server endpoint set to {}:{}",
+                  remote_ep.address().to_string(), udp_port);
+}
+
+boost::asio::awaitable<void> NetworkManager::sendUdpRegistrationPacket()
+{
+    if (!udp_socket_ || config_.voice_server_endpoint == boost::asio::ip::udp::endpoint{}) {
+        NEVO_LOG_WARN("network", "Cannot send UDP registration: socket or endpoint not ready");
+        co_return;
+    }
+
+    voice::VoicePacketHeader header;
+    header.set_sequence_number(voice_sequence_.fetch_add(1, std::memory_order_relaxed));
+    header.set_sender_id(local_user_id_.value);
+    header.set_channel_id(current_channel_id_.value);
+    header.set_timestamp(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+    header.set_tcp_tunnel(false);
+
+    const size_t header_size = header.ByteSizeLong();
+    std::vector<uint8_t> header_buf(header_size);
+    header.SerializeToArray(header_buf.data(), static_cast<int>(header_size));
+
+    uint8_t dummy = 0;
+    std::vector<uint8_t> encrypted = voice_crypto_.encrypt(
+        &dummy, 1,
+        header_buf.data(), header_buf.size());
+
+    uint16_t header_len = static_cast<uint16_t>(header_size);
+    std::vector<uint8_t> full_packet;
+    full_packet.reserve(2 + header_buf.size() + encrypted.size());
+    full_packet.insert(full_packet.end(),
+                       reinterpret_cast<const uint8_t*>(&header_len),
+                       reinterpret_cast<const uint8_t*>(&header_len) + 2);
+    full_packet.insert(full_packet.end(), header_buf.begin(), header_buf.end());
+    full_packet.insert(full_packet.end(), encrypted.begin(), encrypted.end());
+
+    auto ec = co_await udp_socket_->asyncSendTo(
+        full_packet.data(), static_cast<uint32_t>(full_packet.size()),
+        config_.voice_server_endpoint);
+
+    if (ec) {
+        NEVO_LOG_WARN("network", "UDP registration packet send failed: {}", ec.message());
+    } else {
+        NEVO_LOG_INFO("network", "UDP registration packet sent to {}",
+                      config_.voice_server_endpoint.address().to_string());
+    }
+}
+
 // ============================================================
 // 连接管理
 // ============================================================
@@ -76,53 +141,51 @@ boost::asio::awaitable<Result<void>> NetworkManager::connect(
     }
 
     // ------------------------------------------------------------------
-    // 2. TLS 握手
+    // 2. TLS 握手（仅当 use_tls=true 时）
     // ------------------------------------------------------------------
-    // 当 NEVO_HAS_OPENSSL 启用时，将已连接的 TCP socket 升级为 TLS 连接。
-    // TcpConnection::asyncSslHandshake() 会将 socket_ 移入 ssl::stream，
-    // 执行 TLS 握手，成功后所有后续读写自动通过 SSL stream 进行。
+    // 客户端和服务器需同时启用 TLS，否则使用明文 TCP。
+    // 当 use_tls=true 且编译时启用了 OpenSSL 时，将已连接的 TCP socket
+    // 升级为 TLS 连接。使用 SslWrapper 提供的安全加固 SSL 上下文。
 #ifdef NEVO_HAS_OPENSSL
-    if (config_.ssl_options.hostname.empty()) {
-        config_.ssl_options.hostname = host;  // SNI hostname
+    if (config_.use_tls) {
+        if (config_.ssl_options.hostname.empty()) {
+            config_.ssl_options.hostname = host;  // SNI hostname
+        }
+
+        // 使用 SslWrapper 的安全加固 SSL 上下文（而非裸 ssl::context）
+        // SslWrapper 会设置 TLS 1.2 最低版本、安全密码套件、CA 证书等
+        if (config_.skip_tls_verify) {
+            config_.ssl_options.verify_mode = SslWrapper::VerifyMode::SkipVerify;
+        } else {
+            config_.ssl_options.verify_mode = SslWrapper::VerifyMode::FullVerify;
+        }
+        ssl_wrapper_ = std::make_unique<SslWrapper>(io_ctx_, config_.ssl_options);
+
+        NEVO_LOG_INFO("network", "Performing TLS handshake (SNI={}, verify={})",
+                      config_.ssl_options.hostname,
+                      config_.skip_tls_verify ? "skip" : "full");
+
+        auto ssl_ec = co_await tcp_conn_->asyncSslHandshake(
+            ssl_wrapper_->sslContext(),
+            config_.ssl_options.hostname,
+            config_.skip_tls_verify);
+
+        if (ssl_ec) {
+            NEVO_LOG_ERROR("network", "TLS handshake failed: {}", ssl_ec.message());
+            co_return Err<void>(ResultCode::ConnectionFailed,
+                               "TLS handshake to " + host + ":" + std::to_string(tcp_port) +
+                               " failed: " + ssl_ec.message());
+        }
+
+        NEVO_LOG_INFO("network", "TLS connection established to {}:{}", host, tcp_port);
+    } else {
+        NEVO_LOG_INFO("network", "TLS not requested, using plain TCP to {}:{}", host, tcp_port);
     }
-
-    // 构建 SSL 上下文
-    boost::asio::ssl::context ssl_ctx(boost::asio::ssl::context::tls_client);
-
-    // 加载系统默认 CA 证书
-    ssl_ctx.set_default_verify_paths();
-
-    // 配置客户端证书（mTLS，如果配置了）
-    if (!config_.ssl_options.client_cert_file.empty()) {
-        ssl_ctx.use_certificate_file(
-            config_.ssl_options.client_cert_file,
-            boost::asio::ssl::context::pem);
-    }
-    if (!config_.ssl_options.client_key_file.empty()) {
-        ssl_ctx.use_private_key_file(
-            config_.ssl_options.client_key_file,
-            boost::asio::ssl::context::pem);
-    }
-
-    NEVO_LOG_INFO("network", "Performing TLS handshake (SNI={}, verify={})",
-                  config_.ssl_options.hostname,
-                  config_.skip_tls_verify ? "skip" : "full");
-
-    auto ssl_ec = co_await tcp_conn_->asyncSslHandshake(
-        ssl_ctx,
-        config_.ssl_options.hostname,
-        config_.skip_tls_verify);
-
-    if (ssl_ec) {
-        NEVO_LOG_ERROR("network", "TLS handshake failed: {}", ssl_ec.message());
-        co_return Err<void>(ResultCode::ConnectionFailed,
-                           "TLS handshake to " + host + ":" + std::to_string(tcp_port) +
-                           " failed: " + ssl_ec.message());
-    }
-
-    NEVO_LOG_INFO("network", "TLS connection established to {}:{}", host, tcp_port);
 #else
-    NEVO_LOG_WARN("network", "TLS not available (built without OpenSSL), using plain TCP");
+    if (config_.use_tls) {
+        NEVO_LOG_WARN("network", "TLS requested but OpenSSL not available, using plain TCP");
+    }
+    NEVO_LOG_INFO("network", "Connected to {}:{} (plain TCP)", host, tcp_port);
 #endif
 
     // ------------------------------------------------------------------
@@ -235,6 +298,7 @@ boost::asio::awaitable<Result<void>> NetworkManager::establishUdpChannel(
                         },
                         boost::asio::detached);
 
+                    co_await sendUdpRegistrationPacket();
                     co_return Ok();
                 }
             }
@@ -248,7 +312,7 @@ boost::asio::awaitable<Result<void>> NetworkManager::establishUdpChannel(
         case NatType::PortRestricted: {
             // 受限 NAT：尝试 UDP 打洞
             if (udp_channel_mode_.load(std::memory_order_acquire) == UdpChannelMode::DirectUdp) {
-                co_return Ok();  // 已经在上一阶段成功
+                co_return Ok();
             }
 
             if (!udp_socket_) {
@@ -273,6 +337,7 @@ boost::asio::awaitable<Result<void>> NetworkManager::establishUdpChannel(
                     },
                     boost::asio::detached);
 
+                co_await sendUdpRegistrationPacket();
                 co_return Ok();
             }
 
@@ -560,95 +625,106 @@ boost::asio::awaitable<Result<void>> NetworkManager::sendVoicePacket(
         header_buf.data(), header_buf.size());
 
     // ------------------------------------------------------------------
-    // 3. 组装完整语音包：[header][encrypted_payload]
+    // 3. 组装完整语音包：[2-byte prefix][header][encrypted_payload]
+    //     2-byte prefix = uint16_t header_size (little-endian)
+    //     与 PacketCodec::encodeVoicePacket 格式一致，确保服务端
+    //     decodeVoicePacketHeader 能正确解析
     // ------------------------------------------------------------------
+    uint16_t header_len = static_cast<uint16_t>(header_size);
     std::vector<uint8_t> full_packet;
-    full_packet.reserve(header_buf.size() + encrypted.size());
+    full_packet.reserve(2 + header_buf.size() + encrypted.size());
+    full_packet.insert(full_packet.end(),
+                       reinterpret_cast<const uint8_t*>(&header_len),
+                       reinterpret_cast<const uint8_t*>(&header_len) + 2);
     full_packet.insert(full_packet.end(), header_buf.begin(), header_buf.end());
     full_packet.insert(full_packet.end(), encrypted.begin(), encrypted.end());
 
     // ------------------------------------------------------------------
-    // 2. 根据通道模式选择发送方式
+    // 2. 根据通道模式选择发送方式（循环重试，替代递归调用）
     // ------------------------------------------------------------------
-    switch (mode) {
-        case UdpChannelMode::DirectUdp:
-        case UdpChannelMode::HolePunched: {
-            // 直接通过 UDP 发送到服务器语音端点
-            if (!udp_socket_ || !udp_socket_->isOpen()) {
-                NEVO_LOG_ERROR("network", "UDP socket not available for voice send");
-                co_return Err<void>(ResultCode::ConnectionFailed,
-                                   "UDP socket not available");
+    const int MAX_SEND_RETRIES = 2;
+    for (int attempt = 0; attempt < MAX_SEND_RETRIES; ++attempt) {
+        UdpChannelMode current_mode = udp_channel_mode_.load(std::memory_order_acquire);
+
+        switch (current_mode) {
+            case UdpChannelMode::DirectUdp:
+            case UdpChannelMode::HolePunched: {
+                // 直接通过 UDP 发送到服务器语音端点
+                if (!udp_socket_ || !udp_socket_->isOpen()) {
+                    NEVO_LOG_ERROR("network", "UDP socket not available for voice send");
+                    co_return Err<void>(ResultCode::ConnectionFailed,
+                                       "UDP socket not available");
+                }
+
+                const auto& target = config_.voice_server_endpoint;
+                auto ec = co_await udp_socket_->asyncSendTo(full_packet, target);
+                if (ec) {
+                    NEVO_LOG_WARN("network", "UDP voice send failed: {}, falling back to TCP tunnel (attempt {}/{})",
+                                 ec.message(), attempt + 1, MAX_SEND_RETRIES);
+                    // UDP 发送失败，切换到 TCP 隧道并重试
+                    udp_channel_mode_.store(UdpChannelMode::TcpTunnel, std::memory_order_release);
+                    continue;  // 循环重试（下次迭代走 TcpTunnel 分支）
+                }
+                co_return Ok();
             }
 
-            const auto& target = config_.voice_server_endpoint;
-            auto ec = co_await udp_socket_->asyncSendTo(full_packet, target);
-            if (ec) {
-                NEVO_LOG_WARN("network", "UDP voice send failed: {}, falling back to TCP tunnel",
-                             ec.message());
-                // UDP 发送失败，尝试切换到 TCP 隧道
-                udp_channel_mode_.store(UdpChannelMode::TcpTunnel, std::memory_order_release);
-                // 递归重试（此时会走 TCP 隧道分支）
-                co_return co_await sendVoicePacket(data, size);
-            }
-            break;
-        }
+            case UdpChannelMode::TurnRelay: {
+                // 通过 TURN 中继端点发送
+                if (!udp_socket_ || !udp_socket_->isOpen()) {
+                    NEVO_LOG_ERROR("network", "UDP socket not available for TURN send");
+                    co_return Err<void>(ResultCode::ConnectionFailed,
+                                       "UDP socket not available for TURN");
+                }
 
-        case UdpChannelMode::TurnRelay: {
-            // 通过 TURN 中继端点发送
-            if (!udp_socket_ || !udp_socket_->isOpen()) {
-                NEVO_LOG_ERROR("network", "UDP socket not available for TURN send");
-                co_return Err<void>(ResultCode::ConnectionFailed,
-                                   "UDP socket not available for TURN");
+                if (!turn_relay_endpoint_.has_value()) {
+                    NEVO_LOG_ERROR("network", "TURN relay endpoint not available");
+                    co_return Err<void>(ResultCode::NatTraversalFailed,
+                                       "TURN relay endpoint not available");
+                }
+
+                auto ec = co_await udp_socket_->asyncSendTo(full_packet, *turn_relay_endpoint_);
+                if (ec) {
+                    NEVO_LOG_WARN("network", "TURN voice send failed: {}", ec.message());
+                    co_return Err<void>(ResultCode::ConnectionFailed,
+                                       "TURN voice send failed: " + ec.message());
+                }
+                co_return Ok();
             }
 
-            if (!turn_relay_endpoint_.has_value()) {
-                NEVO_LOG_ERROR("network", "TURN relay endpoint not available");
+            case UdpChannelMode::TcpTunnel: {
+                // 通过 TCP 语音隧道发送
+                if (!tcp_conn_ || !tcp_conn_->isConnected()) {
+                    NEVO_LOG_ERROR("network", "TCP not connected for voice tunnel send");
+                    co_return Err<void>(ResultCode::ConnectionFailed,
+                                       "TCP not connected for voice tunnel");
+                }
+
+                // 封装为 TCP 语音帧
+                std::vector<uint8_t> tunnel_frame =
+                    tcp_voice_tunnel_.sendVoiceFrame(full_packet.data(), full_packet.size());
+
+                // 通过 TCP 连接发送（使用语音帧类型 0xFF）
+                auto ec = co_await tcp_conn_->asyncSend(
+                    tunnel_frame,
+                    TCP_VOICE_FRAME_TYPE,
+                    0);  // voice frames don't use request_id
+                if (ec) {
+                    NEVO_LOG_ERROR("network", "TCP tunnel voice send failed: {}", ec.message());
+                    co_return Err<void>(ResultCode::ConnectionFailed,
+                                       "TCP tunnel voice send failed: " + ec.message());
+                }
+                co_return Ok();
+            }
+
+            case UdpChannelMode::None: {
+                NEVO_LOG_WARN("network", "No voice channel available, dropping voice packet");
                 co_return Err<void>(ResultCode::NatTraversalFailed,
-                                   "TURN relay endpoint not available");
+                                   "No voice channel established");
             }
-
-            auto ec = co_await udp_socket_->asyncSendTo(full_packet, *turn_relay_endpoint_);
-            if (ec) {
-                NEVO_LOG_WARN("network", "TURN voice send failed: {}", ec.message());
-                co_return Err<void>(ResultCode::ConnectionFailed,
-                                   "TURN voice send failed: " + ec.message());
-            }
-            break;
-        }
-
-        case UdpChannelMode::TcpTunnel: {
-            // 通过 TCP 语音隧道发送
-            if (!tcp_conn_ || !tcp_conn_->isConnected()) {
-                NEVO_LOG_ERROR("network", "TCP not connected for voice tunnel send");
-                co_return Err<void>(ResultCode::ConnectionFailed,
-                                   "TCP not connected for voice tunnel");
-            }
-
-            // 封装为 TCP 语音帧
-            std::vector<uint8_t> tunnel_frame =
-                tcp_voice_tunnel_.sendVoiceFrame(full_packet.data(), full_packet.size());
-
-            // 通过 TCP 连接发送（使用语音帧类型 0xFF）
-            auto ec = co_await tcp_conn_->asyncSend(
-                tunnel_frame,
-                TCP_VOICE_FRAME_TYPE,
-                0);  // voice frames don't use request_id
-            if (ec) {
-                NEVO_LOG_ERROR("network", "TCP tunnel voice send failed: {}", ec.message());
-                co_return Err<void>(ResultCode::ConnectionFailed,
-                                   "TCP tunnel voice send failed: " + ec.message());
-            }
-            break;
-        }
-
-        case UdpChannelMode::None: {
-            NEVO_LOG_WARN("network", "No voice channel available, dropping voice packet");
-            co_return Err<void>(ResultCode::NatTraversalFailed,
-                               "No voice channel established");
         }
     }
 
-    co_return Ok();
+    co_return Err<void>(ResultCode::ConnectionFailed, "Voice send failed after retries");
 }
 
 // ============================================================
@@ -800,26 +876,24 @@ void NetworkManager::handleUdpPacket(
     auto voice_header = decodeVoicePacketHeader(data, size, header_size);
 
     if (voice_header.has_value()) {
-        // 成功解析语音包头
+        // 成功解析语音包头，提取 sender_id
+        UserId sender_id(voice_header->sender_id());
+
         // 提取加密载荷
         auto [payload_ptr, payload_size] = getVoicePayload(
             data, header_size, size);
 
         if (payload_ptr && payload_size > 0) {
-            // 使用包头作为 AAD 进行解密和投递
             decryptAndDeliverVoicePacket(
                 payload_ptr, payload_size,
-                data, header_size,  // AAD = 语音包头
-                sender);
+                data + 2, header_size - 2,
+                sender_id);
         }
     } else {
-        // 无法解析语音包头，尝试按原始加密帧格式处理
-        // 可能是较早版本的格式或非标准包
-        // 假设整个 UDP 包为加密载荷（nonce + ciphertext + tag）
         decryptAndDeliverVoicePacket(
             data, size,
-            nullptr, 0,  // 无 AAD
-            sender);
+            nullptr, 0,
+            UserId(0));
     }
 }
 
@@ -837,24 +911,21 @@ void NetworkManager::handleTunnelVoiceFrame(const uint8_t* data, size_t size)
         data, static_cast<uint32_t>(size), header_size);
 
     if (voice_header.has_value()) {
+        UserId sender_id(voice_header->sender_id());
         auto [payload_ptr, payload_size] = getVoicePayload(
             data, header_size, static_cast<uint32_t>(size));
 
         if (payload_ptr && payload_size > 0) {
-            // 使用空 sender endpoint（TCP 隧道无法提供 UDP 端点信息）
-            boost::asio::ip::udp::endpoint dummy_sender;
             decryptAndDeliverVoicePacket(
                 payload_ptr, payload_size,
-                data, header_size,
-                dummy_sender);
+                data + 2, header_size - 2,
+                sender_id);
         }
     } else {
-        // 按原始加密帧处理
-        boost::asio::ip::udp::endpoint dummy_sender;
         decryptAndDeliverVoicePacket(
             data, static_cast<uint32_t>(size),
             nullptr, 0,
-            dummy_sender);
+            UserId(0));
     }
 }
 
@@ -863,7 +934,7 @@ void NetworkManager::decryptAndDeliverVoicePacket(
     uint32_t encrypted_size,
     const uint8_t* header_aad,
     uint32_t aad_size,
-    const boost::asio::ip::udp::endpoint& sender)
+    UserId sender_id)
 {
     // 加密帧格式：[nonce (24 bytes)][ciphertext][auth tag (16 bytes)]
     constexpr size_t nonce_size = XCHACHA_NONCE_SIZE;
@@ -892,11 +963,11 @@ void NetworkManager::decryptAndDeliverVoicePacket(
     // 定期清理过期旧密钥
     voice_crypto_.purgeExpiredOldKey();
 
-    // 触发语音包回调（已解密）
+    // 触发语音包回调（已解密，携带发送者 ID）
     if (onVoicePacket) {
         onVoicePacket(plaintext->data(),
                      static_cast<uint32_t>(plaintext->size()),
-                     sender);
+                     sender_id);
     }
 }
 

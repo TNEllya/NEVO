@@ -25,6 +25,7 @@
 #include <boost/asio/detached.hpp>
 #include <boost/asio/cancel_after.hpp>
 #include <boost/endian.hpp>
+#include <boost/asio/ssl/host_name_verification.hpp>
 
 namespace nevo {
 
@@ -124,6 +125,9 @@ TcpConnection::asyncSslHandshake(boost::asio::ssl::context& ssl_ctx,
                                  const std::string& hostname,
                                  bool skip_verify)
 {
+    // 确保在 strand 上执行
+    co_await boost::asio::post(strand_, boost::asio::use_awaitable);
+
     if (!connected_.load()) {
         NEVO_LOG_ERROR("network", "Cannot perform SSL handshake: not connected");
         co_return boost::asio::error::not_connected;
@@ -137,42 +141,50 @@ TcpConnection::asyncSslHandshake(boost::asio::ssl::context& ssl_ctx,
     NEVO_LOG_INFO("network", "Starting TLS handshake with {} (skip_verify={})",
                   hostname, skip_verify);
 
-    // ---- 1. 从 socket_ 取出底层 TCP socket 并创建 ssl::stream ----
-    // 需要从 socket_ 中释放底层描述符，移入 ssl::stream。
-    // Boost.Asio ssl::stream 构造函数接受 tcp::socket。
-    // 我们先获取 socket_ 的远端端点（用于日志），然后移动构造 ssl_stream_。
+    // ---- 1. 保存远端端点信息（socket_ 移入 ssl_stream_ 后将无法访问）----
+    cached_remote_endpoint_ = remoteEndpointString();
 
+    // ---- 2. 从 socket_ 取出底层 TCP socket 并创建 ssl::stream ----
     // 移动 socket_ 到 ssl_stream_（转移所有权）
     ssl_stream_ = std::make_unique<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>(
         std::move(socket_), ssl_ctx);
 
-    // ---- 2. 配置 SNI ----
+    // ---- 3. 配置 SNI ----
     if (!hostname.empty()) {
         SSL_set_tlsext_host_name(ssl_stream_->native_handle(), hostname.c_str());
     }
 
-    // ---- 3. 配置证书验证 ----
+    // ---- 4. 配置证书验证 ----
     if (!skip_verify) {
         ssl_stream_->set_verify_mode(boost::asio::ssl::verify_peer);
+        // 使用 Boost 内置的 RFC 6125 主机名验证
         ssl_stream_->set_verify_callback(
-            [hostname](bool preverified, boost::asio::ssl::verify_context& ctx) {
-                // 简化验证：使用 Boost 内置的主机名验证
-                // 完整实现可以使用 X509 证书链验证
-                if (!preverified) {
-                    NEVO_LOG_WARN("network", "TLS certificate pre-verification failed");
-                    return false;
-                }
-                return true;
-            });
+            boost::asio::ssl::host_name_verification(hostname));
     } else {
         ssl_stream_->set_verify_mode(boost::asio::ssl::verify_none);
         NEVO_LOG_WARN("network", "TLS certificate verification DISABLED");
     }
 
-    // ---- 4. 执行 TLS 握手 ----
+    // ---- 5. 带超时的 TLS 握手 ----
+    boost::asio::steady_timer handshake_timer(strand_);
+    handshake_timer.expires_after(std::chrono::seconds(10));
+
+    // 超时回调：关闭底层 socket 取消握手
+    handshake_timer.async_wait(
+        [this](boost::system::error_code ec) {
+            if (!ec && ssl_stream_) {
+                NEVO_LOG_WARN("network", "TLS handshake timed out, closing socket");
+                boost::system::error_code ignored;
+                ssl_stream_->lowest_layer().close(ignored);
+            }
+        });
+
     auto [ec] = co_await ssl_stream_->async_handshake(
         boost::asio::ssl::stream_base::client,
         boost::asio::as_tuple(boost::asio::use_awaitable));
+
+    // 取消超时定时器
+    handshake_timer.cancel();
 
     if (ec) {
         NEVO_LOG_ERROR("network", "TLS handshake failed: {}", ec.message());
@@ -197,27 +209,91 @@ TcpConnection::asyncSslHandshake(boost::asio::ssl::context& ssl_ctx,
 }
 
 // ============================================================
+// asyncSslServerHandshake - 服务端 TLS 握手
+// ============================================================
+
+boost::asio::awaitable<boost::system::error_code>
+TcpConnection::asyncSslServerHandshake(boost::asio::ssl::context& ssl_ctx)
+{
+    // 确保在 strand 上执行
+    co_await boost::asio::post(strand_, boost::asio::use_awaitable);
+
+    if (!connected_.load()) {
+        NEVO_LOG_ERROR("network", "Cannot perform SSL server handshake: not connected");
+        co_return boost::asio::error::not_connected;
+    }
+
+    if (use_ssl_) {
+        NEVO_LOG_WARN("network", "SSL already enabled on this connection");
+        co_return boost::system::error_code{};
+    }
+
+    NEVO_LOG_INFO("network", "Starting server-side TLS handshake");
+
+    // 保存远端端点信息
+    cached_remote_endpoint_ = remoteEndpointString();
+
+    // 移动 socket_ 到 ssl_stream_（转移所有权）
+    ssl_stream_ = std::make_unique<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>(
+        std::move(socket_), ssl_ctx);
+
+    // 带超时的服务端 TLS 握手
+    boost::asio::steady_timer handshake_timer(strand_);
+    handshake_timer.expires_after(std::chrono::seconds(10));
+
+    handshake_timer.async_wait(
+        [this](boost::system::error_code ec) {
+            if (!ec && ssl_stream_) {
+                NEVO_LOG_WARN("network", "Server TLS handshake timed out, closing socket");
+                boost::system::error_code ignored;
+                ssl_stream_->lowest_layer().close(ignored);
+            }
+        });
+
+    // 执行服务端 TLS 握手
+    auto [ec] = co_await ssl_stream_->async_handshake(
+        boost::asio::ssl::stream_base::server,
+        boost::asio::as_tuple(boost::asio::use_awaitable));
+
+    handshake_timer.cancel();
+
+    if (ec) {
+        NEVO_LOG_ERROR("network", "Server TLS handshake failed: {}", ec.message());
+
+        // 握手失败：关闭 SSL stream（同时关闭底层 socket）
+        boost::system::error_code ignored;
+        ssl_stream_->shutdown(ignored);
+        ssl_stream_->lowest_layer().close(ignored);
+        ssl_stream_.reset();
+
+        connected_.store(false);
+        co_return ec;
+    }
+
+    // 标记 SSL 已启用
+    use_ssl_ = true;
+    NEVO_LOG_INFO("network", "Server TLS handshake succeeded");
+
+    co_return boost::system::error_code{};
+}
+
+// ============================================================
 // asyncReadLoop - 协程式读取循环
 // ============================================================
 
 boost::asio::awaitable<void> TcpConnection::asyncReadLoop()
 {
-    // 确保在 strand 上执行
-    auto executor = strand_;
-    boost::asio::dispatch(executor, []() {});
+    co_await boost::asio::post(strand_, boost::asio::use_awaitable);
 
     NEVO_LOG_DEBUG("network", "asyncReadLoop started (ssl={})", use_ssl_);
 
     while (connected_.load() && !closing_.load()) {
-        // ---- 步骤1：读取帧头（12字节）----
         auto header_opt = co_await readFrameHeader();
         if (!header_opt.has_value()) {
-            // 读取帧头失败，连接可能已断开
             NEVO_LOG_DEBUG("network", "Read frame header failed, exiting read loop");
             break;
         }
 
-        // ---- 步骤2：解析帧头 ----
         uint32_t payload_length = 0;
         uint32_t message_type = 0;
         uint32_t request_id = 0;
@@ -405,46 +481,50 @@ void TcpConnection::close()
 
     // 通过 strand 发布关闭操作，确保与异步读写操作串行执行，
     // 避免从非 io_context 线程直接操作 socket 导致的数据竞争。
-    boost::asio::post(strand_, [this]() {
+    //
+    // 使用 shared_from_this() 延长对象生命周期，防止 TcpConnection
+    // 在 strand 闭包执行前被析构导致的 use-after-free 崩溃。
+    auto self = shared_from_this();
+    boost::asio::post(strand_, [self]() {
         boost::system::error_code ec;
 
-        if (use_ssl_ && ssl_stream_) {
+        if (self->use_ssl_ && self->ssl_stream_) {
             // SSL 连接：先优雅关闭 SSL 层
-            ssl_stream_->shutdown(ec);
+            self->ssl_stream_->shutdown(ec);
             if (ec) {
                 NEVO_LOG_DEBUG("network", "SSL shutdown failed: {}", ec.message());
             }
 
             // 关闭底层 socket（通过 ssl_stream_ 的 next_layer，即 tcp::socket）
-            ssl_stream_->next_layer().close(ec);
+            self->ssl_stream_->next_layer().close(ec);
             if (ec) {
                 NEVO_LOG_DEBUG("network", "Close SSL socket failed: {}", ec.message());
             }
 
-            ssl_stream_.reset();
+            self->ssl_stream_.reset();
         } else {
             // 纯 TCP 连接
             // 步骤1：关闭发送端，发送 FIN 包
-            socket_.shutdown(boost::asio::ip::tcp::socket::shutdown_send, ec);
+            self->socket_.shutdown(boost::asio::ip::tcp::socket::shutdown_send, ec);
             if (ec) {
                 NEVO_LOG_DEBUG("network", "Shutdown send failed: {}", ec.message());
             }
 
             // 步骤2：关闭接收端
-            socket_.shutdown(boost::asio::ip::tcp::socket::shutdown_receive, ec);
+            self->socket_.shutdown(boost::asio::ip::tcp::socket::shutdown_receive, ec);
             if (ec) {
                 NEVO_LOG_DEBUG("network", "Shutdown receive failed: {}", ec.message());
             }
 
             // 步骤3：关闭 socket
-            socket_.close(ec);
+            self->socket_.close(ec);
             if (ec) {
                 NEVO_LOG_DEBUG("network", "Close socket failed: {}", ec.message());
             }
         }
 
-        connected_.store(false);
-        closing_.store(false); // 重置，允许后续操作检测到已断开
+        self->connected_.store(false);
+        self->closing_.store(false); // 重置，允许后续操作检测到已断开
 
         NEVO_LOG_DEBUG("network", "TCP connection closed (via strand)");
     });
@@ -461,6 +541,11 @@ bool TcpConnection::isConnected() const
 
 std::string TcpConnection::remoteEndpointString() const
 {
+    // 优先使用缓存的远端端点（socket_ 可能已移入 ssl_stream_）
+    if (!cached_remote_endpoint_.empty()) {
+        return cached_remote_endpoint_;
+    }
+
     boost::system::error_code ec;
 
     if (use_ssl_ && ssl_stream_) {

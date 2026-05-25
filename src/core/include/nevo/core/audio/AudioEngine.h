@@ -28,6 +28,7 @@
 
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -377,6 +378,13 @@ private:
 
     // --- 编码线程 ---
     std::jthread encode_thread_;
+
+    /// 编码线程互斥锁（保护条件变量等待）
+    std::mutex encode_mutex_;
+    /// 编码线程条件变量（替代 sleep_for 轮询）
+    std::condition_variable encode_cv_;
+    /// 编码线程事件标志
+    std::atomic<bool> encode_notify_{false};
 
     // --- miniaudio 设备管理 ---
     // 使用 unique_ptr 延迟构造，避免默认构造 ma_device（POD 需要显式初始化）

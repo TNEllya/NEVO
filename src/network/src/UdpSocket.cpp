@@ -27,7 +27,7 @@ namespace nevo {
 UdpSocket::UdpSocket(boost::asio::io_context& io_ctx)
     : socket_(io_ctx)
     , strand_(boost::asio::make_strand(io_ctx))
-    , recv_buffer_(UDP_MAX_PACKET_SIZE) // 预分配 MTU 安全大小的接收缓冲区
+    , recv_buffer_(128 * 1024) // 预分配 128KB 接收缓冲区（支持语音 1.4KB 和视频 73KB+ NAL）
 {
     NEVO_LOG_DEBUG("network", "UdpSocket constructed");
 }
@@ -104,45 +104,48 @@ boost::asio::awaitable<void> UdpSocket::asyncReceiveFrom()
         co_return;
     }
 
-    NEVO_LOG_DEBUG("network", "UDP receive loop started on port {}", localPort());
+    NEVO_LOG_INFO("network", "UDP receive loop started on port {}", localPort());
 
     while (open_.load()) {
-        // 准备发送方端点
         boost::asio::ip::udp::endpoint sender_endpoint;
 
-        // 异步接收数据包
+        NEVO_LOG_DEBUG("network", "Calling async_receive_from on port {}", localPort());
+
         auto [ec, bytes_read] = co_await socket_.async_receive_from(
             boost::asio::buffer(recv_buffer_.data(), recv_buffer_.size()),
             sender_endpoint,
             boost::asio::as_tuple(boost::asio::use_awaitable));
 
         if (ec) {
-            // socket 被关闭时会触发 operation_aborted
             if (ec == boost::asio::error::operation_aborted) {
                 NEVO_LOG_DEBUG("network", "UDP receive loop aborted (socket closing)");
                 break;
             }
+            if (ec == boost::asio::error::message_size) {
+                recv_buffer_.resize(recv_buffer_.size() * 2);
+                NEVO_LOG_WARN("network", "UDP packet too large for buffer ({}), resizing to {}",
+                              recv_buffer_.size() / 2, recv_buffer_.size());
+                continue;
+            }
             NEVO_LOG_ERROR("network", "UDP receive error: {}", ec.message());
-            continue; // 非致命错误，继续接收
+            continue;
         }
 
-        NEVO_LOG_TRACE("network",
-                       "UDP received {} bytes from {}:{}",
+        NEVO_LOG_INFO("network", "UDP received {} bytes from {}:{}",
                        bytes_read,
                        sender_endpoint.address().to_string(),
                        sender_endpoint.port());
 
-        NEVO_LOG_DEBUG("network", "UDP received {} bytes", bytes_read);
-
-        // 触发数据包回调
         if (onPacket && bytes_read > 0) {
             onPacket(recv_buffer_.data(),
                      static_cast<uint32_t>(bytes_read),
                      sender_endpoint);
+        } else {
+            NEVO_LOG_WARN("network", "UDP received {} bytes but onPacket is null or bytes_read=0", bytes_read);
         }
     }
 
-    NEVO_LOG_DEBUG("network", "UDP receive loop ended");
+    NEVO_LOG_INFO("network", "UDP receive loop ended");
 }
 
 // ============================================================

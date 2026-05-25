@@ -102,13 +102,13 @@ using ControlMessageCallback = std::function<void(
     uint32_t request_id)>;
 
 /// 语音包回调（已解密）
-/// @param data    解密后的语音数据指针
-/// @param size    数据大小
-/// @param sender  发送方端点
+/// @param data      解密后的语音数据指针（原始 Opus 载荷）
+/// @param size      数据大小
+/// @param sender_id 发送者用户 ID
 using VoicePacketCallback = std::function<void(
     const uint8_t* data,
     uint32_t size,
-    const boost::asio::ip::udp::endpoint& sender)>;
+    UserId sender_id)>;
 
 /// 断开连接回调
 using DisconnectedCallback = std::function<void()>;
@@ -135,6 +135,9 @@ struct NetworkManagerConfig {
 
     /// TLS 配置
     SslWrapper::Options ssl_options;
+
+    /// 是否使用 TLS 加密控制通道（需服务器端同步启用）
+    bool use_tls = false;
 
     /// UDP 语音远端端点（服务器语音端口，由服务器在登录响应中告知）
     boost::asio::ip::udp::endpoint voice_server_endpoint;
@@ -163,7 +166,7 @@ struct NetworkManagerConfig {
  * @code
  *   NetworkManager netmgr(io_ctx);
  *   netmgr.onControlMessage = [&](auto& msg, auto type, auto rid) { ... };
- *   netmgr.onVoicePacket = [&](auto* data, auto size, auto& sender) { ... };
+ *   netmgr.onVoicePacket = [&](auto* data, auto size, auto sender_id) { ... };
  *   netmgr.onDisconnected = [&]() { ... };
  *
  *   co_await netmgr.connect("server.example.com", 8080);
@@ -171,7 +174,7 @@ struct NetworkManagerConfig {
  *   co_await netmgr.establishUdpChannel(0);
  * @endcode
  */
-class NetworkManager {
+class NetworkManager : public std::enable_shared_from_this<NetworkManager> {
 public:
     /// 构造函数
     /// @param io_ctx Boost.Asio I/O 上下文引用
@@ -343,6 +346,14 @@ public:
     /// 设置当前频道 ID（加入频道后由 ClientCore 调用）
     void setCurrentChannelId(ChannelId channel_id) { current_channel_id_ = channel_id; }
 
+    /// 设置服务器语音 UDP 端口（登录成功后由 ClientCore 调用）
+    /// 使用 TCP 连接的远端 IP + 指定 UDP 端口构造 voice_server_endpoint
+    void setVoiceServerUdpPort(uint16_t udp_port);
+
+    /// 发送 UDP 注册包到服务器语音端点
+    /// 在 UDP 通道建立后调用，使服务端 AudioRelay 注册客户端的 UDP 端点
+    boost::asio::awaitable<void> sendUdpRegistrationPacket();
+
     // ============================================================
     // 回调设置
     // ============================================================
@@ -421,7 +432,7 @@ private:
     /// 解密语音包并触发 onVoicePacket 回调
     void decryptAndDeliverVoicePacket(const uint8_t* encrypted_data, uint32_t encrypted_size,
                                       const uint8_t* header_aad, uint32_t aad_size,
-                                      const boost::asio::ip::udp::endpoint& sender);
+                                      UserId sender_id);
 
     /// 启动 UDP 接收循环协程
     boost::asio::awaitable<void> udpReceiveLoop();

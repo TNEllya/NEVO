@@ -1,5 +1,6 @@
 # Build directories
 build/
+build_*/
 cmake-build-*/
 out/
 
@@ -71,12 +72,23 @@ Desktop.ini
 
 # Database files
 *.db
+*.db-shm
+*.db-wal
 
 # Logs
 *.log
 
 # Temp build artifacts
-build_error.txt
-build_errors.txt
-build_log.txt
-build_output.txt
+build_error*.txt
+build_output*.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Comate specs
+.comate/
+
+# PyInstaller
+dist/build_*/

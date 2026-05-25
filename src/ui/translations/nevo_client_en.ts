@@ -164,12 +164,98 @@
         <translation>Failed to bind as owner: %1</translation>
     </message>
     <message>
+        <source>Enter the owner bind key displayed on the server console.
+This is a one-time use key that grants full server ownership.</source>
+        <translation>Enter the owner bind key displayed on the server console.
+This is a one-time use key that grants full server ownership.</translation>
+    </message>
+    <message>
+        <source>WARNING: This key should be kept secret. After successful binding, the key will be invalidated and cannot be reused.</source>
+        <translation>WARNING: This key should be kept secret. After successful binding, the key will be invalidated and cannot be reused.</translation>
+    </message>
+    <message>
+        <source>Enter 64-character bind key (hex)</source>
+        <translation>Enter 64-character bind key (hex)</translation>
+    </message>
+    <message>
+        <source>The bind key is a 64-character hexadecimal string shown in the server console at startup</source>
+        <translation>The bind key is a 64-character hexadecimal string shown in the server console at startup</translation>
+    </message>
+    <message>
+        <source>Invalid Key Format</source>
+        <translation>Invalid Key Format</translation>
+    </message>
+    <message>
+        <source>The bind key must be a 64-character hexadecimal string.
+Please check the key displayed on the server console.</source>
+        <translation>The bind key must be a 64-character hexadecimal string.
+Please check the key displayed on the server console.</translation>
+    </message>
+    <message>
+        <source>Successfully bound as server owner!
+
+You now have full administrative privileges.</source>
+        <translation>Successfully bound as server owner!
+
+You now have full administrative privileges.</translation>
+    </message>
+    <message>
+        <source>Failed to bind as server owner:
+%1
+
+The key may be invalid, expired, or already used.</source>
+        <translation>Failed to bind as server owner:
+%1
+
+The key may be invalid, expired, or already used.</translation>
+    </message>
+    <message>
         <source>Set as Admin</source>
         <translation>Set as Admin</translation>
     </message>
     <message>
         <source>Remove Admin</source>
         <translation>Remove Admin</translation>
+    </message>
+    <message>
+        <source>Kick User</source>
+        <translation>Kick User</translation>
+    </message>
+    <message>
+        <source>Ban User</source>
+        <translation>Ban User</translation>
+    </message>
+    <message>
+        <source>Move User</source>
+        <translation>Move User</translation>
+    </message>
+    <message>
+        <source>Admin Action</source>
+        <translation>Admin Action</translation>
+    </message>
+    <message>
+        <source>Admin Action Failed</source>
+        <translation>Admin Action Failed</translation>
+    </message>
+    <message>
+        <source>Move User</source>
+        <translation>Move User</translation>
+    </message>
+    <message>
+        <source>Enter target channel ID:</source>
+        <translation>Enter target channel ID:</translation>
+    </message>
+    <message>
+        <source>Are you sure you want to kick %1?</source>
+        <translation>Are you sure you want to kick %1?</translation>
+    </message>
+    <message>
+        <source>Are you sure you want to ban %1?</source>
+        <translation>Are you sure you want to ban %1?</translation>
+    </message>
+    <message>
+        <source>Chat</source>
+        <translation>Chat</translation>
     </message>
 </context>
 <context>
@@ -374,6 +460,29 @@
     <message>
         <source>\nAudio: Muted</source>
         <translation>\nAudio: Muted</translation>
+    </message>
+</context>
+<context>
+    <name>nevo::ChatWidget</name>
+    <message>
+        <source>Type a message...</source>
+        <translation>Type a message...</translation>
+    </message>
+    <message>
+        <source>Send</source>
+        <translation>Send</translation>
+    </message>
+    <message>
+        <source>You</source>
+        <translation>You</translation>
+    </message>
+    <message>
+        <source>Enter to send, Shift+Enter for new line</source>
+        <translation>Enter to send, Shift+Enter for new line</translation>
+    </message>
+    <message>
+        <source>Connect to a channel to chat</source>
+        <translation>Connect to a channel to chat</translation>
     </message>
 </context>
 </TS>

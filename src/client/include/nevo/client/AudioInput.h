@@ -29,6 +29,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 
 #include "nevo/core/common/Result.h"
 

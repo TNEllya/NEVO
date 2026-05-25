@@ -78,6 +78,17 @@ struct BanRecord {
     int64_t expires_at = 0;          ///< 过期时间戳（0 表示永久封禁）
 };
 
+/// 文件记录
+struct FileRecord {
+    int64_t id = 0;                  ///< 文件记录 ID
+    int64_t channel_id = 0;          ///< 所属频道 ID
+    int64_t uploader_id = 0;         ///< 上传者用户 ID
+    std::string filename;            ///< 文件名
+    std::string file_path;           ///< 文件存储路径
+    int64_t file_size = 0;           ///< 文件大小（字节）
+    int64_t upload_time = 0;         ///< 上传时间戳（epoch 秒）
+};
+
 // ============================================================
 // Database 类
 // ============================================================
@@ -206,6 +217,22 @@ public:
                                     UserId created_by);
 
     /**
+     * @brief 创建新频道（指定 ID）
+     *
+     * 插入时显式指定频道 ID，确保内存 ID 与数据库 ID 一致。
+     *
+     * @param id         频道 ID
+     * @param name       频道名称
+     * @param parent_id  父频道 ID（0 表示根频道）
+     * @param created_by 创建者用户 ID
+     * @return Result<ChannelId> 新频道的 ID，或错误
+     */
+    Result<ChannelId> createChannelWithId(ChannelId id,
+                                           const std::string& name,
+                                           ChannelId parent_id,
+                                           UserId created_by);
+
+    /**
      * @brief 删除频道
      *
      * 仅删除指定频道记录，不递归删除子频道（子频道由 ChannelManager 协调）。
@@ -284,6 +311,55 @@ public:
      * @return true 表示用户已被封禁
      */
     bool isBanned(UserId user_id, const std::string& ip_address = "");
+
+    // ============================================================
+    // 文件管理
+    // ============================================================
+
+    /**
+     * @brief 添加文件记录
+     * @param channel_id  频道 ID
+     * @param uploader_id 上传者用户 ID
+     * @param filename    文件名
+     * @param file_path   文件存储路径
+     * @param file_size   文件大小（字节）
+     * @return Result<int64_t> 新文件记录的 ID，或错误
+     */
+    Result<int64_t> addFileRecord(int64_t channel_id, int64_t uploader_id,
+                                  const std::string& filename, const std::string& file_path,
+                                  int64_t file_size);
+
+    /**
+     * @brief 获取指定频道的文件列表
+     * @param channel_id 频道 ID
+     * @return 文件记录列表
+     */
+    std::vector<FileRecord> getFileList(int64_t channel_id);
+
+    /**
+     * @brief 删除文件记录
+     * @param file_id 文件记录 ID
+     * @return Result<void> 成功或错误
+     */
+    Result<void> deleteFile(int64_t file_id);
+
+    /**
+     * @brief 根据 ID 获取文件记录
+     * @param file_id 文件记录 ID
+     * @return 文件记录，不存在返回 std::nullopt
+     */
+    Result<FileRecord> getFile(int64_t file_id);
+
+    /**
+     * @brief 查询指定表的 AUTOINCREMENT 序列当前值
+     *
+     * 查询 sqlite_sequence 表获取已使用的最大 rowid（包括已删除的行），
+     * 用于确保 next_channel_id_ 不会与 SQLite AUTOINCREMENT 冲突。
+     *
+     * @param table_name 表名
+     * @return 序列值，若表无序列或表不存在返回 std::nullopt
+     */
+    std::optional<int64_t> getAutoIncrementValue(const std::string& table_name);
 
 private:
     // ============================================================

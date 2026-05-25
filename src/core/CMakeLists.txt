@@ -19,6 +19,11 @@ add_library(nevo_core
     src/audio/AudioMixer.cpp
     src/audio/Resampler.cpp
     src/audio/AudioEngine.cpp
+    # protobuf generated
+    ${CMAKE_SOURCE_DIR}/proto/generated/common.pb.cc
+    ${CMAKE_SOURCE_DIR}/proto/generated/control.pb.cc
+    ${CMAKE_SOURCE_DIR}/proto/generated/voice.pb.cc
+    ${CMAKE_SOURCE_DIR}/proto/generated/video.pb.cc
 )
 
 target_include_directories(nevo_core PUBLIC

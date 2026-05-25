@@ -9,6 +9,7 @@
  */
 
 #include <QFrame>
+#include <QCheckBox>
 
 class QLineEdit;
 class QSpinBox;
@@ -74,6 +75,18 @@ private:
     QPushButton* apply_btn_;
     QPushButton* save_btn_;
     QLabel* hint_label_;
+
+    // File Transfer group
+    QGroupBox* ft_group_;
+    QLabel* ft_title_label_;
+    QCheckBox* limit_upload_check_;
+    QLabel* limit_upload_desc_;
+    QCheckBox* limit_download_check_;
+    QLabel* limit_download_desc_;
+    QLabel* max_upload_label_;
+    QSpinBox* max_upload_spin_;
+    QLabel* max_download_label_;
+    QSpinBox* max_download_spin_;
 
 protected:
     void changeEvent(QEvent* event) override;

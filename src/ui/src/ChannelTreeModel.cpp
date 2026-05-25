@@ -133,15 +133,15 @@ QVariant ChannelTreeModel::data(const QModelIndex& index, int role) const
 
         case Qt::BackgroundRole:
             if (is_current) {
-                return QColor(42, 87, 141, 80);
+                return QColor(8, 66, 160, 40);  // MD3 Primary Container 低透明度
             }
             return QVariant();
 
         case Qt::ForegroundRole:
             if (is_current) {
-                return QColor(220, 235, 255);
+                return QColor(168, 199, 250);  // MD3 Primary
             }
-            return QVariant();
+            return QColor(226, 226, 233);  // MD3 On Surface
 
         case ChannelIdRole:
             return QVariant::fromValue(item->channelId().value);

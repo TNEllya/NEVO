@@ -68,7 +68,10 @@ void AudioRelay::handleVoicePacket(const uint8_t* data, uint32_t size,
         }
     }
 
-    // 更新客户端映射中的端点信息（如果尚未记录）
+    // 更新或创建客户端映射，获取 peers 列表，以及预收集 receiver crypto 信息（单次加锁）
+    std::vector<boost::asio::ip::udp::endpoint> peers;
+    // 预收集每个 peer 的 receiver crypto 指针（在锁内获取，锁外使用）
+    std::unordered_map<UserId, VoiceCrypto*> receiver_crypto_map;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = client_map_.find(sender_id);
@@ -88,11 +91,51 @@ void AudioRelay::handleVoicePacket(const uint8_t* data, uint32_t size,
             }
             // 更新频道信息
             it->second.current_channel = channel_id;
+        } else {
+            // 首次收到该用户的 UDP 语音包，创建映射
+            ClientUdpMapping mapping;
+            mapping.user_id = sender_id;
+            mapping.udp_endpoint = sender_endpoint;
+            mapping.current_channel = channel_id;
+
+            std::string endpoint_key = sender_endpoint.address().to_string() + ":"
+                                     + std::to_string(sender_endpoint.port());
+            client_map_[sender_id] = mapping;
+            endpoint_to_user_[endpoint_key] = sender_id;
+
+            // 为该用户创建 VoiceCrypto 实例
+            if (session_key_query_) {
+                const uint8_t* key = session_key_query_(sender_id);
+                if (key) {
+                    auto crypto = std::make_unique<VoiceCrypto>();
+                    crypto->setSessionKey(key);
+                    client_cryptos_[sender_id] = std::move(crypto);
+                }
+            }
+
+            NEVO_LOG_INFO("server", "UDP mapping auto-created for user={} -> {}:{} (channel={})",
+                          sender_id.value,
+                          sender_endpoint.address().to_string(),
+                          sender_endpoint.port(),
+                          channel_id.value);
+        }
+
+        // 在锁内获取同频道其他用户的端点列表
+        peers = getChannelPeersLocked(sender_id, channel_id);
+
+        // 预收集所有 receiver 的 VoiceCrypto 指针（避免在转发循环中反复加锁）
+        if (session_key_query_) {
+            for (const auto& peer_endpoint : peers) {
+                UserId receiver_id = findUserByEndpoint(peer_endpoint);
+                if (!receiver_id) continue;
+                auto crypto_it = client_cryptos_.find(receiver_id);
+                if (crypto_it != client_cryptos_.end() && crypto_it->second) {
+                    receiver_crypto_map[receiver_id] = crypto_it->second.get();
+                }
+            }
         }
     }
 
-    // 获取同频道其他用户的端点列表
-    auto peers = getChannelPeers(sender_id, channel_id);
     if (peers.empty()) {
         // 频道内没有其他用户，无需转发
         return;
@@ -103,7 +146,6 @@ void AudioRelay::handleVoicePacket(const uint8_t* data, uint32_t size,
         return;
     }
 
-    // 计算加密帧在数据包中的位置
     const uint8_t* encrypted_frame = data + header_size;
     uint32_t encrypted_frame_size = size - header_size;
 
@@ -114,12 +156,10 @@ void AudioRelay::handleVoicePacket(const uint8_t* data, uint32_t size,
         return;
     }
 
-    // 提取 nonce 和密文
     const uint8_t* nonce = encrypted_frame;
     const uint8_t* ciphertext = encrypted_frame + XCHACHA_NONCE_SIZE;
     size_t ct_len = encrypted_frame_size - XCHACHA_NONCE_SIZE;
 
-    // 尝试逐客户端解密-重加密转发
     bool use_per_client_crypto = false;
     std::vector<uint8_t> plaintext;
     const uint8_t* sender_key = nullptr;
@@ -129,10 +169,13 @@ void AudioRelay::handleVoicePacket(const uint8_t* data, uint32_t size,
     }
 
     if (sender_key) {
+        const uint8_t* aad = data + 2;
+        uint32_t aad_size = header_size - 2;
+        
         auto decrypted = VoiceCrypto::decryptWithKey(
             sender_key, ciphertext, ct_len,
             nonce, XCHACHA_NONCE_SIZE,
-            data, header_size);
+            aad, aad_size);
         if (decrypted) {
             plaintext = std::move(*decrypted);
             use_per_client_crypto = true;
@@ -151,14 +194,11 @@ void AudioRelay::handleVoicePacket(const uint8_t* data, uint32_t size,
         std::vector<uint8_t> packet_to_send;
 
         if (use_per_client_crypto) {
-            // 查找接收者的 VoiceCrypto 实例
+            // 查找接收者的 VoiceCrypto 实例（使用预收集的 map，无需加锁）
             VoiceCrypto* receiver_crypto = nullptr;
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                auto crypto_it = client_cryptos_.find(receiver_id);
-                if (crypto_it != client_cryptos_.end() && crypto_it->second) {
-                    receiver_crypto = crypto_it->second.get();
-                }
+            auto rc_it = receiver_crypto_map.find(receiver_id);
+            if (rc_it != receiver_crypto_map.end()) {
+                receiver_crypto = rc_it->second;
             }
 
             if (!receiver_crypto) {
@@ -166,16 +206,19 @@ void AudioRelay::handleVoicePacket(const uint8_t* data, uint32_t size,
                 continue;
             }
 
+            // AAD is the protobuf header only (without the 2-byte length prefix)
+            const uint8_t* aad = data + 2;
+            uint32_t aad_size = header_size - 2;
+
             // 使用接收者的密钥重新加密
             auto reencrypted = receiver_crypto->encrypt(
                 plaintext.data(), plaintext.size(),
-                data, header_size);
+                aad, aad_size);
             if (reencrypted.empty()) {
                 NEVO_LOG_WARN("server", "Failed to re-encrypt voice packet for user_id={}", receiver_id.value);
                 continue;
             }
 
-            // 组装新数据包：原包头 + 新加密帧
             packet_to_send.reserve(header_size + reencrypted.size());
             packet_to_send.insert(packet_to_send.end(), data, data + header_size);
             packet_to_send.insert(packet_to_send.end(), reencrypted.begin(), reencrypted.end());
@@ -206,6 +249,172 @@ void AudioRelay::handleVoicePacket(const uint8_t* data, uint32_t size,
 
     NEVO_LOG_TRACE("server", "Relayed voice packet from user {} to {} peers in channel {}",
                    sender_id.value, peers.size(), channel_id.value);
+}
+
+void AudioRelay::handleVoicePacket(const uint8_t* data, uint32_t size,
+                                    const boost::asio::ip::udp::endpoint& sender_endpoint,
+                                    UserId known_sender_id) {
+    if (!data || size == 0) {
+        ++packets_dropped_;
+        return;
+    }
+
+    uint32_t header_size = 0;
+    auto header = decodeVoicePacketHeader(data, size, header_size);
+    if (!header) {
+        NEVO_LOG_WARN("server", "Failed to decode voice packet header (TCP tunnel, user_id={})",
+                      known_sender_id.value);
+        ++packets_dropped_;
+        return;
+    }
+
+    UserId sender_id = known_sender_id;
+    ChannelId channel_id(header->channel_id());
+
+    if (!sender_id) {
+        sender_id = UserId(header->sender_id());
+    }
+
+    if (!sender_id) {
+        ++packets_dropped_;
+        return;
+    }
+
+    std::vector<boost::asio::ip::udp::endpoint> peers;
+    std::unordered_map<UserId, VoiceCrypto*> receiver_crypto_map;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        auto it = client_map_.find(sender_id);
+        if (it == client_map_.end()) {
+            ClientUdpMapping mapping;
+            mapping.user_id = sender_id;
+            mapping.udp_endpoint = sender_endpoint;
+            mapping.current_channel = channel_id;
+            client_map_[sender_id] = mapping;
+
+            if (session_key_query_) {
+                const uint8_t* key = session_key_query_(sender_id);
+                if (key) {
+                    auto crypto = std::make_unique<VoiceCrypto>();
+                    crypto->setSessionKey(key);
+                    client_cryptos_[sender_id] = std::move(crypto);
+                }
+            }
+
+            NEVO_LOG_INFO("server", "TCP tunnel mapping created for user={} (channel={})",
+                          sender_id.value, channel_id.value);
+        } else {
+            it->second.current_channel = channel_id;
+        }
+
+        peers = getChannelPeersLocked(sender_id, channel_id);
+
+        if (session_key_query_) {
+            for (const auto& peer_endpoint : peers) {
+                UserId receiver_id = findUserByEndpoint(peer_endpoint);
+                if (!receiver_id) continue;
+                auto crypto_it = client_cryptos_.find(receiver_id);
+                if (crypto_it != client_cryptos_.end() && crypto_it->second) {
+                    receiver_crypto_map[receiver_id] = crypto_it->second.get();
+                }
+            }
+        }
+    }
+
+    if (peers.empty()) {
+        return;
+    }
+
+    if (!udp_socket_ || !io_ctx_) {
+        ++packets_dropped_;
+        return;
+    }
+
+    const uint8_t* encrypted_frame = data + header_size;
+    uint32_t encrypted_frame_size = size - header_size;
+
+    if (encrypted_frame_size < XCHACHA_NONCE_SIZE + POLY1305_TAG_SIZE) {
+        ++packets_dropped_;
+        return;
+    }
+
+    const uint8_t* nonce = encrypted_frame;
+    const uint8_t* ciphertext = encrypted_frame + XCHACHA_NONCE_SIZE;
+    size_t ct_len = encrypted_frame_size - XCHACHA_NONCE_SIZE;
+
+    bool use_per_client_crypto = false;
+    std::vector<uint8_t> plaintext;
+    const uint8_t* sender_key = nullptr;
+
+    if (session_key_query_) {
+        sender_key = session_key_query_(sender_id);
+    }
+
+    if (sender_key) {
+        const uint8_t* aad = data + 2;
+        uint32_t aad_size = header_size - 2;
+
+        auto decrypted = VoiceCrypto::decryptWithKey(
+            sender_key, ciphertext, ct_len,
+            nonce, XCHACHA_NONCE_SIZE,
+            aad, aad_size);
+        if (decrypted) {
+            plaintext = std::move(*decrypted);
+            use_per_client_crypto = true;
+        } else {
+            ++packets_dropped_;
+            return;
+        }
+    }
+
+    for (const auto& peer_endpoint : peers) {
+        UserId receiver_id = findUserByEndpoint(peer_endpoint);
+        if (!receiver_id) continue;
+
+        std::vector<uint8_t> packet_to_send;
+
+        if (use_per_client_crypto) {
+            VoiceCrypto* receiver_crypto = nullptr;
+            auto rc_it = receiver_crypto_map.find(receiver_id);
+            if (rc_it != receiver_crypto_map.end()) {
+                receiver_crypto = rc_it->second;
+            }
+
+            if (!receiver_crypto) continue;
+
+            const uint8_t* aad = data + 2;
+            uint32_t aad_size = header_size - 2;
+
+            auto reencrypted = receiver_crypto->encrypt(
+                plaintext.data(), plaintext.size(),
+                aad, aad_size);
+            if (reencrypted.empty()) continue;
+
+            packet_to_send.reserve(header_size + reencrypted.size());
+            packet_to_send.insert(packet_to_send.end(), data, data + header_size);
+            packet_to_send.insert(packet_to_send.end(), reencrypted.begin(), reencrypted.end());
+        } else {
+            packet_to_send.assign(data, data + size);
+        }
+
+        auto data_copy = std::make_shared<std::vector<uint8_t>>(std::move(packet_to_send));
+
+        boost::asio::co_spawn(*io_ctx_,
+            [this, data_copy, peer_endpoint]() -> boost::asio::awaitable<void> {
+                auto ec = co_await udp_socket_->asyncSendTo(
+                    data_copy->data(), static_cast<uint32_t>(data_copy->size()),
+                    peer_endpoint);
+                if (ec) {
+                    NEVO_LOG_WARN("server", "Failed to relay TCP voice packet to {}:{}: {}",
+                                  peer_endpoint.address().to_string(),
+                                  peer_endpoint.port(), ec.message());
+                }
+            },
+            boost::asio::detached);
+    }
+
+    ++packets_relayed_;
 }
 
 // ============================================================
@@ -315,6 +524,42 @@ UserId AudioRelay::findUserByEndpoint(const boost::asio::ip::udp::endpoint& endp
 
     auto it = endpoint_to_user_.find(key);
     return it != endpoint_to_user_.end() ? it->second : INVALID_USER_ID;
+}
+
+std::vector<boost::asio::ip::udp::endpoint> AudioRelay::getChannelPeersLocked(
+    UserId sender_id, ChannelId channel_id) const
+{
+    std::vector<boost::asio::ip::udp::endpoint> peers;
+
+    // 注意：调用者必须已持有 mutex_（无锁版本）
+
+    // 如果有频道管理器，获取频道内的所有用户
+    if (channel_mgr_) {
+        Channel* channel = channel_mgr_->getChannel(channel_id);
+        if (!channel) {
+            return peers;
+        }
+
+        const auto& users = channel->users();
+        for (UserId uid : users) {
+            if (uid == sender_id) continue; // 不转发给发送者自己
+
+            auto it = client_map_.find(uid);
+            if (it != client_map_.end()) {
+                peers.push_back(it->second.udp_endpoint);
+            }
+        }
+    } else {
+        // 没有频道管理器，回退到映射表中的频道匹配
+        for (const auto& [uid, mapping] : client_map_) {
+            if (uid == sender_id) continue;
+            if (mapping.current_channel == channel_id) {
+                peers.push_back(mapping.udp_endpoint);
+            }
+        }
+    }
+
+    return peers;
 }
 
 std::vector<boost::asio::ip::udp::endpoint> AudioRelay::getChannelPeers(

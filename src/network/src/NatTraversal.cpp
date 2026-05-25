@@ -35,6 +35,143 @@
 namespace nevo {
 
 // ============================================================
+// 轻量级 MD5 实现（用于 RFC 5389 STUN MESSAGE-INTEGRITY）
+// ============================================================
+namespace md5_detail {
+
+inline uint32_t leftRotate(uint32_t x, uint32_t c) { return (x << c) | (x >> (32 - c)); }
+
+inline void md5Transform(uint32_t state[4], const uint8_t block[64]) {
+    uint32_t a = state[0], b = state[1], c = state[2], d = state[3];
+    static const uint32_t K[64] = {
+        0xd76aa478,0xe8c7b756,0x242070db,0xc1bdceee,0xf57c0faf,0x4787c62a,0xa8304613,0xfd469501,
+        0x698098d8,0x8b44f7af,0xffff5bb1,0x895cd7be,0x6b901122,0xfd987193,0xa679438e,0x49b40821,
+        0xf61e2562,0xc040b340,0x265e5a51,0xe9b6c7aa,0xd62f105d,0x02441453,0xd8a1e681,0xe7d3fbc8,
+        0x21e1cde6,0xc33707d6,0xf4d50d87,0x455a14ed,0xa9e3e905,0xfcefa3f8,0x676f02d9,0x8d2a4c8a,
+        0xfffa3942,0x8771f681,0x6d9d6122,0xfde5380c,0xa4beea44,0x4bdecfa9,0xf6bb4b60,0xbebfbc70,
+        0x289b7ec6,0xeaa127fa,0xd4ef3085,0x04881d05,0xd9d4d039,0xe6db99e5,0x1fa27cf8,0xc4ac5665,
+        0xf4292244,0x432aff97,0xab9423a7,0xfc93a039,0x655b59c3,0x8f0ccc92,0xffeff47d,0x85845dd1,
+        0x6fa87e4f,0xfe2ce6e0,0xa3014314,0x4e0811a1,0xf7537e82,0xbd3af235,0x2ad7d2bb,0xeb86d391
+    };
+    static const uint32_t S[64] = {
+        7,12,17,22,7,12,17,22,7,12,17,22,7,12,17,22,
+        5,9,14,20,5,9,14,20,5,9,14,20,5,9,14,20,
+        4,11,16,23,4,11,16,23,4,11,16,23,4,11,16,23,
+        6,10,15,21,6,10,15,21,6,10,15,21,6,10,15,21
+    };
+    for (int i = 0; i < 64; ++i) {
+        uint32_t f, g;
+        if (i < 16) { f = (b & c) | (~b & d); g = i; }
+        else if (i < 32) { f = (d & b) | (~d & c); g = (5 * i + 1) % 16; }
+        else if (i < 48) { f = b ^ c ^ d; g = (3 * i + 5) % 16; }
+        else { f = c ^ (b | ~d); g = (7 * i) % 16; }
+        f += a + K[i] + *reinterpret_cast<const uint32_t*>(block + g * 4);
+        a = d; d = c; c = b;
+        b = b + leftRotate(f, S[i]);
+    }
+    state[0] += a; state[1] += b; state[2] += c; state[3] += d;
+}
+
+inline std::array<uint8_t, 16> md5(const uint8_t* data, size_t len) {
+    uint32_t state[4] = { 0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476 };
+    size_t newLen = len + 1;
+    while (newLen % 64 != 56) ++newLen;
+    std::vector<uint8_t> msg(newLen + 8, 0);
+    std::memcpy(msg.data(), data, len);
+    msg[len] = 0x80;
+    uint64_t bitLen = static_cast<uint64_t>(len) * 8;
+    std::memcpy(msg.data() + newLen, &bitLen, 8);
+    for (size_t i = 0; i < msg.size(); i += 64)
+        md5Transform(state, msg.data() + i);
+    std::array<uint8_t, 16> hash;
+    for (int i = 0; i < 4; ++i)
+        std::memcpy(hash.data() + i * 4, &state[i], 4);
+    return hash;
+}
+
+} // namespace md5_detail
+
+// ============================================================
+// 轻量级 SHA1 实现（用于 RFC 5389 STUN MESSAGE-INTEGRITY）
+// ============================================================
+namespace sha1_detail {
+
+inline uint32_t sha1RotL(uint32_t x, uint32_t n) { return (x << n) | (x >> (32 - n)); }
+
+inline std::array<uint8_t, 20> sha1(const uint8_t* data, size_t len) {
+    uint32_t h0 = 0x67452301, h1 = 0xEFCDAB89, h2 = 0x98BADCFE, h3 = 0x10325476, h4 = 0xC3D2E1F0;
+    size_t newLen = len + 1;
+    while (newLen % 64 != 56) ++newLen;
+    std::vector<uint8_t> msg(newLen + 8, 0);
+    std::memcpy(msg.data(), data, len);
+    msg[len] = 0x80;
+    uint64_t bitLen = static_cast<uint64_t>(len) * 8;
+    for (int i = 0; i < 8; ++i) msg[newLen + i] = static_cast<uint8_t>(bitLen >> (56 - i * 8));
+    for (size_t offset = 0; offset < msg.size(); offset += 64) {
+        uint32_t w[80];
+        for (int i = 0; i < 16; ++i)
+            w[i] = (static_cast<uint32_t>(msg[offset + i * 4]) << 24) |
+                   (static_cast<uint32_t>(msg[offset + i * 4 + 1]) << 16) |
+                   (static_cast<uint32_t>(msg[offset + i * 4 + 2]) << 8) |
+                   static_cast<uint32_t>(msg[offset + i * 4 + 3]);
+        for (int i = 16; i < 80; ++i)
+            w[i] = sha1RotL(w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16], 1);
+        uint32_t a = h0, b = h1, c = h2, d = h3, e = h4;
+        for (int i = 0; i < 80; ++i) {
+            uint32_t f, k;
+            if (i < 20)      { f = (b & c) | (~b & d); k = 0x5A827999; }
+            else if (i < 40) { f = b ^ c ^ d;             k = 0x6ED9EBA1; }
+            else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDC; }
+            else              { f = b ^ c ^ d;             k = 0xCA62C1D6; }
+            uint32_t temp = sha1RotL(a, 5) + f + e + k + w[i];
+            e = d; d = c; c = sha1RotL(b, 30); b = a; a = temp;
+        }
+        h0 += a; h1 += b; h2 += c; h3 += d; h4 += e;
+    }
+    std::array<uint8_t, 20> hash;
+    auto store = [&](uint32_t v, int idx) {
+        hash[idx]   = static_cast<uint8_t>(v >> 24);
+        hash[idx+1] = static_cast<uint8_t>(v >> 16);
+        hash[idx+2] = static_cast<uint8_t>(v >> 8);
+        hash[idx+3] = static_cast<uint8_t>(v);
+    };
+    store(h0, 0); store(h1, 4); store(h2, 8); store(h3, 12); store(h4, 16);
+    return hash;
+}
+
+} // namespace sha1_detail
+
+// ============================================================
+// 轻量级 HMAC-SHA1 实现（用于 RFC 5389 STUN MESSAGE-INTEGRITY）
+// ============================================================
+namespace hmac_sha1_detail {
+
+inline std::array<uint8_t, 20> hmac_sha1(const uint8_t* key, size_t key_len,
+                                          const uint8_t* data, size_t data_len) {
+    uint8_t k[64] = {};
+    if (key_len > 64) {
+        auto kh = sha1_detail::sha1(key, key_len);
+        std::memcpy(k, kh.data(), 20);
+    } else {
+        std::memcpy(k, key, key_len);
+    }
+    uint8_t ipad[64], opad[64];
+    for (int i = 0; i < 64; ++i) { ipad[i] = k[i] ^ 0x36; opad[i] = k[i] ^ 0x5c; }
+
+    // 内层哈希: SHA1(ipad || data)
+    std::vector<uint8_t> inner(ipad, ipad + 64);
+    inner.insert(inner.end(), data, data + data_len);
+    auto inner_hash = sha1_detail::sha1(inner.data(), inner.size());
+
+    // 外层哈希: SHA1(opad || inner_hash)
+    std::vector<uint8_t> outer(opad, opad + 64);
+    outer.insert(outer.end(), inner_hash.begin(), inner_hash.end());
+    return sha1_detail::sha1(outer.data(), outer.size());
+}
+
+} // namespace hmac_sha1_detail
+
+// ============================================================
 // 构造 / 析构
 // ============================================================
 
@@ -590,16 +727,21 @@ std::vector<uint8_t> NatTraversal::encodeAllocateRequest(
     }
 
     // ---- 计算消息长度 ----
-    uint16_t message_length = static_cast<uint16_t>(
+    // 注意：RFC 5389 要求，在计算 MESSAGE-INTEGRITY 时，
+    // 消息长度是不包含 MESSAGE-INTEGRITY 属性本身！
+    // 先计算没有 MESSAGE-INTEGRITY 时的长度
+    uint16_t message_length_without_integrity = static_cast<uint16_t>(
         lifetime_attr_size + software_attr_size +
-        username_attr_size + realm_attr_size + nonce_attr_size +
-        integrity_attr_size);
+        username_attr_size + realm_attr_size + nonce_attr_size);
+    
+    uint16_t message_length = static_cast<uint16_t>(
+        message_length_without_integrity + integrity_attr_size);
 
     std::vector<uint8_t> buffer(STUN_HEADER_SIZE + message_length, 0);
 
     // ---- 消息头 ----
     uint16_t msg_type = htons(STUN_ALLOCATE_REQUEST);
-    uint16_t msg_len = htons(message_length);
+    uint16_t msg_len = htons(message_length_without_integrity); // 临时长度，不含 MESSAGE-INTEGRITY
     uint32_t magic = htonl(STUN_MAGIC_COOKIE);
 
     std::memcpy(buffer.data() + 0, &msg_type, 2);
@@ -674,6 +816,7 @@ std::vector<uint8_t> NatTraversal::encodeAllocateRequest(
 
     // ---- MESSAGE-INTEGRITY 属性 ----
     if (has_auth) {
+        // 计算 MESSAGE-INTEGRITY 属性头
         uint16_t attr_type = htons(STUN_ATTR_MESSAGE_INTEGRITY);
         uint16_t attr_len = htons(static_cast<uint16_t>(STUN_MESSAGE_INTEGRITY_SIZE));
         std::memcpy(buffer.data() + offset, &attr_type, 2);
@@ -690,62 +833,41 @@ std::vector<uint8_t> NatTraversal::encodeAllocateRequest(
                                 credentials.password;
 
 #ifdef NEVO_HAS_SODIUM
-        // libsodium 不提供 MD5，使用 crypto_generichash (BLAKE2b) 替代
-        // 注意：RFC 5389 严格要求 MD5，此处使用 BLAKE2b 作为过渡方案
-        // 生产环境应切换到 OpenSSL EVP_MD 或其他提供 MD5 的库
+        // RFC 5389 要求 MD5(username:realm:password)
+        // Section 15.4 长期凭据机制
         std::vector<uint8_t> md5_key(16); // MD5 输出 16 字节
-        // 使用 BLAKE2b 生成 16 字节摘要（与 MD5 输出长度一致）
-        crypto_generichash(md5_key.data(), md5_key.size(),
-                           reinterpret_cast<const uint8_t*>(key_input.data()),
-                           key_input.size(), nullptr, 0);
+        auto md5_hash = md5_detail::md5(
+            reinterpret_cast<const uint8_t*>(key_input.data()), key_input.size());
+        std::memcpy(md5_key.data(), md5_hash.data(), 16);
 
-        // 计算 HMAC-SHA256（手动实现 RFC 2104）
-        // RFC 5389 要求 HMAC-SHA1，但许多 TURN 服务器也接受 HMAC-SHA256
-        // 这里使用 HMAC-SHA256 截断为 20 字节
-        constexpr size_t BLOCK_SIZE = 64;
-
-        std::vector<uint8_t> hmac_key(BLOCK_SIZE, 0);
-        if (md5_key.size() > BLOCK_SIZE) {
-            crypto_hash_sha256(hmac_key.data(), md5_key.data(), md5_key.size());
-        } else {
-            std::memcpy(hmac_key.data(), md5_key.data(), md5_key.size());
-        }
-
-        // ipad / opad
-        std::vector<uint8_t> ipad(BLOCK_SIZE);
-        std::vector<uint8_t> opad(BLOCK_SIZE);
-        for (size_t i = 0; i < BLOCK_SIZE; ++i) {
-            ipad[i] = hmac_key[i] ^ 0x36;
-            opad[i] = hmac_key[i] ^ 0x5c;
-        }
-
-        // inner = SHA256(ipad || message)
-        std::vector<uint8_t> inner_data(ipad.size() + buffer.size());
-        std::memcpy(inner_data.data(), ipad.data(), ipad.size());
-        std::memcpy(inner_data.data() + ipad.size(), buffer.data(), buffer.size());
-
-        unsigned char inner_hash[crypto_hash_sha256_BYTES];
-        crypto_hash_sha256(inner_hash, inner_data.data(), inner_data.size());
-
-        // outer = SHA256(opad || inner_hash)
-        std::vector<uint8_t> outer_data(opad.size() + crypto_hash_sha256_BYTES);
-        std::memcpy(outer_data.data(), opad.data(), opad.size());
-        std::memcpy(outer_data.data() + opad.size(), inner_hash, crypto_hash_sha256_BYTES);
-
-        unsigned char hmac_result[crypto_hash_sha256_BYTES];
-        crypto_hash_sha256(hmac_result, outer_data.data(), outer_data.size());
+        // RFC 5389 要求 HMAC-SHA1 计算 MESSAGE-INTEGRITY
+        // 注意：此时 buffer 包含了前面的部分，但还没有 MESSAGE-INTEGRITY 的值部分
+        // 我们计算到 MESSAGE-INTEGRITY 头之后的部分，此时 buffer 的大小是：
+        // STUN_HEADER_SIZE + message_length_without_integrity + STUN_ATTR_HEADER_SIZE
+        // 但是消息头中的长度是不含 MESSAGE-INTEGRITY 的长度
+        size_t hmac_data_size = offset;
+        auto hmac_result = hmac_sha1_detail::hmac_sha1(
+            md5_key.data(), md5_key.size(),
+            buffer.data(), hmac_data_size);
 
         // 取前 20 字节作为 MESSAGE-INTEGRITY
-        std::memcpy(buffer.data() + integrity_value_offset, hmac_result,
+        std::memcpy(buffer.data() + integrity_value_offset, hmac_result.data(),
                     STUN_MESSAGE_INTEGRITY_SIZE);
         offset += STUN_MESSAGE_INTEGRITY_SIZE;
 
+        // 更新消息头中的长度为完整长度（含 MESSAGE-INTEGRITY）
+        uint16_t final_msg_len = htons(message_length);
+        std::memcpy(buffer.data() + 2, &final_msg_len, 2);
+
         NEVO_LOG_DEBUG("network",
                        "encodeAllocateRequest: MESSAGE-INTEGRITY computed "
-                       "(HMAC-SHA256 truncated to 20 bytes, key via BLAKE2b)");
+                       "(HMAC-SHA1, key via MD5 per RFC 5389)");
 #else
         std::memset(buffer.data() + integrity_value_offset, 0, STUN_MESSAGE_INTEGRITY_SIZE);
         offset += STUN_MESSAGE_INTEGRITY_SIZE;
+        // 更新消息头中的长度为完整长度
+        uint16_t final_msg_len = htons(message_length);
+        std::memcpy(buffer.data() + 2, &final_msg_len, 2);
         NEVO_LOG_WARN("network",
                       "encodeAllocateRequest: MESSAGE-INTEGRITY cannot be computed "
                       "(libsodium not available)");
@@ -1003,44 +1125,14 @@ bool NatTraversal::computeMessageIntegrity(
     size_t /*integrity_attr_len*/,
     const std::vector<uint8_t>& key)
 {
-#ifdef NEVO_HAS_SODIUM
-    constexpr size_t BLOCK_SIZE = 64;
+    // RFC 5389 要求使用 HMAC-SHA1 计算 MESSAGE-INTEGRITY
+    auto hmac_result = hmac_sha1_detail::hmac_sha1(
+        key.data(), key.size(),
+        message.data(), message.size());
 
-    std::vector<uint8_t> hmac_key(BLOCK_SIZE, 0);
-    if (key.size() > BLOCK_SIZE) {
-        crypto_hash_sha256(hmac_key.data(), key.data(), key.size());
-    } else {
-        std::memcpy(hmac_key.data(), key.data(), key.size());
-    }
-
-    std::vector<uint8_t> ipad(BLOCK_SIZE);
-    std::vector<uint8_t> opad(BLOCK_SIZE);
-    for (size_t i = 0; i < BLOCK_SIZE; ++i) {
-        ipad[i] = hmac_key[i] ^ 0x36;
-        opad[i] = hmac_key[i] ^ 0x5c;
-    }
-
-    std::vector<uint8_t> inner_data(ipad.size() + message.size());
-    std::memcpy(inner_data.data(), ipad.data(), ipad.size());
-    std::memcpy(inner_data.data() + ipad.size(), message.data(), message.size());
-
-    unsigned char inner_hash[crypto_hash_sha256_BYTES];
-    crypto_hash_sha256(inner_hash, inner_data.data(), inner_data.size());
-
-    std::vector<uint8_t> outer_data(opad.size() + crypto_hash_sha256_BYTES);
-    std::memcpy(outer_data.data(), opad.data(), opad.size());
-    std::memcpy(outer_data.data() + opad.size(), inner_hash, crypto_hash_sha256_BYTES);
-
-    unsigned char hmac_result[crypto_hash_sha256_BYTES];
-    crypto_hash_sha256(hmac_result, outer_data.data(), outer_data.size());
-
-    std::memcpy(message.data() + integrity_offset, hmac_result,
+    std::memcpy(message.data() + integrity_offset, hmac_result.data(),
                 STUN_MESSAGE_INTEGRITY_SIZE);
     return true;
-#else
-    NEVO_LOG_ERROR("network", "computeMessageIntegrity: libsodium not available");
-    return false;
-#endif
 }
 
 } // namespace nevo

@@ -182,7 +182,7 @@ private:
      */
     void onVoicePacketReceived(const uint8_t* data,
                                uint32_t size,
-                               const boost::asio::ip::udp::endpoint& sender);
+                               UserId sender_id);
 
     // ============================================================
     // 数据成员

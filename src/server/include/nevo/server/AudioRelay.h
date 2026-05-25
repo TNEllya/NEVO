@@ -98,6 +98,14 @@ public:
     void handleVoicePacket(const uint8_t* data, uint32_t size,
                            const boost::asio::ip::udp::endpoint& sender_endpoint);
 
+    /// 处理来自 TCP 隧道的语音包
+    /// @param data       原始语音包数据
+    /// @param size       数据字节数
+    /// @param sender_id  发送者用户 ID（从 TCP 会话中获取）
+    void handleVoicePacket(const uint8_t* data, uint32_t size,
+                           const boost::asio::ip::udp::endpoint& sender_endpoint,
+                           UserId sender_id);
+
     // ============================================================
     // 客户端映射管理
     // ============================================================
@@ -208,6 +216,15 @@ private:
      * @return 其他用户的 UDP 端点列表
      */
     std::vector<boost::asio::ip::udp::endpoint> getChannelPeers(
+        UserId sender_id, ChannelId channel_id) const;
+
+    /**
+     * @brief 获取同频道内的所有其他用户的 UDP 端点（无锁版本，调用者必须已持有 mutex_）
+     * @param sender_id 发送者用户 ID
+     * @param channel_id 频道 ID
+     * @return 其他用户的 UDP 端点列表
+     */
+    std::vector<boost::asio::ip::udp::endpoint> getChannelPeersLocked(
         UserId sender_id, ChannelId channel_id) const;
 
     // ============================================================

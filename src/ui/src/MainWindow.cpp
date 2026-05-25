@@ -7,9 +7,12 @@
  */
 
 #include "nevo/ui/MainWindow.h"
+#include "nevo/ui/LoginDialog.h"
 
 #include <QApplication>
 #include <QMessageBox>
+#include <QInputDialog>
+#include <QRegularExpression>
 #include <QFile>
 #include <QVBoxLayout>
 #include <QFormLayout>
@@ -42,81 +45,17 @@ nevo::ConnectionState toConnectionState(nevo::ClientState s) {
 namespace nevo {
 
 // ============================================================
-// LoginDialog ??
-// ============================================================
-
-LoginDialog::LoginDialog(QWidget* parent)
-    : QDialog(parent)
-    , username_edit_(nullptr)
-{
-    setWindowTitle(tr("NEVO - Login"));
-    setModal(true);
-    setMinimumWidth(360);
-    setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
-
-    QVBoxLayout* main_layout = new QVBoxLayout(this);
-    main_layout->setContentsMargins(24, 24, 24, 24);
-    main_layout->setSpacing(16);
-
-    // Title label
-    QLabel* title_label = new QLabel(tr("Connect to Server"), this);
-    QFont title_font = title_label->font();
-    title_font.setPointSize(14);
-    title_font.setBold(true);
-    title_label->setFont(title_font);
-    title_label->setAlignment(Qt::AlignCenter);
-    main_layout->addWidget(title_label);
-
-    // Subtitle
-    QLabel* subtitle = new QLabel(
-        tr("Enter your username to join the voice server"), this);
-    subtitle->setAlignment(Qt::AlignCenter);
-    subtitle->setStyleSheet(QStringLiteral("color: #8b949e; font-size: 12px;"));
-    main_layout->addWidget(subtitle);
-
-    main_layout->addSpacing(8);
-
-    // Form layout for inputs
-    QFormLayout* form_layout = new QFormLayout();
-    form_layout->setSpacing(12);
-    form_layout->setLabelAlignment(Qt::AlignLeft);
-
-    username_edit_ = new QLineEdit(this);
-    username_edit_->setPlaceholderText(tr("Enter username"));
-    username_edit_->setMinimumHeight(32);
-    form_layout->addRow(tr("Username:"), username_edit_);
-
-    main_layout->addLayout(form_layout);
-    main_layout->addSpacing(8);
-
-    QDialogButtonBox* buttons = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
-    buttons->button(QDialogButtonBox::Ok)->setText(tr("Connect"));
-    buttons->button(QDialogButtonBox::Ok)->setMinimumHeight(36);
-    buttons->button(QDialogButtonBox::Cancel)->setMinimumHeight(36);
-    connect(buttons, &QDialogButtonBox::accepted,
-            this, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected,
-            this, &QDialog::reject);
-    main_layout->addWidget(buttons);
-}
-
-QString LoginDialog::username() const
-{
-    return username_edit_->text();
-}
-
-// ============================================================
 // OwnerBindDialog ??
 // ============================================================
 
 OwnerBindDialog::OwnerBindDialog(QWidget* parent)
     : QDialog(parent)
     , bind_key_edit_(nullptr)
+    , status_label_(nullptr)
 {
     setWindowTitle(tr("NEVO - Bind Owner"));
     setModal(true);
-    setMinimumWidth(400);
+    setMinimumWidth(460);
     setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
 
     QVBoxLayout* main_layout = new QVBoxLayout(this);
@@ -134,12 +73,26 @@ OwnerBindDialog::OwnerBindDialog(QWidget* parent)
 
     // Subtitle
     QLabel* subtitle = new QLabel(
-        tr("Enter the owner bind key displayed on the server console"), this);
+        tr("Enter the owner bind key displayed on the server console.\n"
+           "This is a one-time use key that grants full server ownership."), this);
     subtitle->setAlignment(Qt::AlignCenter);
-    subtitle->setStyleSheet(QStringLiteral("color: #8b949e; font-size: 12px;"));
+    subtitle->setWordWrap(true);
+    subtitle->setStyleSheet(QStringLiteral("color: #c4c6d0; font-size: 12px;"));
     main_layout->addWidget(subtitle);
 
     main_layout->addSpacing(8);
+
+    // Warning box
+    QLabel* warning = new QLabel(
+        tr("WARNING: This key should be kept secret. After successful binding, "
+           "the key will be invalidated and cannot be reused."), this);
+    warning->setWordWrap(true);
+    warning->setStyleSheet(
+        QStringLiteral("background-color: #3d2e00; color: #f0c040; "
+                       "padding: 10px; border-radius: 12px; font-size: 12px;"));
+    main_layout->addWidget(warning);
+
+    main_layout->addSpacing(4);
 
     // Form layout for inputs
     QFormLayout* form_layout = new QFormLayout();
@@ -147,12 +100,22 @@ OwnerBindDialog::OwnerBindDialog(QWidget* parent)
     form_layout->setLabelAlignment(Qt::AlignLeft);
 
     bind_key_edit_ = new QLineEdit(this);
-    bind_key_edit_->setPlaceholderText(tr("Enter 64-character bind key"));
+    bind_key_edit_->setPlaceholderText(tr("Enter 64-character bind key (hex)"));
     bind_key_edit_->setMinimumHeight(32);
     bind_key_edit_->setMaxLength(64);
+    bind_key_edit_->setToolTip(tr("The bind key is a 64-character hexadecimal string "
+                                   "shown in the server console at startup"));
     form_layout->addRow(tr("Bind Key:"), bind_key_edit_);
 
     main_layout->addLayout(form_layout);
+
+    // Status label (for inline feedback)
+    status_label_ = new QLabel(this);
+    status_label_->setWordWrap(true);
+    status_label_->setStyleSheet(QStringLiteral("font-size: 12px; padding: 4px;"));
+    status_label_->hide();
+    main_layout->addWidget(status_label_);
+
     main_layout->addSpacing(8);
 
     QDialogButtonBox* buttons = new QDialogButtonBox(
@@ -190,6 +153,8 @@ MainWindow::MainWindow(boost::asio::io_context& io_ctx, QWidget* parent)
     , user_list_(nullptr)
     , channel_dock_(nullptr)
     , user_dock_(nullptr)
+    , chat_dock_(nullptr)
+    , chat_widget_(nullptr)
     , connection_bar_(nullptr)
     , audio_settings_(nullptr)
     , connect_action_(nullptr)
@@ -233,6 +198,8 @@ MainWindow::MainWindow(QWidget* parent)
     , user_list_(nullptr)
     , channel_dock_(nullptr)
     , user_dock_(nullptr)
+    , chat_dock_(nullptr)
+    , chat_widget_(nullptr)
     , connection_bar_(nullptr)
     , audio_settings_(nullptr)
     , connect_action_(nullptr)
@@ -309,7 +276,9 @@ void MainWindow::performShutdown()
         client_core_->onLatencyUpdate = nullptr;
         client_core_->onError = nullptr;
         client_core_->onOwnerBound = nullptr;
+        client_core_->onAdminActionResult = nullptr;
         client_core_->onOwnerBindRequired = nullptr;
+        client_core_->onChatMessage = nullptr;
 
         // 2. ?????????????????
         //    ??????? UI ?????? ClientCore::disconnect()
@@ -682,15 +651,27 @@ void MainWindow::onBindOwnerAction()
         return;
     }
 
+    // Validate key format (64 hex characters)
+    static const QRegularExpression hex_regex(QStringLiteral("^[0-9a-fA-F]{64}$"));
+    if (!hex_regex.match(bind_key).hasMatch()) {
+        QMessageBox::warning(this, tr("Invalid Key Format"),
+            tr("The bind key must be a 64-character hexadecimal string.\n"
+               "Please check the key displayed on the server console."));
+        return;
+    }
+
     // Set up callback for bind response
     client_core_->onOwnerBound = [this](bool success, const std::string& message) {
         postToUiThread([this, success, message]() {
             if (success) {
                 QMessageBox::information(this, tr("Owner Bound"),
-                    QString::fromStdString(message));
+                    tr("Successfully bound as server owner!\n\n"
+                       "You now have full administrative privileges."));
             } else {
                 QMessageBox::warning(this, tr("Bind Failed"),
-                    QString::fromStdString(message));
+                    tr("Failed to bind as server owner:\n%1\n\n"
+                       "The key may be invalid, expired, or already used.")
+                    .arg(QString::fromStdString(message)));
             }
         });
     };
@@ -1103,21 +1084,21 @@ void MainWindow::setupDockWidgets()
     join_channel_btn_->setEnabled(false);
     join_channel_btn_->setFixedHeight(32);
     join_channel_btn_->setStyleSheet(QStringLiteral(
-        "QPushButton { background-color: #5c8aff; color: #ffffff; border: none; "
-        "border-radius: 6px; font-size: 13px; font-weight: 500; }"
-        "QPushButton:hover { background-color: #7aa2ff; }"
-        "QPushButton:pressed { background-color: #4a7aee; }"
-        "QPushButton:disabled { background-color: #3a4048; color: #808080; }"));
+        "QPushButton { background-color: #a8c7fa; color: #062e6f; border: none; "
+        "border-radius: 20px; font-size: 13px; font-weight: 500; }"
+        "QPushButton:hover { background-color: #d3e3fd; }"
+        "QPushButton:pressed { background-color: #8ec7ff; }"
+        "QPushButton:disabled { background-color: #1d2024; color: #5e6068; }"));
 
     leave_channel_btn_ = new QPushButton(tr("Leave Channel"), channel_container);
     leave_channel_btn_->setEnabled(false);
     leave_channel_btn_->setFixedHeight(32);
     leave_channel_btn_->setStyleSheet(QStringLiteral(
-        "QPushButton { background-color: #f44336; color: #ffffff; border: none; "
-        "border-radius: 6px; font-size: 13px; font-weight: 500; }"
-        "QPushButton:hover { background-color: #ef5350; }"
-        "QPushButton:pressed { background-color: #d32f2f; }"
-        "QPushButton:disabled { background-color: #3a4048; color: #808080; }"));
+        "QPushButton { background-color: #f2b8b5; color: #601410; border: none; "
+        "border-radius: 20px; font-size: 13px; font-weight: 500; }"
+        "QPushButton:hover { background-color: #f9dedc; }"
+        "QPushButton:pressed { background-color: #f2b8b5; }"
+        "QPushButton:disabled { background-color: #1d2024; color: #5e6068; }"));
 
     channel_btn_layout->addWidget(join_channel_btn_, 1);
     channel_btn_layout->addWidget(leave_channel_btn_, 1);
@@ -1156,8 +1137,8 @@ void MainWindow::setupDockWidgets()
 
     current_channel_label_ = new QLabel(tr("Not in a channel"), user_container);
     current_channel_label_->setStyleSheet(QStringLiteral(
-        "color: #a0a8b8; padding: 8px 10px; font-size: 12px; "
-        "background-color: #1e2227; border-bottom: 1px solid #2c3138;"));
+        "color: #c4c6d0; padding: 8px 10px; font-size: 12px; "
+        "background-color: #1d2024; border-bottom: 1px solid #44474f;"));
     user_layout->addWidget(current_channel_label_);
 
     user_list_ = new QListView(user_container);
@@ -1173,6 +1154,19 @@ void MainWindow::setupDockWidgets()
 
     user_dock_->setWidget(user_container);
     addDockWidget(Qt::RightDockWidgetArea, user_dock_);
+
+    // --- Chat Dock ---
+    chat_dock_ = new QDockWidget(tr("Chat"), this);
+    chat_dock_->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea | Qt::BottomDockWidgetArea);
+    chat_dock_->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+
+    chat_widget_ = new ChatWidget(chat_dock_);
+    chat_dock_->setWidget(chat_widget_);
+    addDockWidget(Qt::BottomDockWidgetArea, chat_dock_);
+
+    // Connect chat signals
+    connect(chat_widget_, &ChatWidget::chatMessageSent,
+            this, &MainWindow::onChatMessageSent);
 }
 
 #ifdef NEVO_HAS_BOOST
@@ -1192,6 +1186,10 @@ void MainWindow::setupClientCoreCallbacks()
                 guard->mute_action_->setEnabled(connected);
                 guard->deafen_action_->setEnabled(connected);
                 guard->bind_owner_action_->setEnabled(connected);
+
+                // 聊天输入栏：加入频道后才可输入
+                guard->chat_widget_->setInputEnabled(
+                    new_state == ClientState::InChannel);
 
                 // ?????????????????????????
                 if (connected) {
@@ -1215,9 +1213,12 @@ void MainWindow::setupClientCoreCallbacks()
                         MainWindow::tr("Channel: %1")
                             .arg(QString::fromStdString(snapshot.current_channel_name)));
                     guard->current_channel_label_->setStyleSheet(QStringLiteral(
-                        "color: #4caf50; padding: 8px 10px; font-size: 12px; font-weight: 500; "
-                        "background-color: #1e2227; border-bottom: 1px solid #2c3138;"));
+                        "color: #a8c7fa; padding: 8px 10px; font-size: 12px; font-weight: 500; "
+                        "background-color: #1d2024; border-bottom: 1px solid #44474f;"));
                     guard->statusBar()->showMessage(
+                        MainWindow::tr("Joined channel: %1")
+                            .arg(QString::fromStdString(snapshot.current_channel_name)));
+                    guard->chat_widget_->addSystemMessage(
                         MainWindow::tr("Joined channel: %1")
                             .arg(QString::fromStdString(snapshot.current_channel_name)));
                 } else if (old_state == ClientState::InChannel &&
@@ -1225,16 +1226,17 @@ void MainWindow::setupClientCoreCallbacks()
                     guard->channel_model_->clearCurrentChannel();
                     guard->current_channel_label_->setText(MainWindow::tr("Not in a channel"));
                     guard->current_channel_label_->setStyleSheet(QStringLiteral(
-                        "color: #a0a8b8; padding: 8px 10px; font-size: 12px; "
-                        "background-color: #1e2227; border-bottom: 1px solid #2c3138;"));
+                        "color: #c4c6d0; padding: 8px 10px; font-size: 12px; "
+                        "background-color: #1d2024; border-bottom: 1px solid #44474f;"));
                     guard->statusBar()->showMessage(
                         MainWindow::tr("Left channel"));
+                    guard->chat_widget_->addSystemMessage(MainWindow::tr("Left channel"));
                 } else if (new_state == ClientState::Disconnected) {
                     guard->channel_model_->clearCurrentChannel();
                     guard->current_channel_label_->setText(MainWindow::tr("Not in a channel"));
                     guard->current_channel_label_->setStyleSheet(QStringLiteral(
-                        "color: #a0a8b8; padding: 8px 10px; font-size: 12px; "
-                        "background-color: #1e2227; border-bottom: 1px solid #2c3138;"));
+                        "color: #c4c6d0; padding: 8px 10px; font-size: 12px; "
+                        "background-color: #1d2024; border-bottom: 1px solid #44474f;"));
                     guard->statusBar()->showMessage(
                         MainWindow::tr("State: %1")
                             .arg(QString::fromStdString(clientStateToString(new_state))));
@@ -1356,6 +1358,37 @@ void MainWindow::setupClientCoreCallbacks()
             guard->onBindOwnerAction();
         });
     };
+
+    client_core_->onAdminActionResult = [this](bool success, const std::string& message) {
+        QPointer<MainWindow> guard(this);
+        postToUiThread([guard, success, message]() {
+            if (!guard) return;
+            if (success) {
+                QMessageBox::information(guard, tr("Admin Action"),
+                    QString::fromStdString(message));
+            } else {
+                QMessageBox::warning(guard, tr("Admin Action Failed"),
+                    QString::fromStdString(message));
+            }
+        });
+    };
+
+    client_core_->onChatMessage =
+        [this](uint64_t sender_id, const std::string& sender_name,
+               uint64_t channel_id, const std::string& text, uint64_t timestamp) {
+            QPointer<MainWindow> guard(this);
+            postToUiThread([guard, sender_id, sender_name, channel_id, text, timestamp]() {
+                if (!guard) return;
+                Q_UNUSED(channel_id);
+                bool is_self = guard->client_core_ &&
+                               sender_id == guard->client_core_->getState().local_user_id.value;
+                guard->chat_widget_->addMessage(
+                    QString::fromStdString(sender_name),
+                    QString::fromStdString(text),
+                    timestamp,
+                    is_self);
+            });
+        };
 }
 #endif // NEVO_HAS_BOOST
 
@@ -1421,6 +1454,19 @@ void MainWindow::onChannelSelectionChanged()
 #endif
 }
 
+void MainWindow::onChatMessageSent(const QString& text)
+{
+#ifdef NEVO_HAS_BOOST
+    if (!client_core_ || !client_core_->isConnected()) {
+        return;
+    }
+    client_core_->sendChatMessage(text.toStdString());
+#else
+    // 独立模式下显示本地消息
+    chat_widget_->addMessage(tr("You"), text, 0, true);
+#endif
+}
+
 void MainWindow::onUserContextMenu(const QPoint& pos)
 {
     QModelIndex index = user_list_->indexAt(pos);
@@ -1434,6 +1480,99 @@ void MainWindow::onUserContextMenu(const QPoint& pos)
 
     QAction* info_action = context_menu.addAction(
         tr("View Info: %1").arg(username));
+
+#ifdef NEVO_HAS_BOOST
+    // Find the user to get user_id and group info
+    auto snapshot = client_core_->getState();
+    UserId target_user_id;
+    GroupId target_group_id;
+    bool target_is_muted = false;
+    bool target_is_speaking = false;
+    bool found_user = false;
+    for (const auto& user : snapshot.channel_users) {
+        if (QString::fromStdString(user.username()) == username) {
+            target_user_id = user.id();
+            target_group_id = user.groupId();
+            target_is_muted = user.isMuted();
+            target_is_speaking = user.isSpeaking();
+            found_user = true;
+            break;
+        }
+    }
+
+    // Determine if local user is admin (group_id == 1)
+    bool is_admin = false;
+    if (snapshot.local_user_id.value != 0) {
+        for (const auto& user : snapshot.channel_users) {
+            if (user.id().value == snapshot.local_user_id.value) {
+                is_admin = (user.groupId().value == 1); // GROUP_ADMIN = 1
+                break;
+            }
+        }
+    }
+
+    // Add admin actions if the local user is an admin
+    if (found_user && is_admin && target_user_id.value != snapshot.local_user_id.value) {
+        context_menu.addSeparator();
+
+        // Set/Remove Admin
+        bool target_is_admin = (target_group_id.value == 1);
+        QAction* admin_action = context_menu.addAction(
+            target_is_admin ? tr("Remove Admin") : tr("Set as Admin"));
+
+        context_menu.addSeparator();
+
+        // Move User
+        QAction* move_action = context_menu.addAction(tr("Move User"));
+
+        context_menu.addSeparator();
+
+        // Kick User
+        QAction* kick_action = context_menu.addAction(tr("Kick User"));
+
+        // Ban User
+        QAction* ban_action = context_menu.addAction(tr("Ban User"));
+
+        QAction* selected = context_menu.exec(user_list_->viewport()->mapToGlobal(pos));
+
+        if (selected == info_action) {
+            QMessageBox::information(this,
+                tr("User Info"),
+                tr("Username: %1\nID: %2\nMuted: %3\nSpeaking: %4")
+                    .arg(username)
+                    .arg(target_user_id.value)
+                    .arg(target_is_muted ? tr("Yes") : tr("No"))
+                    .arg(target_is_speaking ? tr("Yes") : tr("No")));
+        } else if (selected == admin_action) {
+            client_core_->sendSetAdminRequest(target_user_id.value, !target_is_admin);
+        } else if (selected == move_action) {
+            // Show channel selection dialog
+            bool ok = false;
+            QString channel_str = QInputDialog::getText(this,
+                tr("Move User"), tr("Enter target channel ID:"), QLineEdit::Normal, "", &ok);
+            if (ok && !channel_str.isEmpty()) {
+                bool conv_ok = false;
+                uint64_t ch_id = channel_str.toULongLong(&conv_ok);
+                if (conv_ok) {
+                    client_core_->sendMoveUserRequest(target_user_id.value, ch_id);
+                }
+            }
+        } else if (selected == kick_action) {
+            auto ret = QMessageBox::question(this,
+                tr("Kick User"), tr("Are you sure you want to kick %1?").arg(username));
+            if (ret == QMessageBox::Yes) {
+                client_core_->sendKickUserRequest(target_user_id.value);
+            }
+        } else if (selected == ban_action) {
+            auto ret = QMessageBox::question(this,
+                tr("Ban User"), tr("Are you sure you want to ban %1?").arg(username));
+            if (ret == QMessageBox::Yes) {
+                client_core_->sendBanUserRequest(target_user_id.value);
+            }
+        }
+        return;
+    }
+#endif
 
     QAction* selected = context_menu.exec(user_list_->viewport()->mapToGlobal(pos));
 

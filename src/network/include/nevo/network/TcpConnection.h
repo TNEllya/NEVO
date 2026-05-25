@@ -108,6 +108,18 @@ public:
                       const std::string& hostname,
                       bool skip_verify = false);
 
+    /**
+     * @brief 服务端 TLS 握手
+     *
+     * 在 accept 成功后调用。将底层 TCP socket 移入 SSL stream，
+     * 执行服务端 TLS 握手。成功后所有读写操作自动通过 SSL stream 进行。
+     *
+     * @param ssl_ctx SSL 上下文（含服务端证书和私钥配置）
+     * @return error_code，成功返回 0
+     */
+    boost::asio::awaitable<boost::system::error_code>
+    asyncSslServerHandshake(boost::asio::ssl::context& ssl_ctx);
+
     /// 查询是否已启用 TLS
     bool isSslEnabled() const { return use_ssl_; }
 
@@ -207,6 +219,9 @@ public:
 
     /// 读缓冲区（帧头 + 载荷复用）
     std::vector<uint8_t> read_buffer_;
+
+    /// 缓存的远端端点字符串（在 socket_ 移入 ssl_stream_ 前保存）
+    std::string cached_remote_endpoint_;
 };
 
 } // namespace nevo

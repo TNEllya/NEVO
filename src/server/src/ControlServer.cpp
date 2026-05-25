@@ -198,7 +198,7 @@ void ControlServer::start() {
     if (running_) return;
 
     boost::system::error_code ec;
-    auto endpoint = Tcp::endpoint(boost::asio::ip::tcp::v4(), port_);
+    auto endpoint = Tcp::endpoint(boost::asio::ip::address_v4::loopback(), port_);
 
     acceptor_.open(endpoint.protocol(), ec);
     if (ec) {
@@ -257,7 +257,7 @@ void ControlServer::doAccept() {
         boost::asio::co_spawn(io_ctx_,
             [this, s]() -> boost::asio::awaitable<void> {
                 try {
-                    handleClient(s);
+                    co_await handleClient(s);
                 } catch (const std::exception& e) {
                     std::cerr << "[ControlServer] Client handler exception: " << e.what() << std::endl;
                 } catch (...) {
@@ -280,46 +280,53 @@ void ControlServer::doAccept() {
     });
 }
 
-void ControlServer::handleClient(std::shared_ptr<Tcp::socket> socket) {
+boost::asio::awaitable<void> ControlServer::handleClient(std::shared_ptr<Tcp::socket> socket) {
     boost::asio::ip::tcp::no_delay option(true);
     socket->set_option(option);
 
     std::string buffer;
 
-    while (running_) {
-        // Read until newline
-        char data[4096];
-        boost::system::error_code ec;
-        size_t n = socket->read_some(boost::asio::buffer(data, sizeof(data)), ec);
+    try {
+        while (running_) {
+            // Read until newline
+            char data[4096];
+            auto [ec, n] = co_await socket->async_read_some(
+                boost::asio::buffer(data, sizeof(data)),
+                boost::asio::as_tuple(boost::asio::use_awaitable));
 
-        if (ec || n == 0) {
-            break; // Client disconnected
-        }
+            if (ec || n == 0) {
+                break; // Client disconnected
+            }
 
-        buffer.append(data, n);
+            buffer.append(data, n);
 
-        // Process complete lines
-        size_t pos;
-        while ((pos = buffer.find('\n')) != std::string::npos) {
-            std::string line = buffer.substr(0, pos);
-            buffer.erase(0, pos + 1);
+            // Process complete lines
+            size_t pos;
+            while ((pos = buffer.find('\n')) != std::string::npos) {
+                std::string line = buffer.substr(0, pos);
+                buffer.erase(0, pos + 1);
 
-            if (line.empty()) continue;
+                if (line.empty()) continue;
 
-            // Parse JSON command
-            ControlJson request = parseControlJson(line);
-            if (request.type != ControlJson::Object) continue;
+                // Parse JSON command
+                ControlJson request = parseControlJson(line);
+                if (request.type != ControlJson::Object) continue;
 
-            // Handle command
-            ControlJson response = handleCommand(request);
+                // Handle command
+                ControlJson response = handleCommand(request);
 
-            // Send response
-            std::string response_str = controlJsonToString(response) + "\n";
-            boost::asio::write(*socket, boost::asio::buffer(response_str), ec);
-            if (ec) {
-                break; // Write failed
+                // Send response
+                std::string response_str = controlJsonToString(response) + "\n";
+                auto [write_ec, write_n] = co_await socket->async_write_some(
+                    boost::asio::buffer(response_str),
+                    boost::asio::as_tuple(boost::asio::use_awaitable));
+                if (write_ec) {
+                    break; // Write failed
+                }
             }
         }
+    } catch (const std::exception& e) {
+        std::cerr << "[ControlServer] Client connection error: " << e.what() << std::endl;
     }
 }
 
@@ -350,10 +357,10 @@ ControlJson ControlServer::handleCommand(const ControlJson& request) {
         result = cmdGetConfig(params);
     } else if (command == "ban_user") {
         result = cmdBanUser(params);
-    } else if (command == "generate_bind_key") {
-        result = cmdGenerateBindKey(params);
     } else if (command == "set_config") {
         result = cmdSetConfig(params);
+    } else if (command == "configure_ssl") {
+        result = cmdConfigureSsl(params);
     } else {
         response.obj_val["status"] = ControlJson::make_str("error");
         ControlJson errData = ControlJson::make_obj();
@@ -486,6 +493,9 @@ ControlJson ControlServer::cmdGetConfig(const ControlJson& /*params*/) {
     result.obj_val["max_users"] = ControlJson::make_num(core_->maxUsers());
     result.obj_val["welcome_message"] = ControlJson::make_str(core_->welcomeMessage());
     result.obj_val["log_level"] = ControlJson::make_str(core_->logLevel());
+    result.obj_val["ssl_enabled"] = ControlJson::make_bool(core_->isSslEnabled());
+    result.obj_val["server_name"] = ControlJson::make_str(core_->serverName());
+    result.obj_val["admin_password_set"] = ControlJson::make_bool(core_->isAdminPasswordSet());
     return result;
 }
 
@@ -531,17 +541,18 @@ ControlJson ControlServer::cmdBanUser(const ControlJson& params) {
     return result;
 }
 
-ControlJson ControlServer::cmdGenerateBindKey(const ControlJson& /*params*/) {
-    auto key = core_->generateOwnerBindKey();
+ControlJson ControlServer::cmdSetAdminPassword(const ControlJson& params) {
+    std::string password = params.str("password", "");
 
     auto result = ControlJson::make_obj();
-    if (key.empty()) {
+    if (password.empty()) {
         result.obj_val["success"] = ControlJson::make_bool(false);
-        result.obj_val["message"] = ControlJson::make_str("Owner already exists or generation failed");
+        result.obj_val["message"] = ControlJson::make_str("Password is empty");
     } else {
+        core_->setAdminPassword(password);
         result.obj_val["success"] = ControlJson::make_bool(true);
-        result.obj_val["bind_key"] = ControlJson::make_str(key);
-        NEVO_LOG_INFO("control", "Generated owner bind key");
+        result.obj_val["message"] = ControlJson::make_str("Admin password set successfully");
+        NEVO_LOG_INFO("control", "Admin password updated via IPC");
     }
     return result;
 }
@@ -571,10 +582,67 @@ ControlJson ControlServer::cmdSetConfig(const ControlJson& params) {
         changed = true;
     }
 
+    if (params.has("server_name")) {
+        std::string name = params.str("server_name", "");
+        core_->setServerName(name);
+        result.obj_val["server_name"] = ControlJson::make_str(name);
+        changed = true;
+    }
+
+    if (params.has("admin_password")) {
+        std::string pwd = params.str("admin_password", "");
+        core_->setAdminPassword(pwd);
+        result.obj_val["admin_password_set"] = ControlJson::make_bool(!pwd.empty());
+        changed = true;
+    }
+
     result.obj_val["updated"] = ControlJson::make_bool(changed);
     if (!changed) {
         result.obj_val["message"] = ControlJson::make_str("No config keys provided");
     }
+    return result;
+}
+
+ControlJson ControlServer::cmdConfigureSsl(const ControlJson& params) {
+    auto result = ControlJson::make_obj();
+
+    if (core_->isRunning()) {
+        result.obj_val["success"] = ControlJson::make_bool(false);
+        result.obj_val["message"] = ControlJson::make_str(
+            "Cannot configure SSL while server is running. Stop the server first.");
+        return result;
+    }
+
+    bool enabled = params.has("enabled") ? params.boolean("enabled") : false;
+    std::string cert_file = params.str("cert_file", "");
+    std::string key_file = params.str("key_file", "");
+    std::string ca_file = params.str("ca_file", "");
+
+    core_->setSslEnabled(enabled);
+
+    if (!cert_file.empty()) {
+        core_->setSslCertificateFile(cert_file);
+    }
+    if (!key_file.empty()) {
+        core_->setSslPrivateKeyFile(key_file);
+    }
+    if (!ca_file.empty()) {
+        core_->setSslCaFile(ca_file);
+    }
+
+    // Persist SSL configuration to database
+    auto db = core_->database();
+    if (db) {
+        db->setConfig("ssl_enabled", enabled ? "1" : "0");
+        if (!cert_file.empty()) db->setConfig("ssl_cert_file", cert_file);
+        if (!key_file.empty()) db->setConfig("ssl_key_file", key_file);
+        if (!ca_file.empty()) db->setConfig("ssl_ca_file", ca_file);
+    }
+
+    result.obj_val["success"] = ControlJson::make_bool(true);
+    result.obj_val["ssl_enabled"] = ControlJson::make_bool(enabled);
+    result.obj_val["message"] = ControlJson::make_str(
+        enabled ? "SSL configured. Start the server to apply." : "SSL disabled.");
     return result;
 }
 

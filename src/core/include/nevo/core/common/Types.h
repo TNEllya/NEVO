@@ -104,3 +104,10 @@ struct std::hash<nevo::SessionId> {
         return std::hash<uint64_t>{}(id.value);
     }
 };
+
+template <>
+struct std::hash<nevo::GroupId> {
+    size_t operator()(nevo::GroupId id) const noexcept {
+        return std::hash<uint64_t>{}(id.value);
+    }
+};

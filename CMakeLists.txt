@@ -50,7 +50,21 @@ endif()
 # ============================================================
 # 4. Protobuf - 使用预生成的轻量级头文件 (proto/generated/)
 # ============================================================
-set(NEVO_HAS_PROTOBUF OFF)
+find_package(Protobuf QUIET)
+if(Protobuf_FOUND)
+    set(NEVO_HAS_PROTOBUF ON)
+    message(STATUS "Protobuf found: ${Protobuf_VERSION}")
+else()
+    # Try vcpkg CONFIG mode
+    find_package(protobuf CONFIG QUIET)
+    if(protobuf_FOUND)
+        set(NEVO_HAS_PROTOBUF ON)
+        message(STATUS "Protobuf found (vcpkg CONFIG)")
+    else()
+        set(NEVO_HAS_PROTOBUF OFF)
+        message(STATUS "Protobuf not found. Protocol uses stubs.")
+    endif()
+endif()
 
 # ============================================================
 # 5. Boost
@@ -210,6 +224,24 @@ add_subdirectory(src)
 if(BUILD_TESTING AND TARGET GTest::gtest_main)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+# ============================================================
+# Code coverage (Linux only, GCC/Clang)
+# ============================================================
+option(ENABLE_COVERAGE "Enable code coverage reporting" OFF)
+if(ENABLE_COVERAGE AND BUILD_TESTING)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        if(TARGET nevo_core)
+            target_compile_options(nevo_core PUBLIC --coverage -O0 -g)
+            target_link_options(nevo_core PUBLIC --coverage)
+        endif()
+        if(TARGET nevo_network)
+            target_compile_options(nevo_network PUBLIC --coverage -O0 -g)
+            target_link_options(nevo_network PUBLIC --coverage)
+        endif()
+        message(STATUS "Code coverage enabled")
+    endif()
 endif()
 
 # ============================================================

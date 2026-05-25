@@ -29,6 +29,12 @@
     <message><source>&amp;Settings</source><translation>&amp;Settings</translation></message>
     <message><source>&amp;Language</source><translation>&amp;Language</translation></message>
     <message><source>%1 - %2 clients</source><translation>%1 - %2 clients</translation></message>
+    <message><source>Owner Bound</source><translation>Owner Bound</translation></message>
+    <message><source>User %1 (ID: %2) has successfully bound as server owner.</source><translation>User %1 (ID: %2) has successfully bound as server owner.</translation></message>
+    <message><source>NEVO - No Server Owner</source><translation>NEVO - No Server Owner</translation></message>
+    <message><source>This server has no owner (administrator).</source><translation>This server has no owner (administrator).</translation></message>
+    <message><source>Use the following bind key in the client to claim ownership.\n\nThis key is ONE-TIME USE and will be invalidated after binding.\nKeep it secret!</source><translation>Use the following bind key in the client to claim ownership.\n\nThis key is ONE-TIME USE and will be invalidated after binding.\nKeep it secret!</translation></message>
+    <message><source>Copy to Clipboard</source><translation>Copy to Clipboard</translation></message>
 </context>
 <context>
     <name>nevo::ServerStatusBar</name>

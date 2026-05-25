@@ -92,4 +92,29 @@ ControlMessageType getControlMessageType(const control::ControlMessage& msg);
 /// ControlMessageType 转字符串（用于日志）
 const char* controlMessageTypeToString(ControlMessageType type);
 
+// ============================================================
+// 自定义线格式解码（兼容 Python 客户端）
+// ============================================================
+//
+// Python 客户端使用自定义二进制格式（非 Protobuf）序列化消息：
+//   载荷 = [4B LE: case_value] [4B LE: inner_payload_len] [inner_payload]
+//   其中 inner_payload 使用小端序的 TLV 编码：
+//     string  -> [4B LE len][UTF-8 data]
+//     bytes   -> [4B LE len][raw data]
+//     uint32  -> [4B LE value]
+//     uint64  -> [8B LE value]
+//     bool    -> [1B value]
+
+/// 从自定义线格式载荷中解析出 ControlMessage（兼容 Python 客户端）
+/// @param data 原始载荷数据（TcpConnection 读取的 payload）
+/// @param size 数据大小
+/// @return 解码成功返回 ControlMessage，失败返回 std::nullopt
+std::optional<control::ControlMessage> decodeCustomWirePayload(
+    const uint8_t* data, uint32_t size);
+
+/// 将 ControlMessage 编码为自定义线格式载荷（兼容 Python 客户端）
+/// @param msg 要编码的 ControlMessage
+/// @return 编码后的字节流（空 vector 表示失败）
+std::vector<uint8_t> encodeCustomWirePayload(const control::ControlMessage& msg);
+
 } // namespace nevo
