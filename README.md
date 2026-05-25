@@ -1,5 +1,7 @@
 # NEVO
 
+**English** | [中文](README_zh.md)
+
 Low-latency encrypted VoIP application — C++20 client/server architecture.
 
 ## Features
