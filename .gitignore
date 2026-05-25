@@ -92,3 +92,13 @@ __pycache__/
 
 # PyInstaller
 dist/build_*/
+
+# Large binary archives
+install/NEVO.zip
+*.zip
+!src/client/gui_python/translations/*.json
+!src/server/gui_python/translations/*.json
+
+# Binary distributions
+dist/NEVO-*/
+test/
