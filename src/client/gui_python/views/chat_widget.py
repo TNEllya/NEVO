@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
 )
 from qfluentwidgets import PushButton, FluentIcon
 
+from theme_manager import ThemeManager, chat_bubble_stylesheet, system_msg_stylesheet, timestamp_stylesheet
 from views.emoji_panel import EmojiPanel
 from views.file_upload_dialog import select_file
 from views.chat_input_bar import ChatInputBar
@@ -83,12 +84,7 @@ class _CodeBlock(QFrame):
             "padding: 0px; border: none;"
         )
         layout.addWidget(label)
-        self.setStyleSheet(
-            "QFrame {"
-            "  background-color: rgba(0,0,0,0.2);"
-            "  border-radius: 4px;"
-            "}"
-        )
+        self.setStyleSheet(chat_bubble_stylesheet())
 
 class _BubbleLabel(QLabel):
     def __init__(self, text: str, parent=None):
@@ -225,9 +221,8 @@ class _FileCard(QFrame):
         layout.addLayout(info_layout)
         layout.addStretch()
         self.setStyleSheet(
-            "QFrame { background-color: rgba(0,0,0,0.2); border-radius: 8px; "
-            "border: 1px solid #404249; }"
-            "QFrame:hover { border: 1px solid #5865F2; }"
+            chat_bubble_stylesheet()
+            + " QFrame:hover { border: 1px solid #5865F2; }"
         )
         self.setCursor(Qt.PointingHandCursor)
 
@@ -441,7 +436,7 @@ class ChatScrollArea(QScrollArea):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setStyleSheet(
-            "QScrollArea { border: none; background-color: #313338; }"
+            f"QScrollArea {{ border: none; background-color: {ThemeManager.instance().color('chat_bg')}; }}"
             "QScrollBar:vertical {"
             "  width: 8px; background: #2b2d31; border-radius: 4px;"
             "}"
@@ -453,7 +448,7 @@ class ChatScrollArea(QScrollArea):
             "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }"
         )
         container = QWidget()
-        container.setStyleSheet("background-color: #313338;")
+        container.setStyleSheet(f"background-color: {ThemeManager.instance().color('chat_bg')};")
         self._layout = QVBoxLayout(container)
         self._layout.setContentsMargins(0, 8, 0, 8)
         self._layout.setSpacing(4)
@@ -578,3 +573,21 @@ class ChatWidget(QFrame):
                             avatar.set_pixmap(avatar_pixmap)
                         else:
                             avatar.set_initial(w._sender_name)
+
+    def refresh_theme(self):
+        tm = ThemeManager.instance()
+        pal = tm.palette()
+        self.message_display.setStyleSheet(
+            f"QScrollArea {{ border: none; background-color: {pal['chat_bg']}; }}"
+            "QScrollBar:vertical {"
+            "  width: 8px; background: #2b2d31; border-radius: 4px;"
+            "}"
+            "QScrollBar::handle:vertical {"
+            "  background: #4f545c; border-radius: 4px; min-height: 20px;"
+            "}"
+            "QScrollBar::handle:vertical:hover { background: #686d75; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }"
+        )
+        if self.message_display.widget():
+            self.message_display.widget().setStyleSheet(f"background-color: {pal['chat_bg']};")

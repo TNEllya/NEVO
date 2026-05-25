@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QFrame, QLabel, QWidget, QSizePolicy, QScrollArea,
 )
 from PyQt5.QtGui import QPainter, QPainterPath, QColor
+from theme_manager import ThemeManager
 
 
 class _StatusBarCard(QFrame):
@@ -16,7 +17,7 @@ class _StatusBarCard(QFrame):
         self._value_text = value_text
         self.setFixedHeight(48)
         self.setStyleSheet(
-            "QFrame { background-color: rgba(255,255,255,0.05); border-radius: 8px; }"
+            f"QFrame {{ background-color: {ThemeManager.instance().color('bg_status')}; border-radius: 8px; }}"
         )
         layout = QHBoxLayout(self)
         layout.setContentsMargins(14, 10, 14, 10)
@@ -128,7 +129,7 @@ class ServerStatusWidget(QFrame):
         self._update_timer = QTimer(self)
         self._update_timer.timeout.connect(self._on_timer)
         self._connected = False
-        self.setStyleSheet("ServerStatusWidget { background-color: #1e1e2e; }")
+        self.setStyleSheet(f"ServerStatusWidget {{ background-color: {ThemeManager.instance().color('bg_secondary')}; }}")
 
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
@@ -188,3 +189,15 @@ class ServerStatusWidget(QFrame):
 
     def stop_monitoring(self):
         self._update_timer.stop()
+
+    def refresh_theme(self):
+        self.setStyleSheet(f"ServerStatusWidget {{ background-color: {ThemeManager.instance().color('bg_secondary')}; }}")
+        self.card_loss_in.setStyleSheet(
+            f"QFrame {{ background-color: {ThemeManager.instance().color('bg_status')}; border-radius: 8px; }}"
+        )
+        self.card_loss_out.setStyleSheet(
+            f"QFrame {{ background-color: {ThemeManager.instance().color('bg_status')}; border-radius: 8px; }}"
+        )
+        self.card_ping.setStyleSheet(
+            f"QFrame {{ background-color: {ThemeManager.instance().color('bg_status')}; border-radius: 8px; }}"
+        )

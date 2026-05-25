@@ -36,6 +36,7 @@ from per_user_volume import PerUserVolumeManager, VolumeSliderDialog
 from audio_share_engine import AudioShareEngine
 from updater import Updater, UpdateState
 from views.update_dialog import UpdateDialog
+from theme_manager import ThemeManager, card_stylesheet, scroll_stylesheet
 import join_sound
 import i18n
 
@@ -202,6 +203,9 @@ class MainWindow(FluentWindow):
         self._setup_navigation()
         self._setup_ptt()
 
+        tm = ThemeManager.instance()
+        tm.theme_changed.connect(self._on_theme_changed)
+
         self.resize(1100, 750)
         self.setMinimumSize(800, 550)
 
@@ -224,12 +228,7 @@ class MainWindow(FluentWindow):
         # Channel tree card
         channel_card = HeaderCardWidget(self)
         channel_card.setTitle(self.tr("Channels"))
-        channel_card.setStyleSheet(
-            "HeaderCardWidget { background-color: rgba(43, 45, 49, 0.85); border: none; border-radius: 12px; }"
-            "#headerView { background-color: transparent; border-top-left-radius: 12px; border-top-right-radius: 12px; }"
-            "#headerLabel { color: #ffffff; }"
-            "#view { background-color: transparent; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; }"
-        )
+        channel_card.setStyleSheet(card_stylesheet())
         self.channel_tree = ChannelTreeView()
         self.channel_tree.join_channel_requested.connect(self._on_join_channel)
         self.channel_tree.leave_channel_requested.connect(self._on_leave_channel)
@@ -265,12 +264,7 @@ class MainWindow(FluentWindow):
         # Right panel: chat
         chat_card = HeaderCardWidget(self)
         chat_card.setTitle(self.tr("Chat"))
-        chat_card.setStyleSheet(
-            "HeaderCardWidget { background-color: rgba(43, 45, 49, 0.85); border: none; border-radius: 12px; }"
-            "#headerView { background-color: transparent; border-top-left-radius: 12px; border-top-right-radius: 12px; }"
-            "#headerLabel { color: #ffffff; }"
-            "#view { background-color: transparent; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; }"
-        )
+        chat_card.setStyleSheet(card_stylesheet())
         self.chat_widget = ChatWidget()
         self.chat_widget.chat_message_sent.connect(self._on_chat_send)
         self.chat_widget.file_upload_requested.connect(self._on_file_upload)
@@ -1236,6 +1230,20 @@ class MainWindow(FluentWindow):
 
     def _start_update_check(self):
         self.updater.start_periodic_check()
+
+    def _on_theme_changed(self, is_dark: bool):
+        self._refresh_theme_styles()
+
+    def _refresh_theme_styles(self):
+        ss = card_stylesheet()
+        for card in self.findChildren(HeaderCardWidget):
+            card.setStyleSheet(ss)
+        self.channel_tree.refresh_theme()
+        self.connection_bar.refresh_theme()
+        self.chat_widget.refresh_theme()
+        self.screen_share_view.refresh_theme()
+        self.server_status.refresh_theme()
+        self.waveform_panel.refresh_theme()
 
     def closeEvent(self, event):
         try:

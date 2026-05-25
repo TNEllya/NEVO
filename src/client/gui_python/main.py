@@ -92,6 +92,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QFontDatabase
 from qfluentwidgets import setTheme, Theme
 
+from theme_manager import ThemeManager
 from main_window import MainWindow
 
 
@@ -138,7 +139,8 @@ def main():
 
     _load_font(app)
 
-    setTheme(Theme.DARK)
+    tm = ThemeManager.instance()
+    tm.load_preference()
 
     logger.info("Creating MainWindow...")
     window = MainWindow()

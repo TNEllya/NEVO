@@ -7,6 +7,9 @@ from qfluentwidgets import (
     CaptionLabel, FluentIcon, StrongBodyLabel,
     RoundMenu, Action,
 )
+from theme_manager import (
+    ThemeManager, button_stylesheet, status_dot_stylesheet,
+)
 
 
 class ConnectionBar(QFrame):
@@ -36,7 +39,7 @@ class ConnectionBar(QFrame):
         row1.setSpacing(6)
 
         self.status_dot = CaptionLabel("●")
-        self.status_dot.setStyleSheet("color: #e74c3c; font-size: 16px;")
+        self.status_dot.setStyleSheet(status_dot_stylesheet(False))
         row1.addWidget(self.status_dot)
 
         row1.addWidget(StrongBodyLabel(self.tr("Host:")))
@@ -87,26 +90,7 @@ class ConnectionBar(QFrame):
         self.btn_mute.setCheckable(True)
         self.btn_mute.setEnabled(False)
         self.btn_mute.setFixedSize(100, 32)
-        self.btn_mute.setStyleSheet(
-            "QPushButton { "
-            "  background-color: rgba(255, 255, 255, 0.08); "
-            "  color: #dbdee1; "
-            "  border: none; "
-            "  border-radius: 6px; "
-            "  padding-left: 20px; "
-            "} "
-            "QPushButton:hover { "
-            "  background-color: rgba(255, 255, 255, 0.12); "
-            "} "
-            "QPushButton:checked { "
-            "  background-color: rgba(255, 255, 255, 0.15); "
-            "  color: #ffffff; "
-            "} "
-            "QPushButton:disabled { "
-            "  background-color: rgba(255, 255, 255, 0.05); "
-            "  color: #6d6f78; "
-            "}"
-        )
+        self.btn_mute.setStyleSheet(button_stylesheet())
         row2.addWidget(self.btn_mute)
 
         self.btn_deafen = PushButton(self.tr("禁言"))
@@ -115,26 +99,7 @@ class ConnectionBar(QFrame):
         self.btn_deafen.setCheckable(True)
         self.btn_deafen.setEnabled(False)
         self.btn_deafen.setFixedSize(110, 32)
-        self.btn_deafen.setStyleSheet(
-            "QPushButton { "
-            "  background-color: rgba(255, 255, 255, 0.08); "
-            "  color: #dbdee1; "
-            "  border: none; "
-            "  border-radius: 6px; "
-            "  padding-left: 20px; "
-            "} "
-            "QPushButton:hover { "
-            "  background-color: rgba(255, 255, 255, 0.12); "
-            "} "
-            "QPushButton:checked { "
-            "  background-color: rgba(255, 255, 255, 0.15); "
-            "  color: #ffffff; "
-            "} "
-            "QPushButton:disabled { "
-            "  background-color: rgba(255, 255, 255, 0.05); "
-            "  color: #6d6f78; "
-            "}"
-        )
+        self.btn_deafen.setStyleSheet(button_stylesheet())
         row2.addWidget(self.btn_deafen)
 
         self.btn_share_screen = PushButton(self.tr("Share"))
@@ -143,26 +108,7 @@ class ConnectionBar(QFrame):
         self.btn_share_screen.setEnabled(False)
         self.btn_share_screen.setCheckable(True)
         self.btn_share_screen.setFixedSize(100, 32)
-        self.btn_share_screen.setStyleSheet(
-            "QPushButton { "
-            "  background-color: rgba(255, 255, 255, 0.08); "
-            "  color: #dbdee1; "
-            "  border: none; "
-            "  border-radius: 6px; "
-            "  padding-left: 20px; "
-            "} "
-            "QPushButton:hover { "
-            "  background-color: rgba(255, 255, 255, 0.12); "
-            "} "
-            "QPushButton:checked { "
-            "  background-color: #c0392b; "
-            "  color: #ffffff; "
-            "} "
-            "QPushButton:disabled { "
-            "  background-color: rgba(255, 255, 255, 0.05); "
-            "  color: #6d6f78; "
-            "}"
-        )
+        self.btn_share_screen.setStyleSheet(button_stylesheet())
         self.btn_share_screen.toggled.connect(self._on_share_screen_toggled)
         row2.addWidget(self.btn_share_screen)
 
@@ -171,22 +117,7 @@ class ConnectionBar(QFrame):
         self.btn_audio_share.setIconSize(QSize(16, 16))
         self.btn_audio_share.setEnabled(False)
         self.btn_audio_share.setFixedSize(100, 32)
-        self.btn_audio_share.setStyleSheet(
-            "QPushButton { "
-            "  background-color: rgba(255, 255, 255, 0.08); "
-            "  color: #dbdee1; "
-            "  border: none; "
-            "  border-radius: 6px; "
-            "  padding-left: 20px; "
-            "} "
-            "QPushButton:hover { "
-            "  background-color: rgba(255, 255, 255, 0.12); "
-            "} "
-            "QPushButton:disabled { "
-            "  background-color: rgba(255, 255, 255, 0.05); "
-            "  color: #6d6f78; "
-            "}"
-        )
+        self.btn_audio_share.setStyleSheet(button_stylesheet())
         self.btn_audio_share.clicked.connect(self._on_audio_share_click)
         row2.addWidget(self.btn_audio_share)
 
@@ -243,9 +174,9 @@ class ConnectionBar(QFrame):
         self.btn_audio_share.setEnabled(connected)
 
         if connected:
-            self.status_dot.setStyleSheet("color: #2ecc71; font-size: 16px;")
+            self.status_dot.setStyleSheet(status_dot_stylesheet(True))
         else:
-            self.status_dot.setStyleSheet("color: #e74c3c; font-size: 16px;")
+            self.status_dot.setStyleSheet(status_dot_stylesheet(False))
             self.lbl_latency.setText(self.tr("Latency: --"))
             self.btn_share_screen.setChecked(False)
             self.set_audio_sharing(False)
@@ -301,22 +232,7 @@ class ConnectionBar(QFrame):
             )
         else:
             self.btn_audio_share.setText(self.tr("Audio"))
-            self.btn_audio_share.setStyleSheet(
-                "QPushButton { "
-                "  background-color: rgba(255, 255, 255, 0.08); "
-                "  color: #dbdee1; "
-                "  border: none; "
-                "  border-radius: 6px; "
-                "  padding-left: 20px; "
-                "} "
-                "QPushButton:hover { "
-                "  background-color: rgba(255, 255, 255, 0.12); "
-                "} "
-                "QPushButton:disabled { "
-                "  background-color: rgba(255, 255, 255, 0.05); "
-                "  color: #6d6f78; "
-                "}"
-            )
+            self.btn_audio_share.setStyleSheet(button_stylesheet())
 
     @pyqtSlot(bool)
     def set_sharing(self, sharing):
@@ -337,3 +253,12 @@ class ConnectionBar(QFrame):
         if not username:
             username = "User"
         self.connect_requested.emit(host, port, username, "")
+
+    def refresh_theme(self):
+        self.btn_mute.setStyleSheet(button_stylesheet())
+        self.btn_deafen.setStyleSheet(button_stylesheet())
+        self.btn_share_screen.setStyleSheet(button_stylesheet())
+        if not self.btn_audio_share.property("sharing"):
+            self.btn_audio_share.setStyleSheet(button_stylesheet())
+        self.status_dot.setStyleSheet(
+            status_dot_stylesheet(self._connected))

@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QWidget, QLabel,
     QScrollArea, QSizePolicy, QFrame, QApplication,
 )
+from theme_manager import ThemeManager
 
 if getattr(_sys, 'frozen', False):
     _WF_LOG = os.path.join(os.path.dirname(_sys.executable), "voice_waveform_debug.log")
@@ -509,3 +510,11 @@ class VoiceWaveformPanel(QFrame):
             self._info_label.setText(self.tr("{}  |  {} online").format(self._channel_name, user_count))
         else:
             self._info_label.setText("")
+
+    def refresh_theme(self):
+        tm = ThemeManager.instance()
+        pal = tm.palette()
+        self._info_label.setStyleSheet(f"color: {pal['text_muted']}; background: transparent;")
+        self._empty_label.setStyleSheet(f"color: {pal['text_muted']}; background: transparent; padding: 20px;")
+        for row in self._user_rows.values():
+            row._status_label.setStyleSheet(f"color: {pal['text_muted']}; background: transparent;")

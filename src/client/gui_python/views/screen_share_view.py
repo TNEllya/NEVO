@@ -5,6 +5,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QFrame, QLabel, QWidget, QSizePolicy, QScrollArea,
 )
 from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QFont, QLinearGradient
+from theme_manager import ThemeManager, video_area_stylesheet, overlay_stylesheet
 
 
 SHARER_TIMEOUT = 3.0
@@ -73,7 +74,7 @@ class ScreenShareView(QFrame):
         inner_layout.addWidget(title_bar)
 
         self._video_area = QFrame()
-        self._video_area.setStyleSheet("background-color: #2b2d31; border: none;")
+        self._video_area.setStyleSheet(video_area_stylesheet())
         self._video_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         video_layout = QVBoxLayout(self._video_area)
         video_layout.setContentsMargins(0, 0, 0, 0)
@@ -82,7 +83,7 @@ class ScreenShareView(QFrame):
         self._video_label = QLabel()
         self._video_label.setAlignment(Qt.AlignCenter)
         self._video_label.setMinimumSize(320, 180)
-        self._video_label.setStyleSheet("background-color: #2b2d31; border: none;")
+        self._video_label.setStyleSheet(video_area_stylesheet())
         video_layout.addWidget(self._video_label)
 
         self._placeholder = QLabel(self.tr("No active screen shares"))
@@ -98,8 +99,8 @@ class ScreenShareView(QFrame):
         self._sharer_bar = QFrame()
         self._sharer_bar.setFixedHeight(36)
         self._sharer_bar.setStyleSheet(
-            "background-color: rgba(30, 31, 34, 0.9); border: none;"
-            " border-bottom-left-radius: 12px; border-bottom-right-radius: 12px;"
+            overlay_stylesheet()
+            + " border-bottom-left-radius: 12px; border-bottom-right-radius: 12px;"
         )
         sharer_layout = QHBoxLayout(self._sharer_bar)
         sharer_layout.setContentsMargins(12, 0, 12, 0)
@@ -215,3 +216,11 @@ class ScreenShareView(QFrame):
         super().resizeEvent(event)
         if self._current_frame is not None:
             self._render_frame()
+
+    def refresh_theme(self):
+        self._video_area.setStyleSheet(video_area_stylesheet())
+        self._video_label.setStyleSheet(video_area_stylesheet())
+        self._sharer_bar.setStyleSheet(
+            overlay_stylesheet()
+            + " border-bottom-left-radius: 12px; border-bottom-right-radius: 12px;"
+        )

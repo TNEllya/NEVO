@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (
 from qfluentwidgets import (
     FluentIcon, PushButton, RoundMenu, Action,
 )
+from theme_manager import ThemeManager, channel_container_stylesheet, inner_card_stylesheet
 
 _DEBUG_LOG = os.path.join(os.path.dirname(__file__), "..", "debug.log")
 
@@ -271,7 +272,7 @@ class _ChannelCard(QFrame):
 
         card = QFrame()
         if is_current:
-            card.setStyleSheet("QFrame { background-color: #383a45; border-radius: 8px; }")
+            card.setStyleSheet(inner_card_stylesheet())
         else:
             card.setStyleSheet(
                 "QFrame { background-color: #2b2d35; border-radius: 8px; }"
@@ -393,7 +394,7 @@ class _ChannelCard(QFrame):
     def set_current(self, current: bool):
         self._is_current = current
         if current:
-            self._inner_card.setStyleSheet("QFrame { background-color: #383a45; border-radius: 8px; }")
+            self._inner_card.setStyleSheet(inner_card_stylesheet())
         else:
             self._inner_card.setStyleSheet(
                 "QFrame { background-color: #2b2d35; border-radius: 8px; }"
@@ -453,7 +454,7 @@ class ChannelTreeView(QFrame):
         )
 
         self._container = QWidget()
-        self._container.setStyleSheet("background-color: #2b2d31;")
+        self._container.setStyleSheet(channel_container_stylesheet())
         self._layout = QVBoxLayout(self._container)
         self._layout.setContentsMargins(6, 8, 6, 8)
         self._layout.setSpacing(4)
@@ -561,3 +562,8 @@ class ChannelTreeView(QFrame):
     def set_local_muted(self, user_id: int, muted: bool):
         for card in self._channel_cards:
             card.set_local_muted(user_id, muted)
+
+    def refresh_theme(self):
+        self._container.setStyleSheet(channel_container_stylesheet())
+        for card in self._channel_cards:
+            card._inner_card.setStyleSheet(inner_card_stylesheet())

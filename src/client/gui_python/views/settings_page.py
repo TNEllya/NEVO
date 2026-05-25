@@ -8,6 +8,7 @@ from qfluentwidgets import (
 
 from audio_manager import AudioManager, InputMode
 from avatar_manager import AvatarManager
+from theme_manager import ThemeManager, THEME_DARK, THEME_LIGHT, THEME_SYSTEM
 import i18n
 
 
@@ -54,6 +55,7 @@ class SettingsPage(QFrame):
         layout.addWidget(title)
 
         layout.addWidget(self._create_avatar_card())
+        layout.addWidget(self._create_theme_card())
         layout.addWidget(self._create_input_card())
         layout.addWidget(self._create_input_mode_card())
         layout.addWidget(self._create_output_card())
@@ -424,6 +426,54 @@ class SettingsPage(QFrame):
         self._add_row_to_card(card, desc_row)
 
         return card
+
+    def _create_theme_card(self) -> HeaderCardWidget:
+        card = HeaderCardWidget(self)
+        card.setTitle(self.tr("Theme"))
+
+        row1 = QHBoxLayout()
+        row1.setContentsMargins(16, 8, 16, 0)
+        row1.addWidget(StrongBodyLabel(self.tr("Appearance:")))
+        self.combo_theme = ComboBox()
+        self.combo_theme.setMinimumWidth(300)
+        self.combo_theme.addItem(self.tr("Light"), userData=THEME_LIGHT)
+        self.combo_theme.addItem(self.tr("Dark"), userData=THEME_DARK)
+        self.combo_theme.addItem(self.tr("Follow System"), userData=THEME_SYSTEM)
+
+        tm = ThemeManager.instance()
+        current = tm.mode
+        for i in range(self.combo_theme.count()):
+            if self.combo_theme.itemData(i) == current:
+                self.combo_theme.setCurrentIndex(i)
+                break
+
+        self.combo_theme.currentIndexChanged.connect(self._on_theme_changed)
+        row1.addWidget(self.combo_theme, 1)
+        self._add_row_to_card(card, row1)
+
+        desc_row = QHBoxLayout()
+        desc_row.setContentsMargins(16, 4, 16, 8)
+        desc = CaptionLabel(
+            self.tr(
+                "Light: Use light color scheme. "
+                "Dark: Use dark color scheme. "
+                "Follow System: Automatically switch based on your OS settings."
+            )
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: gray;")
+        desc_row.addWidget(desc)
+        self._add_row_to_card(card, desc_row)
+
+        return card
+
+    def _on_theme_changed(self, index):
+        if index < 0:
+            return
+        mode = self.combo_theme.itemData(index)
+        if mode:
+            tm = ThemeManager.instance()
+            tm.set_mode(mode)
 
     def _create_language_card(self) -> HeaderCardWidget:
         card = HeaderCardWidget(self)
