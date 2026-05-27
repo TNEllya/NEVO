@@ -113,7 +113,17 @@ def _load_font(app: QApplication):
                 font.setPointSize(10)
                 app.setFont(font)
                 return
-    font = QFont("Microsoft YaHei UI")
+
+    if sys.platform == "darwin":
+        fallback_family = "SF Pro Text"
+        if not any(f for f in QFontDatabase().families() if f == fallback_family):
+            fallback_family = "Helvetica Neue"
+    elif sys.platform == "win32":
+        fallback_family = "Microsoft YaHei UI"
+    else:
+        fallback_family = "Noto Sans CJK SC"
+
+    font = QFont(fallback_family)
     font.setPointSize(10)
     app.setFont(font)
 

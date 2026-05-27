@@ -17,6 +17,10 @@ resources_dir = os.path.join(spec_dir, 'resources')
 if os.path.isdir(resources_dir):
     datas.append((resources_dir, 'resources'))
 
+version_file = os.path.join(spec_dir, 'version.txt')
+if os.path.isfile(version_file):
+    datas.append((version_file, '.'))
+
 bgm_dir = os.path.abspath(os.path.join(spec_dir, '..', '..', '..', 'bgm'))
 if os.path.isdir(bgm_dir):
     datas.append((bgm_dir, 'bgm'))
@@ -24,6 +28,9 @@ if os.path.isdir(bgm_dir):
 hiddenimports = collect_submodules('qfluentwidgets')
 hiddenimports += collect_submodules('mss')
 hiddenimports += collect_submodules('av')
+hiddenimports += collect_submodules('requests')
+
+datas += collect_data_files('requests')
 
 hiddenimports += [
     'PyQt5.sip',
@@ -69,6 +76,9 @@ hiddenimports += [
     'screen_share_dialog',
     'screen_audio_capture',
     'views.screen_share_view',
+    'views.update_dialog',
+    'theme_manager',
+    'updater',
     'win32gui',
     'win32api',
     'win32con',
@@ -76,7 +86,7 @@ hiddenimports += [
 
 binaries = [
     (r'C:\vcpkg\installed\x64-windows\bin\opus.dll', '.'),
-    (r'C:\Users\yzd20\Desktop\NEVO\build\bin\Release\libsodium.dll', '.'),
+    (r'C:\Users\yzd20\Desktop\NEVO\test\server\libsodium.dll', '.'),
 ]
 
 a = Analysis(

@@ -137,19 +137,35 @@ class VideoEngine:
         except Exception as e:
             _vlog_exc(e)
 
+    @staticmethod
+    def _create_dualstack_udp(rcvbuf=512 * 1024):
+        try:
+            sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf)
+            sock.settimeout(1.0)
+            sock.bind(("::", 0))
+            return sock
+        except Exception:
+            pass
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf)
+            sock.settimeout(1.0)
+            sock.bind(("0.0.0.0", 0))
+            return sock
+        except Exception:
+            return None
+
     def pre_create_udp_socket(self):
         if self._udp_sock is not None:
             return True
-        try:
-            self._udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self._udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 512 * 1024)
-            self._udp_sock.settimeout(1.0)
-            self._udp_sock.bind(("0.0.0.0", 0))
+        self._udp_sock = self._create_dualstack_udp(512 * 1024)
+        if self._udp_sock:
             _vlog(f"[RECV] pre_create_udp_socket SUCCESS: port={self.local_udp_port}")
             return True
-        except Exception as e:
-            _vlog_exc(f"[RECV] pre_create_udp_socket FAILED: {e}")
-            self._udp_sock = None
+        else:
+            _vlog("[RECV] pre_create_udp_socket FAILED")
             return False
 
     @property

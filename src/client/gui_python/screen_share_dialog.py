@@ -6,11 +6,24 @@ from qfluentwidgets import (
 )
 
 from screen_capture import ScreenCapture, SOURCE_SCREEN, SOURCE_WINDOW
-
+import sys
 
 AUDIO_NONE = 0
 AUDIO_SYSTEM = 1
 AUDIO_APPLICATION = 2
+
+
+def _audio_source_label(audio_index, parent=None):
+    if audio_index == AUDIO_NONE:
+        return parent.tr("No Audio") if parent else "No Audio"
+    elif audio_index == AUDIO_SYSTEM:
+        return parent.tr("System Audio") if parent else "System Audio"
+    elif audio_index == AUDIO_APPLICATION:
+        if sys.platform == "darwin":
+            return parent.tr("Application Audio (requires BlackHole)") if parent else "Application Audio (requires BlackHole)"
+        else:
+            return parent.tr("Application Audio (Windows only)") if parent else "Application Audio (Windows only)"
+    return ""
 
 
 class ScreenShareDialog(Dialog):
@@ -39,9 +52,9 @@ class ScreenShareDialog(Dialog):
 
         self.audio_combo = ComboBox()
         self.audio_combo.addItems([
-            self.tr("No Audio"),
-            self.tr("System Audio"),
-            self.tr("Application Audio (Windows only)"),
+            _audio_source_label(AUDIO_NONE, parent),
+            _audio_source_label(AUDIO_SYSTEM, parent),
+            _audio_source_label(AUDIO_APPLICATION, parent),
         ])
         self.audio_combo.currentIndexChanged.connect(self._on_audio_changed)
         layout.addWidget(self.audio_combo)

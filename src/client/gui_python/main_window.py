@@ -35,7 +35,6 @@ from views.server_quick_access import ServerQuickAccessPanel
 from per_user_volume import PerUserVolumeManager, VolumeSliderDialog
 from audio_share_engine import AudioShareEngine
 from updater import Updater, UpdateState
-from views.update_dialog import UpdateDialog
 from theme_manager import ThemeManager, card_stylesheet, scroll_stylesheet
 import join_sound
 import i18n
@@ -196,7 +195,6 @@ class MainWindow(FluentWindow):
 
         self.updater = Updater()
         self.updater.set_callbacks(on_state_changed=self._on_updater_state_changed)
-        self._update_dialog = None
 
         self._setup_ui()
         self._setup_callbacks()
@@ -294,12 +292,11 @@ class MainWindow(FluentWindow):
         self._central_widget = central
 
         # Settings page
-        self.settings_page = SettingsPage(self.audio_manager, self.avatar_manager)
+        self.settings_page = SettingsPage(self.audio_manager, self.avatar_manager,
+                                          updater=self.updater)
         self.settings_page.setObjectName("settingsPage")
 
-        # Server status page
-        self.server_status = ServerStatusWidget()
-        self.server_status.setObjectName("serverStatusPage")
+
 
     def _setup_navigation(self):
         self.addSubInterface(
@@ -313,13 +310,6 @@ class MainWindow(FluentWindow):
             self.screen_share_view,
             FluentIcon.VIDEO,
             self.tr("Screen Share"),
-            NavigationItemPosition.TOP,
-        )
-
-        self.addSubInterface(
-            self.server_status,
-            FluentIcon.INFO,
-            self.tr("Server Status"),
             NavigationItemPosition.TOP,
         )
 
@@ -337,16 +327,6 @@ class MainWindow(FluentWindow):
             NavigationItemPosition.BOTTOM,
         )
 
-        self.navigationInterface.addItem(
-            "update",
-            FluentIcon.SYNC,
-            self.tr("Check Update"),
-            onClick=self._show_update_dialog,
-            position=NavigationItemPosition.BOTTOM,
-            selectable=False,
-        )
-
-        # Language switcher at bottom
         self.navigationInterface.addSeparator()
         self.navigationInterface.addItem(
             "language",
@@ -1207,22 +1187,13 @@ class MainWindow(FluentWindow):
 
     # ---- Update ----
 
-    def _show_update_dialog(self):
-        if self._update_dialog is None or not self._update_dialog.isVisible():
-            self._update_dialog = UpdateDialog(self.updater, self)
-            self._update_dialog.check_on_open()
-            self._update_dialog.show()
-        else:
-            self._update_dialog.raise_()
-            self._update_dialog.activateWindow()
-
     def _on_updater_state_changed(self, old_state, new_state):
         if new_state == UpdateState.DOWNLOAD_AVAILABLE:
             info = self.updater.latest_info
             if info:
                 InfoBar.info(
                     self.tr("Update Available"),
-                    self.tr("NEVO v{} is available. Click 'Check Update' to download.").format(info.version),
+                    self.tr("NEVO v{} is available. Go to Settings → Software Update to download.").format(info.version),
                     parent=self,
                     position=InfoBarPosition.TOP,
                     duration=5000,

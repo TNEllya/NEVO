@@ -191,23 +191,14 @@ ServerConfig ServerConfig::fromArgs(int argc, char* argv[]) {
     ServerConfig config;
     std::string configPath;
 
-    // First pass: look for --config to load the JSON file early
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if ((arg == "--config" || arg == "-c") && i + 1 < argc) {
+
+        if (arg == "--help" || arg == "-h") {
+            exit(0);
+        } else if ((arg == "--config" || arg == "-c") && i + 1 < argc) {
             configPath = argv[++i];
             config.loadFromFile(configPath);
-        }
-    }
-
-    // Second pass: apply CLI overrides
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-
-        if (arg == "--config" || arg == "-c") {
-            // Already handled; skip the path argument
-            ++i;
-            continue;
         } else if (arg == "--tcp-port" && i + 1 < argc) {
             config.tcp_port = static_cast<uint16_t>(parseInt(argv[++i], config.tcp_port));
         } else if (arg == "--udp-port" && i + 1 < argc) {
@@ -218,6 +209,12 @@ ServerConfig ServerConfig::fromArgs(int argc, char* argv[]) {
             config.threads = parseInt(argv[++i], config.threads);
         } else if (arg == "--log-level" && i + 1 < argc) {
             config.log_level = argv[++i];
+        } else if (arg == "--server-name" && i + 1 < argc) {
+            config.server_name = argv[++i];
+        } else if (arg == "--max-users" && i + 1 < argc) {
+            config.max_users = parseInt(argv[++i], config.max_users);
+        } else if (arg == "--welcome-message" && i + 1 < argc) {
+            config.welcome_message = argv[++i];
         }
     }
 

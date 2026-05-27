@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QFont, QLinearGradient
 from theme_manager import ThemeManager, video_area_stylesheet, overlay_stylesheet
+from theme_manager import DARK_PALETTE
 
 
 SHARER_TIMEOUT = 3.0
@@ -27,11 +28,11 @@ class ScreenShareView(QFrame):
         self._stale_timer.start(2000)
         self.video_frame_received.connect(self._on_frame)
         self.setStyleSheet(
-            "ScreenShareView {"
-            "  background-color: #2b2d31;"
-            "  border: none;"
-            "  border-radius: 12px;"
-            "}"
+            f"ScreenShareView {{"
+            f"  background-color: {DARK_PALETTE['bg_primary']};"
+            f"  border: none;"
+            f"  border-radius: 12px;"
+            f"}}"
         )
 
     def _setup_ui(self):
@@ -41,11 +42,11 @@ class ScreenShareView(QFrame):
 
         inner = QFrame()
         inner.setStyleSheet(
-            "QFrame {"
-            "  background-color: #2b2d31;"
-            "  border: none;"
-            "  border-radius: 12px;"
-            "}"
+            f"QFrame {{"
+            f"  background-color: {DARK_PALETTE['bg_primary']};"
+            f"  border: none;"
+            f"  border-radius: 12px;"
+            f"}}"
         )
         inner_layout = QVBoxLayout(inner)
         inner_layout.setContentsMargins(0, 0, 0, 0)
@@ -54,27 +55,29 @@ class ScreenShareView(QFrame):
         title_bar = QFrame()
         title_bar.setFixedHeight(44)
         title_bar.setStyleSheet(
-            "background-color: #1e1f22;"
-            " border: none;"
-            " border-top-left-radius: 12px;"
-            " border-top-right-radius: 12px;"
+            f"background-color: {DARK_PALETTE['bg_inner_card']};"
+            f" border: none;"
+            f" border-top-left-radius: 12px;"
+            f" border-top-right-radius: 12px;"
         )
         title_layout = QHBoxLayout(title_bar)
         title_layout.setContentsMargins(16, 0, 16, 0)
 
         self._title_label = QLabel(self.tr("Screen Share"))
-        self._title_label.setStyleSheet("color: #dbdee1; font-size: 15px; font-weight: bold; border: none;")
+        self._title_label.setStyleSheet(f"color: {DARK_PALETTE['text_primary']}; font-size: 15px; font-weight: bold; border: none;")
         title_layout.addWidget(self._title_label)
 
         self._sharer_count = QLabel("")
-        self._sharer_count.setStyleSheet("color: #8b8d97; font-size: 12px; border: none;")
+        self._sharer_count.setStyleSheet(f"color: {DARK_PALETTE['text_muted']}; font-size: 12px; border: none;")
         title_layout.addWidget(self._sharer_count)
         title_layout.addStretch()
 
         inner_layout.addWidget(title_bar)
 
         self._video_area = QFrame()
-        self._video_area.setStyleSheet(video_area_stylesheet())
+        self._video_area.setStyleSheet(
+            f"background-color: {DARK_PALETTE['bg_secondary']}; border: none;"
+        )
         self._video_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         video_layout = QVBoxLayout(self._video_area)
         video_layout.setContentsMargins(0, 0, 0, 0)
@@ -83,13 +86,15 @@ class ScreenShareView(QFrame):
         self._video_label = QLabel()
         self._video_label.setAlignment(Qt.AlignCenter)
         self._video_label.setMinimumSize(320, 180)
-        self._video_label.setStyleSheet(video_area_stylesheet())
+        self._video_label.setStyleSheet(
+            f"background-color: {DARK_PALETTE['bg_secondary']}; border: none;"
+        )
         video_layout.addWidget(self._video_label)
 
         self._placeholder = QLabel(self.tr("No active screen shares"))
         self._placeholder.setAlignment(Qt.AlignCenter)
         self._placeholder.setStyleSheet(
-            "color: #8b8d97; font-size: 18px; background-color: transparent; border: none;"
+            f"color: {DARK_PALETTE['text_muted']}; font-size: 18px; background-color: transparent; border: none;"
         )
         self._placeholder.setVisible(True)
         video_layout.addWidget(self._placeholder)
@@ -106,7 +111,7 @@ class ScreenShareView(QFrame):
         sharer_layout.setContentsMargins(12, 0, 12, 0)
 
         self._sharer_id_label = QLabel("")
-        self._sharer_id_label.setStyleSheet("color: #43b581; font-size: 13px; font-weight: bold; border: none;")
+        self._sharer_id_label.setStyleSheet(f"color: {DARK_PALETTE['text_accent']}; font-size: 13px; font-weight: bold; border: none;")
         sharer_layout.addWidget(self._sharer_id_label)
         sharer_layout.addStretch()
 
@@ -218,9 +223,13 @@ class ScreenShareView(QFrame):
             self._render_frame()
 
     def refresh_theme(self):
-        self._video_area.setStyleSheet(video_area_stylesheet())
-        self._video_label.setStyleSheet(video_area_stylesheet())
+        self._video_area.setStyleSheet(
+            f"background-color: {DARK_PALETTE['bg_secondary']}; border: none;"
+        )
+        self._video_label.setStyleSheet(
+            f"background-color: {DARK_PALETTE['bg_secondary']}; border: none;"
+        )
         self._sharer_bar.setStyleSheet(
-            overlay_stylesheet()
-            + " border-bottom-left-radius: 12px; border-bottom-right-radius: 12px;"
+            f"background-color: {DARK_PALETTE['bg_overlay']}; border: none;"
+            f" border-bottom-left-radius: 12px; border-bottom-right-radius: 12px;"
         )

@@ -151,16 +151,30 @@ class VoiceEngine:
         except Exception as e:
             _log_wf(f"[VOICE_ENGINE] _send_registration_packet EXCEPTION: {e}")
 
+    @staticmethod
+    def _create_dualstack_udp(rcvbuf=256 * 1024):
+        try:
+            sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf)
+            sock.settimeout(1.0)
+            sock.bind(("::", 0))
+            return sock
+        except Exception:
+            pass
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf)
+            sock.settimeout(1.0)
+            sock.bind(("0.0.0.0", 0))
+            return sock
+        except Exception:
+            return None
+
     def pre_create_udp_socket(self):
         if self._udp_sock is not None:
             return
-        try:
-            self._udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self._udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 256 * 1024)
-            self._udp_sock.settimeout(1.0)
-            self._udp_sock.bind(("0.0.0.0", 0))
-        except Exception:
-            self._udp_sock = None
+        self._udp_sock = self._create_dualstack_udp(256 * 1024)
 
     @property
     def local_udp_port(self):
@@ -441,13 +455,7 @@ class VoiceEngine:
     def _create_udp_socket(self):
         if self._udp_sock is not None:
             return
-        try:
-            self._udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self._udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 256 * 1024)
-            self._udp_sock.settimeout(1.0)
-            self._udp_sock.bind(("0.0.0.0", 0))
-        except Exception:
-            self._udp_sock = None
+        self._udp_sock = self._create_dualstack_udp(256 * 1024)
 
     def _close_udp_socket(self):
         if self._udp_sock:
