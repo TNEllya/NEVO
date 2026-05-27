@@ -1,0 +1,90 @@
+# ============================================================
+# NEVO VoIP Server - Pull & Run from Registry
+# ============================================================
+# Pulls pre-built image from GitHub Container Registry.
+# No local build step required.
+#
+# One-click:
+#   bash pull.sh
+#
+# Manual:
+#   docker compose -f docker-compose.pull.yml pull
+#   docker compose -f docker-compose.pull.yml up -d
+# ============================================================
+
+version: "3.8"
+
+services:
+  nevo-server:
+    image: ghcr.io/${NEVO_REPO_OWNER:-your-username}/nevo-server:${NEVO_IMAGE_TAG:-latest}
+    container_name: nevo-server
+    restart: unless-stopped
+    pull_policy: always
+
+    ports:
+      - "${NEVO_TCP_PORT:-24430}:24430/tcp"
+      - "${NEVO_UDP_PORT:-24431}:24431/udp"
+      - "${NEVO_VIDEO_UDP_PORT:-24432}:24432/udp"
+
+    volumes:
+      - nevo_data:/var/lib/nevo
+      - nevo_config:/etc/nevo
+      - ./server_config.json:/etc/nevo/server_config.json:ro
+
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+      - NEVO_SERVER_NAME=${NEVO_SERVER_NAME:-NEVO Server}
+      - NEVO_TCP_PORT=${NEVO_TCP_PORT:-24430}
+      - NEVO_UDP_PORT=${NEVO_UDP_PORT:-24431}
+      - NEVO_MAX_USERS=${NEVO_MAX_USERS:-100}
+      - NEVO_LOG_LEVEL=${NEVO_LOG_LEVEL:-info}
+      - NEVO_THREADS=${NEVO_THREADS:-4}
+
+    deploy:
+      resources:
+        limits:
+          cpus: "${NEVO_CPU_LIMIT:-2}"
+          memory: "${NEVO_MEMORY_LIMIT:-512M}"
+        reservations:
+          cpus: "0.5"
+          memory: "128M"
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+    healthcheck:
+      test: ["CMD", "nc", "-z", "-w3", "localhost", "24430"]
+      interval: 15s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+    networks:
+      - nevo-network
+
+    security_opt:
+      - no-new-privileges:true
+
+    cap_drop:
+      - ALL
+
+    cap_add:
+      - NET_BIND_SERVICE
+
+    read_only: false
+
+networks:
+  nevo-network:
+    name: nevo-network
+    driver: bridge
+
+volumes:
+  nevo_data:
+    name: nevo_data
+    driver: local
+  nevo_config:
+    name: nevo_config
+    driver: local

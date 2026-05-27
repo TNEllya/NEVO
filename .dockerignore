@@ -1,0 +1,68 @@
+# Build artifacts
+build/
+cmake-build-*/
+dist/
+*.o
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.so
+*.dylib
+
+# IDE and editor files
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# CI/CD
+.github/
+
+# Docs (not needed for build)
+docs/
+
+# Python virtual environments
+venv/
+env/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Test files
+tests/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and data
+*.log
+*.db
+nevo_server.db
+
+# Docker files (not needed inside container)
+Dockerfile
+docker-compose.yml
+.dockerignore
+docker-entrypoint.sh
+
+# Mobile
+mobile/
+
+# Website
+website/
+
+# Installer
+installer/

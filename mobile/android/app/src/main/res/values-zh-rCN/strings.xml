@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NEVO</string>
+
+    <string name="connect">连接</string>
+    <string name="disconnect">断开连接</string>
+
+    <string name="channel">频道</string>
+    <string name="channels">频道</string>
+    <string name="channel_join">加入频道</string>
+    <string name="channel_leave">离开频道</string>
+    <string name="channel_create">创建频道</string>
+    <string name="channel_delete">删除频道</string>
+    <string name="channel_rename">重命名频道</string>
+    <string name="no_channel">未选择频道</string>
+
+    <string name="mute">静音</string>
+    <string name="unmute">取消静音</string>
+    <string name="deafen">耳聋</string>
+    <string name="undeafen">取消耳聋</string>
+    <string name="ptt">按键通话</string>
+    <string name="settings">设置</string>
+
+    <string name="server_address">服务器地址</string>
+    <string name="port">端口</string>
+    <string name="username">用户名</string>
+    <string name="password">密码</string>
+
+    <string name="connected">已连接</string>
+    <string name="connecting">连接中…</string>
+    <string name="disconnected">已断开</string>
+
+    <string name="voice_channel">语音频道</string>
+    <string name="text_channel">文字频道</string>
+
+    <string name="users">用户</string>
+    <string name="users_online">{0} 在线</string>
+    <string name="no_users">无用户</string>
+    <string name="online">在线</string>
+    <string name="speaking">说话中</string>
+
+    <string name="chat">聊天</string>
+    <string name="send_message">发送消息</string>
+    <string name="type_message">输入消息…</string>
+
+    <string name="emoji">表情</string>
+    <string name="attach_file">附加文件</string>
+    <string name="attach_image">附加图片</string>
+
+    <string name="start_screen_share">开始屏幕共享</string>
+    <string name="stop_screen_share">停止屏幕共享</string>
+    <string name="watching_screen">正在观看 {0} 的屏幕</string>
+
+    <string name="admin_panel">管理面板</string>
+    <string name="kick_user">踢出用户</string>
+    <string name="ban_user">封禁用户</string>
+    <string name="move_user">移动用户</string>
+    <string name="set_admin">设为管理员</string>
+    <string name="remove_admin">取消管理员</string>
+
+    <string name="theme">主题</string>
+    <string name="theme_light">浅色</string>
+    <string name="theme_dark">深色</string>
+    <string name="theme_system">跟随系统</string>
+
+    <string name="audio_settings">音频设置</string>
+    <string name="audio_input">输入设备</string>
+    <string name="audio_output">输出设备</string>
+    <string name="audio_test">测试音频</string>
+    <string name="audio_volume">音量</string>
+    <string name="audio_input_gain">输入增益</string>
+    <string name="vad_sensitivity">语音活动检测</string>
+    <string name="noise_suppression">降噪</string>
+
+    <string name="language">语言</string>
+    <string name="about">关于</string>
+    <string name="version">版本</string>
+    <string name="ping">延迟</string>
+    <string name="packet_loss">丢包率</string>
+
+    <string name="update_available">发现新版本</string>
+    <string name="download_update">下载更新</string>
+    <string name="check_update">检查更新</string>
+    <string name="install_restart">安装并重启</string>
+    <string name="up_to_date">当前已是最新版本</string>
+
+    <string name="file_upload">上传文件</string>
+    <string name="file_download">下载文件</string>
+    <string name="file_size">{0} MB</string>
+    <string name="uploading">上传中…</string>
+
+    <string name="cancel">取消</string>
+    <string name="confirm">确认</string>
+    <string name="ok">确定</string>
+    <string name="retry">重试</string>
+    <string name="close">关闭</string>
+    <string name="search">搜索</string>
+    <string name="copy">复制</string>
+    <string name="paste">粘贴</string>
+    <string name="delete">删除</string>
+    <string name="rename">重命名</string>
+    <string name="save">保存</string>
+
+    <string name="permission_mic">语音聊天需要麦克风权限</string>
+    <string name="permission_notification">通知权限用于后台通话</string>
+    <string name="permission_grant">授予权限</string>
+
+    <string name="error_connection">连接失败</string>
+    <string name="error_auth">认证失败</string>
+    <string name="error_network">网络错误</string>
+    <string name="error_unknown">未知错误</string>
+
+    <string name="server_history">最近服务器</string>
+    <string name="quick_connect">快速连接</string>
+    <string name="add_server">添加服务器</string>
+    <string name="remove_server">移除</string>
+    <string name="server_info">服务器信息</string>
+
+    <string name="call_in_progress">通话中</string>
+    <string name="hang_up">挂断</string>
+
+    <string name="notification_channel_name">NEVO VoIP 通话</string>
+    <string name="notification_channel_desc">进行中的 VoIP 通话通知</string>
+</resources>

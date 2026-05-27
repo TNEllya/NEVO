@@ -25,6 +25,20 @@
 #endif
 
 #include <random>
+#include <fstream>
+#include <filesystem>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "iphlpapi.lib")
+#else
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#endif
 
 namespace nevo {
 
@@ -120,6 +134,16 @@ Result<void> ServerCore::initialize(const std::string& db_path) {
     }
     NEVO_LOG_WARN("server", "Server session key generated (std::random_device, libsodium not available)");
 #endif
+
+    // Derive password file path from db_path directory
+    std::filesystem::path db_dir = std::filesystem::path(db_path).parent_path();
+    if (db_dir.empty()) {
+        db_dir = ".";
+    }
+    password_file_path_ = (db_dir / "nevo_admin.dat").string();
+
+    // Load persisted admin password hash
+    loadAdminPassword();
 
     // Load SSL/TLS configuration from database
     auto ssl_enabled_str = db_->getConfig("ssl_enabled");
@@ -358,7 +382,81 @@ ServerStatusSnapshot ServerCore::getStatusSnapshot() const {
         snapshot.uptime_seconds = static_cast<uint64_t>((now - start_time_ms_) / 1000);
     }
 
+    // Collect local IP addresses
+    auto [ipv4, ipv6] = collectLocalAddresses();
+    snapshot.ipv4_address = ipv4;
+    snapshot.ipv6_address = ipv6;
+
     return snapshot;
+}
+
+std::pair<std::string, std::string> ServerCore::collectLocalAddresses() const {
+    std::string ipv4, ipv6;
+
+#ifdef _WIN32
+    ULONG family = AF_UNSPEC;
+    ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    ULONG buf_len = 15000;
+    std::vector<uint8_t> buf(buf_len);
+
+    ULONG ret = GetAdaptersAddresses(family, flags, nullptr,
+                                     reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buf.data()), &buf_len);
+    if (ret == ERROR_BUFFER_OVERFLOW) {
+        buf.resize(buf_len);
+        ret = GetAdaptersAddresses(family, flags, nullptr,
+                                   reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buf.data()), &buf_len);
+    }
+    if (ret != ERROR_SUCCESS) {
+        return {ipv4, ipv6};
+    }
+
+    auto* adapter = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buf.data());
+    for (; adapter != nullptr; adapter = adapter->Next) {
+        if (adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
+        if (adapter->OperStatus != IfOperStatusUp) continue;
+
+        for (auto* unicast = adapter->FirstUnicastAddress; unicast != nullptr; unicast = unicast->Next) {
+            auto* sa = unicast->Address.lpSockaddr;
+            if (!sa) continue;
+
+            char addr_str[INET6_ADDRSTRLEN] = {};
+            if (sa->sa_family == AF_INET && ipv4.empty()) {
+                auto* sin = reinterpret_cast<sockaddr_in*>(sa);
+                inet_ntop(AF_INET, &sin->sin_addr, addr_str, sizeof(addr_str));
+                ipv4 = addr_str;
+            } else if (sa->sa_family == AF_INET6 && ipv6.empty()) {
+                auto* sin6 = reinterpret_cast<sockaddr_in6*>(sa);
+                inet_ntop(AF_INET6, &sin6->sin6_addr, addr_str, sizeof(addr_str));
+                ipv6 = addr_str;
+            }
+            if (!ipv4.empty() && !ipv6.empty()) break;
+        }
+        if (!ipv4.empty() && !ipv6.empty()) break;
+    }
+#else
+    struct ifaddrs* ifaddr = nullptr;
+    if (getifaddrs(&ifaddr) == 0) {
+        for (struct ifaddrs* ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
+            if (!ifa->ifa_addr) continue;
+            if (std::string(ifa->ifa_name) == "lo" || std::string(ifa->ifa_name).find("loopback") != std::string::npos)
+                continue;
+
+            char addr_str[INET6_ADDRSTRLEN] = {};
+            if (ifa->ifa_addr->sa_family == AF_INET && ipv4.empty()) {
+                auto* sin = reinterpret_cast<struct sockaddr_in*>(ifa->ifa_addr);
+                inet_ntop(AF_INET, &sin->sin_addr, addr_str, sizeof(addr_str));
+                ipv4 = addr_str;
+            } else if (ifa->ifa_addr->sa_family == AF_INET6 && ipv6.empty()) {
+                auto* sin6 = reinterpret_cast<struct sockaddr_in6*>(ifa->ifa_addr);
+                inet_ntop(AF_INET6, &sin6->sin6_addr, addr_str, sizeof(addr_str));
+                ipv6 = addr_str;
+            }
+            if (!ipv4.empty() && !ipv6.empty()) break;
+        }
+        freeifaddrs(ifaddr);
+    }
+#endif
+    return {ipv4, ipv6};
 }
 
 std::vector<SessionSnapshot> ServerCore::getActiveSessions() const {
@@ -713,6 +811,15 @@ std::string ServerCore::serverName() const {
 }
 
 void ServerCore::setAdminPassword(const std::string& password) {
+    if (password.empty()) {
+        NEVO_LOG_INFO("server", "Admin password cleared");
+        admin_password_hash_.clear();
+        // Delete the persisted file
+        std::error_code ec;
+        std::filesystem::remove(password_file_path_, ec);
+        return;
+    }
+
 #ifdef NEVO_HAS_SODIUM
     char hashed_password[crypto_pwhash_STRBYTES];
     if (crypto_pwhash_str(hashed_password,
@@ -724,6 +831,9 @@ void ServerCore::setAdminPassword(const std::string& password) {
         return;
     }
     admin_password_hash_ = hashed_password;
+
+    // Persist encrypted hash to disk
+    saveAdminPassword();
 #else
     NEVO_LOG_ERROR("server", "Cannot set admin password: libsodium not available!");
     admin_password_hash_.clear();
@@ -734,6 +844,95 @@ void ServerCore::setAdminPassword(const std::string& password) {
 
 bool ServerCore::isAdminPasswordSet() const {
     return !admin_password_hash_.empty();
+}
+
+void ServerCore::saveAdminPassword() {
+    if (admin_password_hash_.empty()) {
+        return;
+    }
+#ifdef NEVO_HAS_SODIUM
+    static constexpr const char* APP_SECRET = "NEVO_ADMIN_VAULT_SECRET_KEY_2024_v1";
+    uint8_t key[crypto_secretbox_KEYBYTES];
+    crypto_generichash(key, sizeof(key),
+                       reinterpret_cast<const uint8_t*>(APP_SECRET), strlen(APP_SECRET),
+                       nullptr, 0);
+
+    uint8_t nonce[crypto_secretbox_NONCEBYTES];
+    randombytes_buf(nonce, sizeof(nonce));
+
+    std::vector<uint8_t> ciphertext(admin_password_hash_.size() + crypto_secretbox_MACBYTES);
+    crypto_secretbox_easy(ciphertext.data(),
+                          reinterpret_cast<const uint8_t*>(admin_password_hash_.data()),
+                          admin_password_hash_.size(),
+                          nonce, key);
+
+    std::ofstream ofs(password_file_path_, std::ios::binary);
+    if (!ofs) {
+        NEVO_LOG_ERROR("server", "Failed to open admin password file for writing: {}", password_file_path_);
+        return;
+    }
+    ofs.write(reinterpret_cast<const char*>(nonce), sizeof(nonce));
+    ofs.write(reinterpret_cast<const char*>(ciphertext.data()), ciphertext.size());
+    ofs.close();
+
+    NEVO_LOG_INFO("server", "Admin password encrypted and saved to {}", password_file_path_);
+#else
+    NEVO_LOG_ERROR("server", "Cannot save admin password: libsodium not available!");
+#endif
+}
+
+void ServerCore::loadAdminPassword() {
+#ifdef NEVO_HAS_SODIUM
+    std::error_code ec;
+    if (!std::filesystem::exists(password_file_path_, ec)) {
+        NEVO_LOG_INFO("server", "No persisted admin password file found at {}", password_file_path_);
+        return;
+    }
+
+    std::ifstream ifs(password_file_path_, std::ios::binary);
+    if (!ifs) {
+        NEVO_LOG_ERROR("server", "Failed to open admin password file for reading: {}", password_file_path_);
+        return;
+    }
+
+    // Read nonce (24 bytes)
+    uint8_t nonce[crypto_secretbox_NONCEBYTES];
+    ifs.read(reinterpret_cast<char*>(nonce), sizeof(nonce));
+    if (ifs.gcount() != static_cast<std::streamsize>(sizeof(nonce))) {
+        NEVO_LOG_ERROR("server", "Admin password file is corrupted (nonce too short)");
+        return;
+    }
+
+    // Read the rest (ciphertext)
+    std::vector<uint8_t> ciphertext(
+        (std::istreambuf_iterator<char>(ifs)),
+        std::istreambuf_iterator<char>());
+    ifs.close();
+
+    if (ciphertext.size() < crypto_secretbox_MACBYTES) {
+        NEVO_LOG_ERROR("server", "Admin password file is corrupted (ciphertext too short)");
+        return;
+    }
+
+    static constexpr const char* APP_SECRET = "NEVO_ADMIN_VAULT_SECRET_KEY_2024_v1";
+    uint8_t key[crypto_secretbox_KEYBYTES];
+    crypto_generichash(key, sizeof(key),
+                       reinterpret_cast<const uint8_t*>(APP_SECRET), strlen(APP_SECRET),
+                       nullptr, 0);
+
+    std::vector<uint8_t> plaintext(ciphertext.size() - crypto_secretbox_MACBYTES);
+    if (crypto_secretbox_open_easy(plaintext.data(),
+                                   ciphertext.data(), ciphertext.size(),
+                                   nonce, key) != 0) {
+        NEVO_LOG_ERROR("server", "Failed to decrypt admin password file — data may be tampered or corrupted");
+        return;
+    }
+
+    admin_password_hash_.assign(reinterpret_cast<const char*>(plaintext.data()), plaintext.size());
+    NEVO_LOG_INFO("server", "Admin password loaded from encrypted file {}", password_file_path_);
+#else
+    NEVO_LOG_INFO("server", "Cannot load admin password: libsodium not available");
+#endif
 }
 
 ServerConfig ServerCore::config() const {
@@ -750,26 +949,51 @@ ServerConfig ServerCore::config() const {
 
 boost::asio::awaitable<void> ServerCore::acceptTcpLoop() {
 
-    // Open TCP acceptor
-    boost::asio::ip::tcp::endpoint tcp_endpoint(
-        boost::asio::ip::tcp::v4(), tcp_port_);
-
     boost::system::error_code ec;
-    tcp_acceptor_.open(tcp_endpoint.protocol(), ec);
+
+    tcp_acceptor_.open(boost::asio::ip::tcp::v6(), ec);
+    if (!ec) {
+        boost::asio::ip::v6_only v6_only_opt(false);
+        tcp_acceptor_.set_option(v6_only_opt, ec);
+        if (ec) {
+            NEVO_LOG_WARN("server", "Failed to set IPV6_V6ONLY=0: {}", ec.message());
+            ec.clear();
+        }
+
+        tcp_acceptor_.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true), ec);
+
+        boost::asio::ip::tcp::endpoint tcp_endpoint(
+            boost::asio::ip::tcp::v6(), tcp_port_);
+        tcp_acceptor_.bind(tcp_endpoint, ec);
+        if (!ec) {
+            NEVO_LOG_INFO("server", "TCP acceptor listening on port {} (dual-stack)", tcp_port_);
+            goto start_accept;
+        }
+        NEVO_LOG_WARN("server", "IPv6 TCP bind failed ({}), falling back to IPv4", ec.message());
+        tcp_acceptor_.close(ec);
+    } else {
+        NEVO_LOG_WARN("server", "IPv6 TCP not available ({}), falling back to IPv4", ec.message());
+    }
+
+    tcp_acceptor_.open(boost::asio::ip::tcp::v4(), ec);
     if (ec) {
         NEVO_LOG_ERROR("server", "Failed to open TCP acceptor: {}", ec.message());
         co_return;
     }
 
-    // Set SO_REUSEADDR option
     tcp_acceptor_.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true), ec);
 
-    tcp_acceptor_.bind(tcp_endpoint, ec);
-    if (ec) {
-        NEVO_LOG_ERROR("server", "Failed to bind TCP acceptor: {}", ec.message());
-        co_return;
+    {
+        boost::asio::ip::tcp::endpoint tcp_endpoint(
+            boost::asio::ip::tcp::v4(), tcp_port_);
+        tcp_acceptor_.bind(tcp_endpoint, ec);
+        if (ec) {
+            NEVO_LOG_ERROR("server", "Failed to bind TCP acceptor: {}", ec.message());
+            co_return;
+        }
     }
 
+start_accept:
     tcp_acceptor_.listen(boost::asio::ip::tcp::acceptor::max_listen_connections, ec);
     if (ec) {
         NEVO_LOG_ERROR("server", "Failed to listen on TCP acceptor: {}", ec.message());

@@ -46,31 +46,52 @@ boost::system::error_code UdpSocket::bind(uint16_t local_port)
 {
     boost::system::error_code ec;
 
-    // 打开 UDP socket（IPv4）
+    socket_.open(boost::asio::ip::udp::v6(), ec);
+    if (!ec) {
+        boost::asio::ip::v6_only v6_only_opt(false);
+        socket_.set_option(v6_only_opt, ec);
+        if (ec) {
+            NEVO_LOG_WARN("network", "Failed to set IPV6_V6ONLY=0: {}", ec.message());
+            ec.clear();
+        }
+
+        auto bind_endpoint = boost::asio::ip::udp::endpoint(
+            boost::asio::ip::udp::v6(), local_port);
+        socket_.bind(bind_endpoint, ec);
+        if (!ec) {
+            NEVO_LOG_INFO("network", "UDP socket bound to port {} (dual-stack)", local_port);
+            goto configure_socket;
+        }
+        NEVO_LOG_WARN("network", "IPv6 UDP bind failed ({}), falling back to IPv4", ec.message());
+        socket_.close(ec);
+    } else {
+        NEVO_LOG_WARN("network", "IPv6 UDP not available ({}), falling back to IPv4", ec.message());
+    }
+
     socket_.open(boost::asio::ip::udp::v4(), ec);
     if (ec) {
         NEVO_LOG_ERROR("network", "Failed to open UDP socket: {}", ec.message());
         return ec;
     }
 
-    // 绑定到指定端口（0 表示 OS 自动分配）
-    auto bind_endpoint = boost::asio::ip::udp::endpoint(
-        boost::asio::ip::udp::v4(), local_port);
-    socket_.bind(bind_endpoint, ec);
-    if (ec) {
-        NEVO_LOG_ERROR("network", "Failed to bind UDP socket to port {}: {}",
-                       local_port, ec.message());
-        socket_.close();
-        return ec;
+    {
+        auto bind_endpoint = boost::asio::ip::udp::endpoint(
+            boost::asio::ip::udp::v4(), local_port);
+        socket_.bind(bind_endpoint, ec);
+        if (ec) {
+            NEVO_LOG_ERROR("network", "Failed to bind UDP socket to port {}: {}",
+                           local_port, ec.message());
+            socket_.close();
+            return ec;
+        }
     }
 
-    // 设置 socket 缓冲区大小（语音场景需要较大缓冲区减少丢包）
+configure_socket:
     boost::asio::socket_base::receive_buffer_size recv_buf_opt(256 * 1024);
     socket_.set_option(recv_buf_opt, ec);
     if (ec) {
         NEVO_LOG_WARN("network", "Failed to set UDP receive buffer size: {}",
                       ec.message());
-        // 非致命错误，继续执行
     }
 
     open_.store(true);

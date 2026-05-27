@@ -1,0 +1,1001 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NEVO 项目技术架构文档</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-secondary: #8b949e;
+    --accent: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d2991d;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --max-width: 1200px;
+    --sidebar-w: 260px;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre { font-family: "JetBrains Mono", "Fira Code", Consolas, monospace; }
+  code { background: var(--bg-tertiary); padding: 2px 6px; border-radius: 4px; font-size: 0.88em; }
+  pre {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    overflow-x: auto;
+    font-size: 0.85em;
+    line-height: 1.6;
+    margin: 16px 0;
+  }
+  pre code { background: none; padding: 0; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 0.92em;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 10px 14px;
+    text-align: left;
+  }
+  th {
+    background: var(--bg-tertiary);
+    font-weight: 600;
+    color: var(--accent);
+  }
+  tr:nth-child(even) { background: var(--bg-secondary); }
+
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0;
+    width: var(--sidebar-w);
+    height: 100vh;
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    padding: 24px 0 16px;
+    overflow-y: auto;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+  }
+  .sidebar-title {
+    font-size: 1.15em;
+    font-weight: 700;
+    color: var(--accent);
+    padding: 0 20px 16px;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-nav { list-style: none; padding: 8px 0; flex: 1; }
+  .sidebar-nav li { margin: 1px 0; }
+  .sidebar-nav a {
+    display: block;
+    padding: 8px 20px;
+    font-size: 0.88em;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s;
+    border-left: 3px solid transparent;
+    user-select: none;
+  }
+  .sidebar-nav a:hover {
+    color: var(--text);
+    background: var(--bg-tertiary);
+    text-decoration: none;
+  }
+  .sidebar-nav a.active {
+    color: var(--accent);
+    background: var(--bg-tertiary);
+    border-left-color: var(--accent);
+    font-weight: 600;
+  }
+  .sidebar-nav a.sub {
+    padding-left: 40px;
+    font-size: 0.83em;
+    color: var(--text-secondary);
+  }
+  .sidebar-footer {
+    padding: 12px 20px;
+    border-top: 1px solid var(--border);
+    font-size: 0.8em;
+    color: var(--text-secondary);
+  }
+
+  .content-area {
+    margin-left: var(--sidebar-w);
+    max-width: var(--max-width);
+    padding: 40px 48px 80px;
+  }
+  .content-area h1 {
+    font-size: 2.2em;
+    border-bottom: 2px solid var(--accent);
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+    color: #fff;
+  }
+  .content-area h2 {
+    font-size: 1.55em;
+    margin: 0 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    color: var(--accent);
+  }
+  .content-area h3 {
+    font-size: 1.2em;
+    margin: 32px 0 12px;
+    color: var(--accent-green);
+  }
+  .content-area h4 {
+    font-size: 1.05em;
+    margin: 20px 0 8px;
+    color: var(--text);
+  }
+  .content-area p { margin: 10px 0; }
+  .content-area ul, .content-area ol { margin: 8px 0 8px 24px; }
+  .content-area li { margin: 4px 0; }
+  .content-area img, .content-area svg { max-width: 100%; height: auto; }
+
+  .meta {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin: 16px 0 32px;
+    font-size: 0.9em;
+    color: var(--text-secondary);
+  }
+  .meta-item { display: flex; align-items: center; gap: 6px; }
+  .meta-label { font-weight: 600; color: var(--text); }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 0.82em;
+    font-weight: 600;
+  }
+  .badge-cpp { background: #00599c33; color: #659ad2; border: 1px solid #659ad244; }
+  .badge-py { background: #4584b633; color: #ffde57; border: 1px solid #ffde5744; }
+  .badge-kt { background: #7f52ff33; color: #b799ff; border: 1px solid #b799ff44; }
+  .badge-swift { background: #f0513833; color: #fc6f53; border: 1px solid #fc6f5344; }
+  .badge-js { background: #f7df1e33; color: #f0db4f; border: 1px solid #f0db4f44; }
+  .badge-html { background: #e34c2633; color: #f06529; border: 1px solid #f0652944; }
+  .badge-sql { background: #003b5733; color: #8dd8f8; border: 1px solid #8dd8f844; }
+  .badge-cmake { background: #064f8c33; color: #5ba0d0; border: 1px solid #5ba0d044; }
+  .badge-docker { background: #2496ed33; color: #6cb8f2; border: 1px solid #6cb8f244; }
+
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--bg-secondary);
+    padding: 12px 16px;
+    border-radius: 0 6px 6px 0;
+    margin: 16px 0;
+  }
+  .callout.tip { border-left-color: var(--accent-green); }
+  .callout.warn { border-left-color: var(--accent-orange); }
+  .callout.error { border-left-color: var(--accent-red); }
+  .callout-title { font-weight: 700; margin-bottom: 4px; }
+
+  .diagram-box {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    margin: 20px 0;
+    overflow-x: auto;
+  }
+
+  .page-section {
+    display: none;
+    animation: fadeSlide 0.25s ease;
+  }
+  .page-section.active { display: block; }
+  .page-header { display: block; }
+
+  @keyframes fadeSlide {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .page-indicator {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    font-size: 0.82em;
+    color: var(--text-secondary);
+  }
+  .page-indicator span {
+    background: var(--bg-tertiary);
+    padding: 4px 10px;
+    border-radius: 4px;
+  }
+
+  .footer {
+    margin-left: var(--sidebar-w);
+    max-width: var(--max-width);
+    padding: 20px 48px;
+    border-top: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-size: 0.85em;
+  }
+
+  .mobile-toggle {
+    display: none;
+    position: fixed;
+    top: 12px; left: 12px;
+    z-index: 200;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 1.2em;
+  }
+
+  @media (max-width: 900px) {
+    .sidebar { transform: translateX(-100%); transition: transform 0.3s ease; }
+    .sidebar.open { transform: translateX(0); }
+    .content-area { margin-left: 0; padding: 60px 20px 60px; }
+    .footer { margin-left: 0; padding: 20px; }
+    .content-area h1 { font-size: 1.6em; }
+    .content-area h2 { font-size: 1.3em; }
+    .mobile-toggle { display: block; }
+    .page-indicator { margin-top: 8px; }
+  }
+  @media (min-width: 901px) {
+    .sidebar-overlay { display: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<button class="mobile-toggle" id="mobile-toggle" aria-label="菜单" title="菜单">☰</button>
+
+<nav class="sidebar" id="sidebar" aria-label="子页导航">
+  <div class="sidebar-title">📋 NEVO 文档</div>
+  <ul class="sidebar-nav">
+    <li><a data-page="home" class="active">🏠 首页概览</a></li>
+    <li><a data-page="overview">1. 项目概述</a></li>
+    <li><a data-page="architecture">2. 技术架构</a></li>
+    <li><a data-page="modules">3. 功能模块说明</a></li>
+    <li><a data-page="pages">4. 页面结构设计</a></li>
+    <li><a data-page="flows">5. 交互流程</a></li>
+    <li><a data-page="responsive">6. 响应式设计规范</a></li>
+    <li><a data-page="performance">7. 性能优化策略</a></li>
+    <li><a data-page="compatibility">8. 浏览器兼容性</a></li>
+    <li><a data-page="issues">9. 已知问题与解决方案</a></li>
+    <li><a data-page="development">10. 开发规范与指南</a></li>
+  </ul>
+  <div class="sidebar-footer">版本 0.1.0 · 2026-05-27</div>
+</nav>
+
+<main class="content-area">
+
+<section class="page-section page-header active" data-page="home">
+  <h1>NEVO 项目技术架构文档</h1>
+  <div class="meta">
+    <div class="meta-item"><span class="meta-label">版本：</span>0.1.0</div>
+    <div class="meta-item"><span class="meta-label">更新日期：</span>2026-05-27</div>
+    <div class="meta-item"><span class="meta-label">文档类型：</span>技术架构全览</div>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:16px 0">
+    <span class="badge badge-cpp">C++20</span>
+    <span class="badge badge-py">Python 3</span>
+    <span class="badge badge-kt">Kotlin</span>
+    <span class="badge badge-swift">Swift</span>
+    <span class="badge badge-js">JavaScript</span>
+    <span class="badge badge-html">HTML/CSS</span>
+    <span class="badge badge-cmake">CMake</span>
+    <span class="badge badge-sql">SQLite3</span>
+    <span class="badge badge-docker">Docker</span>
+  </div>
+
+  <p style="font-size:1.1em;margin:20px 0">
+    NEVO 是一款<strong>低延迟加密 VoIP 通讯系统</strong>，采用 C++20 构建跨平台客户端/服务端架构。
+    项目支持桌面端（Windows / Linux / macOS）、移动端（Android / iOS）以及 Web 管理面板，
+    提供高质量实时语音通讯能力，具备端到端加密、NAT 穿透和可扩展频道系统。
+  </p>
+
+  <h3>📌 快速导航</h3>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin:16px 0">
+    <a data-page="overview" style="display:block;padding:16px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:all 0.15s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+      <div style="font-weight:700;color:var(--accent);margin-bottom:4px">1. 项目概述</div>
+      <div style="font-size:0.85em;color:var(--text-secondary)">核心特性、技术栈标签、项目定位</div>
+    </a>
+    <a data-page="architecture" style="display:block;padding:16px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:all 0.15s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+      <div style="font-weight:700;color:var(--accent-green);margin-bottom:4px">2. 技术架构</div>
+      <div style="font-size:0.85em;color:var(--text-secondary)">架构图、技术栈、构建系统、通信协议</div>
+    </a>
+    <a data-page="modules" style="display:block;padding:16px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:all 0.15s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+      <div style="font-weight:700;color:var(--accent-purple);margin-bottom:4px">3. 功能模块说明</div>
+      <div style="font-size:0.85em;color:var(--text-secondary)">核心/网络/客户端/服务端/UI/移动端/Web</div>
+    </a>
+    <a data-page="pages" style="display:block;padding:16px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:all 0.15s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+      <div style="font-weight:700;color:var(--accent-orange);margin-bottom:4px">4. 页面结构设计</div>
+      <div style="font-size:0.85em;color:var(--text-secondary)">Web 管理面板 &amp; 桌面客户端 UI 结构</div>
+    </a>
+    <a data-page="flows" style="display:block;padding:16px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:all 0.15s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+      <div style="font-weight:700;color:var(--accent-green);margin-bottom:4px">5. 交互流程</div>
+      <div style="font-size:0.85em;color:var(--text-secondary)">连接流程、状态机、关键场景流程</div>
+    </a>
+    <a data-page="issues" style="display:block;padding:16px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:all 0.15s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+      <div style="font-weight:700;color:var(--accent-red);margin-bottom:4px">9. 已知问题与解决方案</div>
+      <div style="font-size:0.85em;color:var(--text-secondary)">问题清单、故障排查指南</div>
+    </a>
+    <a data-page="development" style="display:block;padding:16px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:all 0.15s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+      <div style="font-weight:700;color:var(--accent);margin-bottom:4px">10. 开发规范与指南</div>
+      <div style="font-size:0.85em;color:var(--text-secondary)">代码规范、分支策略、测试、部署</div>
+    </a>
+    <a data-page="performance" style="display:block;padding:16px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:all 0.15s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+      <div style="font-weight:700;color:var(--accent-orange);margin-bottom:4px">6-8. 设计规范 &amp; 兼容性</div>
+      <div style="font-size:0.85em;color:var(--text-secondary)">响应式设计 · 性能优化 · 浏览器兼容性</div>
+    </a>
+  </div>
+</section>
+
+<section class="page-section" data-page="overview">
+  <div class="page-indicator"><span>第 1 章</span> 项目概述</div>
+  <h2>1. 项目概述</h2>
+
+  <p>
+  NEVO 是一款<strong>低延迟加密 VoIP 通讯系统</strong>，采用 C++20 构建跨平台客户端/服务端架构。项目支持桌面端（Windows / Linux / macOS）、移动端（Android / iOS）以及 Web 管理面板，提供高质量实时语音通讯能力，具备端到端加密、NAT 穿透和可扩展频道系统。
+  </p>
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:16px 0">
+    <span class="badge badge-cpp">C++20</span>
+    <span class="badge badge-py">Python 3</span>
+    <span class="badge badge-kt">Kotlin</span>
+    <span class="badge badge-swift">Swift</span>
+    <span class="badge badge-js">JavaScript</span>
+    <span class="badge badge-html">HTML/CSS</span>
+    <span class="badge badge-cmake">CMake</span>
+    <span class="badge badge-sql">SQLite3</span>
+    <span class="badge badge-docker">Docker</span>
+  </div>
+
+  <h3>核心特性</h3>
+  <table>
+    <tr><th>特性</th><th>描述</th></tr>
+    <tr><td>🎙️ 低延迟音频</td><td>miniaudio 采集/播放 + Opus 编解码器，带带内 FEC 前向纠错</td></tr>
+    <tr><td>🔐 加密语音</td><td>XChaCha20-Poly1305 AEAD 加密，自动密钥轮换</td></tr>
+    <tr><td>🌐 NAT 穿透</td><td>STUN 绑定 + TCP 回退语音隧道</td></tr>
+    <tr><td>📡 频道系统</td><td>层次化频道树 + 权限控制</td></tr>
+    <tr><td>🖥️ 跨平台桌面端</td><td>Qt 6 Widgets UI，可停靠面板</td></tr>
+    <tr><td>📊 服务端仪表盘</td><td>实时会话监控、用户管理</td></tr>
+    <tr><td>📱 移动端支持</td><td>原生 Android (Kotlin) + iOS (Swift) 客户端</td></tr>
+  </table>
+
+  <h3>项目目录结构</h3>
+  <pre><code>NEVO/
+├── cmake/                  # CMake 辅助模块
+├── proto/                  # Protobuf 协议定义
+│   └── generated/          # 手写 C++ protobuf 替换头文件
+├── 3rdparty/               # 嵌入式依赖 (miniaudio, spdlog stub)
+├── src/
+│   ├── core/               # 共享核心库 (音频/协议/权限/通用)
+│   ├── network/            # 网络库 (TCP/UDP/加密/NAT/SSL)
+│   ├── client/             # 客户端应用
+│   ├── server/             # 服务端应用
+│   └── ui/                 # 客户端 UI (Qt 6)
+├── mobile/
+│   ├── android/            # Android 客户端
+│   └── ios/                # iOS 客户端
+├── web/                    # Web 管理面板
+├── website/                # Cloudflare Pages 网站
+├── tests/                  # 单元测试 &amp; 集成测试 (GTest)
+├── docs/                   # 项目文档
+├── scripts/                # 辅助脚本
+├── installer/              # 安装包 (NSIS)
+├── bgm/                    # 背景音乐文件
+├── Dockerfile              # Docker 多阶段构建
+├── docker-compose.yml      # Docker 编排配置
+└── CMakeLists.txt          # 顶层构建配置</code></pre>
+</section>
+
+<section class="page-section" data-page="architecture">
+  <div class="page-indicator"><span>第 2 章</span> 技术架构</div>
+  <h2>2. 技术架构</h2>
+
+  <h3>2.1 整体架构图</h3>
+  <div class="diagram-box">
+<svg viewBox="0 0 900 580" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:900px">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/>
+    </marker>
+  </defs>
+  <text x="50" y="20" fill="#58a6ff" font-size="13" font-weight="700">客户端层</text>
+  <rect x="20" y="30" width="180" height="50" rx="6" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="110" y="52" fill="#c9d1d9" font-size="11" text-anchor="middle" font-weight="600">Qt 6 桌面客户端</text>
+  <text x="110" y="68" fill="#8b949e" font-size="9" text-anchor="middle">Python GUI + C++ 核心</text>
+  <rect x="220" y="30" width="180" height="50" rx="6" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="310" y="52" fill="#c9d1d9" font-size="11" text-anchor="middle" font-weight="600">移动端客户端</text>
+  <text x="310" y="68" fill="#8b949e" font-size="9" text-anchor="middle">Android (Kotlin) / iOS (Swift)</text>
+  <text x="50" y="190" fill="#3fb950" font-size="13" font-weight="700">服务端层</text>
+  <rect x="20" y="200" width="380" height="50" rx="6" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="210" y="222" fill="#c9d1d9" font-size="11" text-anchor="middle" font-weight="600">NEVO Server (C++20)</text>
+  <text x="210" y="238" fill="#8b949e" font-size="9" text-anchor="middle">Boost.Asio · SQLite3 · XChaCha20-Poly1305</text>
+  <text x="480" y="20" fill="#bc8cff" font-size="13" font-weight="700">核心库</text>
+  <rect x="460" y="30" width="200" height="100" rx="6" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="560" y="52" fill="#c9d1d9" font-size="11" text-anchor="middle" font-weight="600">nevo_core</text>
+  <text x="560" y="68" fill="#8b949e" font-size="9" text-anchor="middle">AudioEngine · Opus · JitterBuffer</text>
+  <text x="560" y="82" fill="#8b949e" font-size="9" text-anchor="middle">Mixer · VAD · Protocol</text>
+  <text x="560" y="96" fill="#8b949e" font-size="9" text-anchor="middle">Permission · Result&lt;T&gt;</text>
+  <text x="560" y="112" fill="#8b949e" font-size="9" text-anchor="middle">Logger · Types</text>
+  <rect x="680" y="30" width="200" height="100" rx="6" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="780" y="52" fill="#c9d1d9" font-size="11" text-anchor="middle" font-weight="600">nevo_network</text>
+  <text x="780" y="68" fill="#8b949e" font-size="9" text-anchor="middle">TcpConnection · UdpSocket</text>
+  <text x="780" y="82" fill="#8b949e" font-size="9" text-anchor="middle">VoiceCrypto · NatTraversal</text>
+  <text x="780" y="96" fill="#8b949e" font-size="9" text-anchor="middle">SslWrapper</text>
+  <text x="480" y="190" fill="#d2991d" font-size="13" font-weight="700">Web 管理</text>
+  <rect x="460" y="200" width="420" height="50" rx="6" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="670" y="222" fill="#c9d1d9" font-size="11" text-anchor="middle" font-weight="600">Web 管理仪表盘</text>
+  <text x="670" y="238" fill="#8b949e" font-size="9" text-anchor="middle">Python 后端 + HTML/CSS/JS 前端 · Cloudflare Pages</text>
+  <line x1="110" y1="80" x2="110" y2="200" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow)" stroke-dasharray="4,3"/>
+  <text x="125" y="145" fill="#8b949e" font-size="8">TCP :24430</text>
+  <line x1="310" y1="80" x2="310" y2="200" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow)" stroke-dasharray="4,3"/>
+  <text x="325" y="145" fill="#8b949e" font-size="8">UDP :24431</text>
+  <line x1="400" y1="225" x2="460" y2="100" stroke="#bc8cff" stroke-width="1" stroke-dasharray="3,3"/>
+  <text x="20" y="320" fill="#8b949e" font-size="11" font-weight="600">外部依赖</text>
+  <rect x="20" y="330" width="130" height="32" rx="14" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="85" y="350" fill="#c9d1d9" font-size="10" text-anchor="middle">STUN Server</text>
+  <rect x="160" y="330" width="130" height="32" rx="14" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="225" y="350" fill="#c9d1d9" font-size="10" text-anchor="middle">Docker Registry</text>
+  <rect x="300" y="330" width="130" height="32" rx="14" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="365" y="350" fill="#c9d1d9" font-size="10" text-anchor="middle">GitHub Actions</text>
+  <text x="20" y="410" fill="#8b949e" font-size="11" font-weight="600">数据存储</text>
+  <rect x="20" y="420" width="180" height="36" rx="18" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="110" y="442" fill="#c9d1d9" font-size="10" text-anchor="middle">SQLite3 持久化存储</text>
+  <line x1="210" y1="230" x2="110" y2="420" stroke="#3fb950" stroke-width="1" stroke-dasharray="3,2"/>
+  <rect x="220" y="420" width="180" height="36" rx="18" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="310" y="442" fill="#c9d1d9" font-size="10" text-anchor="middle">Docker Volume 持久化</text>
+  <text x="480" y="340" fill="#8b949e" font-size="10" font-weight="600">图例</text>
+  <line x1="480" y1="360" x2="520" y2="360" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="528" y="364" fill="#8b949e" font-size="9">客户端→服务端</text>
+  <line x1="620" y1="360" x2="660" y2="360" stroke="#3fb950" stroke-width="1" stroke-dasharray="3,2"/>
+  <text x="668" y="364" fill="#8b949e" font-size="9">数据持久化</text>
+  <line x1="760" y1="360" x2="800" y2="360" stroke="#bc8cff" stroke-width="1" stroke-dasharray="3,3"/>
+  <text x="808" y="364" fill="#8b949e" font-size="9">库依赖</text>
+</svg>
+  </div>
+
+  <h3>2.2 技术栈总览</h3>
+  <table>
+    <tr><th>层级</th><th>技术选型</th><th>版本要求</th></tr>
+    <tr><td>核心语言</td><td>C++20</td><td>MSVC 2022 / GCC 12+ / Clang 15+</td></tr>
+    <tr><td>构建系统</td><td>CMake</td><td>3.21+</td></tr>
+    <tr><td>桌面 UI</td><td>Qt 6 (Widgets)</td><td>Core + Widgets 模块</td></tr>
+    <tr><td>异步 I/O</td><td>Boost.Asio (协程)</td><td>1.80+</td></tr>
+    <tr><td>音频引擎</td><td>miniaudio + Opus</td><td>miniaudio (单头文件嵌入)</td></tr>
+    <tr><td>加密库</td><td>libsodium</td><td>XChaCha20-Poly1305 AEAD</td></tr>
+    <tr><td>通信协议</td><td>Protocol Buffers</td><td>proto3 语法 (手写头文件)</td></tr>
+    <tr><td>数据存储</td><td>SQLite3</td><td>服务端持久化</td></tr>
+    <tr><td>日志系统</td><td>spdlog</td><td>嵌入式 stub + fmt-style</td></tr>
+    <tr><td>容器化</td><td>Docker + Docker Compose</td><td>多阶段构建 (Ubuntu 22.04)</td></tr>
+    <tr><td>CI/CD</td><td>GitHub Actions</td><td>自动化构建/测试</td></tr>
+    <tr><td>测试框架</td><td>Google Test (GTest)</td><td>v1.14.0</td></tr>
+    <tr><td>包管理 (C++)</td><td>CMake FindPackage + FetchContent</td><td>自动降级 stub</td></tr>
+    <tr><td>包管理 (桌面)</td><td>Python pip + PyQt5</td><td>Python 3.8+</td></tr>
+    <tr><td>移动平台</td><td>Android Gradle KTS / iOS SPM</td><td>Android SDK 33+, iOS 15+</td></tr>
+  </table>
+
+  <h3>2.3 构建系统</h3>
+  <p>项目使用 CMake 3.21+ 统一管理所有 C++ 模块的构建。整体采用模块化设计，每个模块可独立编译并自动检测依赖，依赖缺失时优雅降级为 stub 实现。</p>
+  <h4>条件编译标志</h4>
+  <table>
+    <tr><th>宏定义</th><th>影响范围</th><th>缺失时的降级行为</th></tr>
+    <tr><td><code>NEVO_HAS_BOOST</code></td><td>网络模块</td><td>跳过网络/客户端模块 (协程 stub)</td></tr>
+    <tr><td><code>NEVO_HAS_OPUS</code></td><td>音频编解码</td><td>Opus 编解码返回静音</td></tr>
+    <tr><td><code>NEVO_HAS_SODIUM</code></td><td>语音加密</td><td>明文传输 (无加密)</td></tr>
+    <tr><td><code>NEVO_HAS_SQLITE</code></td><td>服务端数据库</td><td>纯内存模式 (无持久化)</td></tr>
+    <tr><td><code>NEVO_HAS_OPENSSL</code></td><td>TLS 传输</td><td>明文 TCP 传输</td></tr>
+    <tr><td><code>NEVO_HAS_QT</code></td><td>桌面 UI</td><td>跳过 UI 模块</td></tr>
+  </table>
+  <h4>构建命令</h4>
+  <pre><code>cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+
+cmake -B build -DBUILD_TESTING=ON
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+
+cmake -B build -DBUILD_TESTING=ON -DENABLE_COVERAGE=ON</code></pre>
+
+  <h3>2.4 通信协议</h3>
+  <p>协议层基于 Protocol Buffers proto3 语法定义，包含控制协议和语音协议两大类别。</p>
+  <table>
+    <tr><th>文件</th><th>包名</th><th>用途</th></tr>
+    <tr><td><code>proto/common.proto</code></td><td><code>nevo.common</code></td><td>用户/频道信息、状态枚举、结果码</td></tr>
+    <tr><td><code>proto/control.proto</code></td><td><code>nevo.control</code></td><td>控制消息：登入、频道管理、权限同步</td></tr>
+    <tr><td><code>proto/voice.proto</code></td><td><code>nevo.voice</code></td><td>UDP 语音包头：序列号、加密元数据、FEC</td></tr>
+  </table>
+  <h4>关键协议结构</h4>
+  <pre><code>enum ResultCode {
+    OK = 0;  ERROR_AUTH_FAILED = 2;  ERROR_PERMISSION_DENIED = 3;
+    ERROR_CHANNEL_NOT_FOUND = 4;  ERROR_TIMEOUT = 8;  ERROR_CRYPTO_ERROR = 10;
+}
+message VoicePacketHeader {
+    uint32 sequence_number = 1;   uint64 sender_id = 2;
+    uint64 channel_id = 3;        uint32 timestamp = 4;
+    bool   last_frame = 5;        uint32 fec_payload_size = 6;
+    bytes  nonce = 7;             bytes  auth_tag = 8;
+    bool   tcp_tunnel = 9;
+}</code></pre>
+</section>
+
+<section class="page-section" data-page="modules">
+  <div class="page-indicator"><span>第 3 章</span> 功能模块说明</div>
+  <h2>3. 功能模块说明</h2>
+
+  <h3>3.1 核心模块 (nevo_core)</h3>
+  <p>核心模块是所有上层模块的公共依赖，提供音频处理、协议编解码、权限系统和通用工具。</p>
+  <table>
+    <tr><th>子模块</th><th>路径</th><th>职责</th></tr>
+    <tr><td><code>audio/</code></td><td><code>src/core/audio/</code></td><td>AudioEngine、Opus 编解码、JitterBuffer、AudioMixer、VAD 静音检测</td></tr>
+    <tr><td><code>common/</code></td><td><code>src/core/common/</code></td><td>Result&lt;T&gt; 错误处理、Logger 日志、Types 基础类型</td></tr>
+    <tr><td><code>protocol/</code></td><td><code>src/core/protocol/</code></td><td>PacketCodec 协议编解码、帧编码</td></tr>
+    <tr><td><code>permission/</code></td><td><code>src/core/permission/</code></td><td>频道权限系统</td></tr>
+  </table>
+  <h4>音频处理流水线</h4>
+  <div class="diagram-box">
+<svg viewBox="0 0 800 120" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:800px">
+  <defs><marker id="arr2" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#3fb950"/></marker></defs>
+  <rect x="10" y="30" width="110" height="40" rx="6" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="65" y="55" fill="#c9d1d9" font-size="10" text-anchor="middle">mic 采集</text>
+  <line x1="120" y1="50" x2="150" y2="50" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <rect x="155" y="30" width="110" height="40" rx="6" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="210" y="55" fill="#c9d1d9" font-size="10" text-anchor="middle">Opus 编码</text>
+  <line x1="265" y1="50" x2="295" y2="50" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <rect x="300" y="30" width="110" height="40" rx="6" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="355" y="55" fill="#c9d1d9" font-size="10" text-anchor="middle">加密 + FEC</text>
+  <line x1="410" y1="50" x2="440" y2="50" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <rect x="445" y="30" width="110" height="40" rx="6" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="500" y="55" fill="#c9d1d9" font-size="10" text-anchor="middle">网络发送</text>
+  <text x="65" y="95" fill="#8b949e" font-size="8" text-anchor="middle">miniaudio</text>
+  <text x="210" y="95" fill="#8b949e" font-size="8" text-anchor="middle">48kHz</text>
+  <text x="355" y="95" fill="#8b949e" font-size="8" text-anchor="middle">XChaCha20-Poly1305</text>
+  <text x="500" y="95" fill="#8b949e" font-size="8" text-anchor="middle">UDP/TCP</text>
+</svg>
+  </div>
+
+  <h3>3.2 网络模块 (nevo_network)</h3>
+  <p>网络库提供异步网络通信基础设施，核心设计基于 Boost.Asio 协程实现高性能 I/O。</p>
+  <table>
+    <tr><th>组件</th><th>功能</th></tr>
+    <tr><td>TcpConnection</td><td>异步 TCP 连接 + 帧协议</td></tr>
+    <tr><td>UdpSocket</td><td>异步 UDP 套接字</td></tr>
+    <tr><td>VoiceCrypto</td><td>语音加密/解密，自动密钥轮换</td></tr>
+    <tr><td>NatTraversal</td><td>STUN 客户端，NAT 类型探测</td></tr>
+    <tr><td>SslWrapper</td><td>OpenSSL TLS 加密传输</td></tr>
+  </table>
+  <div class="callout tip">
+    <div class="callout-title">💡 NAT 穿透策略</div>
+    客户端首先通过 STUN 协议进行 UDP 穿透；如果 NAT 类型不允许直接 UDP 通信，系统自动启用 TCP 隧道回退（<code>tcp_tunnel = true</code>），语音数据通过已建立的 TCP 连接传输。
+  </div>
+
+  <h3>3.3 客户端模块 (nevo_client)</h3>
+  <p>桌面客户端采用 <strong>Python (PyQt5) + C++ 核心库</strong> 的混合架构。</p>
+  <table>
+    <tr><th>类</th><th>职责</th></tr>
+    <tr><td><code>ClientCore</code></td><td>客户端生命周期管理、状态机</td></tr>
+    <tr><td><code>NetworkManager</code></td><td>客户端网络协调，管理 TCP/UDP 连接</td></tr>
+    <tr><td><code>AudioInput / AudioOutput</code></td><td>音频采集和播放封装</td></tr>
+  </table>
+  <pre><code>src/client/
+├── include/nevo/client/
+│   ├── ClientCore.h          # 客户端核心接口
+│   └── NetworkManager.h      # 网络管理器接口
+├── src/
+│   ├── ClientCore.cpp        # 客户端状态机实现
+│   ├── NetworkManager.cpp    # 网络管理器实现
+│   └── AudioInput/Output     # 音频 I/O
+├── gui_python/
+│   └── main.py               # Python 桌面 GUI 入口
+└── CMakeLists.txt</code></pre>
+
+  <h3>3.4 服务端模块 (nevo_server)</h3>
+  <p>服务端是系统的核心中枢，负责用户认证、频道管理、音频路由和状态持久化。</p>
+  <table>
+    <tr><th>类</th><th>职责</th></tr>
+    <tr><td><code>ServerCore</code></td><td>服务端生命周期，启动/停止/健康检查</td></tr>
+    <tr><td><code>ClientSession</code></td><td>每个客户端的连接处理器，管理独立会话</td></tr>
+    <tr><td><code>Database</code></td><td>SQLite3 持久化层，用户数据存储</td></tr>
+  </table>
+  <h4>启动配置</h4>
+  <pre><code># CLI 方式
+./nevo_server --tcp-port 24430 --udp-port 24431 --db server.db --threads 4 --log-level info
+
+# JSON 配置文件 (server_config.json)
+{
+    "tcp_port": 24430, "udp_port": 24431, "db_path": "server.db",
+    "threads": 4, "log_level": "info", "server_name": "NEVO Server",
+    "max_users": 100, "welcome_message": "Welcome to the NEVO server!"
+}
+
+# Docker Compose 部署
+docker compose up -d</code></pre>
+
+  <h3>3.5 UI 模块 (nevo_ui)</h3>
+  <p>桌面客户端 UI 基于 <strong>Qt 6 Widgets</strong> 实现。</p>
+  <table>
+    <tr><th>组件</th><th>功能</th></tr>
+    <tr><td><code>MainWindow</code></td><td>主窗口，包含可停靠面板 (QDockWidget)</td></tr>
+    <tr><td><code>ChannelTreeModel</code></td><td>频道层次树数据模型</td></tr>
+    <tr><td><code>UserListModel</code></td><td>用户列表数据模型</td></tr>
+    <tr><td><code>ConnectionBar</code></td><td>连接状态栏和连接对话框</td></tr>
+  </table>
+
+  <h3>3.6 移动端</h3>
+  <p>移动端为原生实现，分别对应 Android (Kotlin) 和 iOS (Swift)，通过 JNI 和 C Interop 桥接 C++ 核心逻辑。</p>
+  <pre><code>mobile/android/app/src/main/java/com/nevo/voip/
+├── core/
+│   ├── protocol/
+│   │   ├── MessageType.kt         # 消息类型枚举
+│   │   └── ProtocolSerializer.kt  # 二进制序列化器
+│   └── update/
+│       └── UpdateManager.kt       # 应用更新管理器</code></pre>
+  <pre><code>mobile/ios/NevoClient/
+├── Protocol/
+│   └── WireFormat.swift           # 网络数据包格式定义
+└── Package.swift                  # Swift Package Manager 配置</code></pre>
+
+  <h3>3.7 Web 管理面板</h3>
+  <p>Web 管理面板用于远程服务器监控和管理，采用轻量级前后端分离架构。</p>
+  <table>
+    <tr><th>组件</th><th>技术</th><th>功能</th></tr>
+    <tr><td>前端</td><td>HTML5 / CSS3 / Vanilla JS</td><td>仪表盘、会话管理、频道、性能监控、系统配置</td></tr>
+    <tr><td>后端</td><td>Python (server.py)</td><td>API 服务、WebSocket 实时推送</td></tr>
+    <tr><td>网站</td><td>Cloudflare Pages</td><td>静态网站托管</td></tr>
+    <tr><td>字体</td><td>Google Fonts</td><td>Inter (UI) + JetBrains Mono (代码)</td></tr>
+  </table>
+</section>
+
+<section class="page-section" data-page="pages">
+  <div class="page-indicator"><span>第 4 章</span> 页面结构设计</div>
+  <h2>4. 页面结构设计</h2>
+  <p>Web 管理面板采用 <strong>侧边栏 + 主内容区</strong> 的经典管理后台布局。</p>
+  <h3>Web 管理面板导航结构</h3>
+  <pre><code>NEVO 管理面板
+├── 📊 仪表盘 (Dashboard)
+│   ├── 服务器运行状态概览
+│   ├── 在线用户数 / 活跃频道数
+│   └── 实时带宽/延迟图表
+├── 👥 会话管理 (Sessions)
+│   ├── 当前连接用户列表
+│   ├── 用户踢出/静音/封禁操作
+│   └── 会话详情查看
+├── 📡 频道 (Channels)
+│   ├── 层次化频道树
+│   ├── 频道创建/编辑/删除
+│   └── 权限设置
+├── 📈 性能监控 (Metrics)
+│   ├── CPU/内存/网络占用图表
+│   ├── 音频包延迟分布
+│   └── 丢包率统计
+├── ⚙️ 系统配置 (Config)
+│   ├── 服务器参数配置
+│   ├── 日志级别调整
+│   └── 配置导入/导出
+└── 🖥️ 服务器控制 (Server)
+    ├── 启动/停止/重启
+    ├── 运行日志查看
+    └── 健康检查状态</code></pre>
+  <h3>桌面客户端界面结构</h3>
+  <pre><code>NEVO 桌面客户端 (Qt 6)
+├── MainWindow
+│   ├── QDockWidget: 频道面板 (ChannelTreeModel)
+│   ├── QDockWidget: 用户面板 (UserListModel)
+│   ├── ConnectionBar: 连接状态 + 设置
+│   └── 中央内容区</code></pre>
+</section>
+
+<section class="page-section" data-page="flows">
+  <div class="page-indicator"><span>第 5 章</span> 交互流程</div>
+  <h2>5. 交互流程</h2>
+
+  <h3>客户端连接 → 语音通讯完整流程</h3>
+  <div class="diagram-box">
+<svg viewBox="0 0 900 460" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:900px">
+  <defs><marker id="arr3" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/></marker></defs>
+  <rect x="10" y="10" width="200" height="56" rx="8" fill="#0d1117" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="110" y="33" fill="#58a6ff" font-size="11" text-anchor="middle" font-weight="700">① TCP 连接 &amp; 认证</text>
+  <text x="110" y="51" fill="#8b949e" font-size="9" text-anchor="middle">建立 TLS 连接 → 发送凭证 → 验证</text>
+  <line x1="210" y1="38" x2="260" y2="38" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <rect x="265" y="10" width="200" height="56" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="365" y="33" fill="#c9d1d9" font-size="11" text-anchor="middle" font-weight="700">② 频道加入</text>
+  <text x="365" y="51" fill="#8b949e" font-size="9" text-anchor="middle">权限验证 → 频道状态同步</text>
+  <line x1="465" y1="38" x2="515" y2="38" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <rect x="520" y="10" width="200" height="56" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="620" y="33" fill="#c9d1d9" font-size="11" text-anchor="middle" font-weight="700">③ NAT 穿透尝试</text>
+  <text x="620" y="51" fill="#8b949e" font-size="9" text-anchor="middle">STUN 绑定 → UDP 打洞</text>
+  <line x1="720" y1="38" x2="750" y2="38" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <rect x="755" y="5" width="135" height="28" rx="6" fill="#3fb95022" stroke="#3fb950" stroke-width="1"/>
+  <text x="822" y="24" fill="#3fb950" font-size="10" text-anchor="middle">UDP 直连成功</text>
+  <line x1="755" y1="38" x2="620" y2="38" stroke="#3fb950" stroke-width="1" stroke-dasharray="3,2"/>
+  <rect x="755" y="38" width="135" height="28" rx="6" fill="#d2991d22" stroke="#d2991d" stroke-width="1"/>
+  <text x="822" y="57" fill="#d2991d" font-size="10" text-anchor="middle">TCP 隧道回退</text>
+  <line x1="620" y1="66" x2="620" y2="110" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <rect x="265" y="115" width="710" height="56" rx="8" fill="#0d1117" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="620" y="138" fill="#58a6ff" font-size="11" text-anchor="middle" font-weight="700">④ 实时语音通讯 (UDP/TCP 隧道)</text>
+  <text x="620" y="156" fill="#8b949e" font-size="9" text-anchor="middle">音频采集 → Opus 编码 → FEC → 加密 → 发送 | 接收 → 解密 → JitterBuffer → 解码 → 混合 → 播放</text>
+  <line x1="620" y1="171" x2="620" y2="200" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <rect x="10" y="205" width="260" height="56" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="140" y="228" fill="#c9d1d9" font-size="10" text-anchor="middle" font-weight="600">音频采集 → 编码 → 加密</text>
+  <text x="140" y="246" fill="#8b949e" font-size="8" text-anchor="middle">miniaudio → Opus (20ms 帧) → XChaCha20</text>
+  <line x1="270" y1="233" x2="310" y2="233" stroke="#8b949e" stroke-width="1" stroke-dasharray="3,2"/>
+  <rect x="315" y="205" width="260" height="56" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="445" y="228" fill="#c9d1d9" font-size="10" text-anchor="middle" font-weight="600">网络传输 → 接收 → 解密</text>
+  <text x="445" y="246" fill="#8b949e" font-size="8" text-anchor="middle">UDP 序列包 / TCP 隧道 → libsodium 解密</text>
+  <line x1="575" y1="233" x2="615" y2="233" stroke="#8b949e" stroke-width="1" stroke-dasharray="3,2"/>
+  <rect x="620" y="205" width="260" height="56" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="750" y="228" fill="#c9d1d9" font-size="10" text-anchor="middle" font-weight="600">JitterBuffer → 混音 → 播放</text>
+  <text x="750" y="246" fill="#8b949e" font-size="8" text-anchor="middle">去抖 → 多流混合 → miniaudio 播放</text>
+  <text x="10" y="310" fill="#8b949e" font-size="10" font-weight="600">会话管理流程</text>
+  <rect x="10" y="320" width="190" height="35" rx="6" fill="#f8514922" stroke="#f85149" stroke-width="1"/>
+  <text x="105" y="337" fill="#f85149" font-size="9" text-anchor="middle">用户断线 → 频道移除</text>
+  <rect x="220" y="320" width="190" height="35" rx="6" fill="#f8514922" stroke="#f85149" stroke-width="1"/>
+  <text x="315" y="337" fill="#f85149" font-size="9" text-anchor="middle">超时检测 → 自动踢出</text>
+  <line x1="400" y1="337" x2="440" y2="337" stroke="#8b949e" stroke-width="1" marker-end="url(#arr3)"/>
+  <rect x="445" y="320" width="210" height="35" rx="6" fill="#d2991d22" stroke="#d2991d" stroke-width="1"/>
+  <text x="550" y="337" fill="#d2991d" font-size="9" text-anchor="middle">频道销毁 → 通知全体用户</text>
+  <line x1="655" y1="337" x2="695" y2="337" stroke="#8b949e" stroke-width="1" marker-end="url(#arr3)"/>
+  <rect x="700" y="320" width="190" height="35" rx="6" fill="#3fb95022" stroke="#3fb950" stroke-width="1"/>
+  <text x="795" y="337" fill="#3fb950" font-size="9" text-anchor="middle">日志写入 SQLite</text>
+</svg>
+  </div>
+
+  <h3>连接生命周期状态机</h3>
+  <pre><code>DISCONNECTED
+    │ TCP 连接成功
+    ▼
+CONNECTING
+    │ TLS 握手完成
+    ▼
+AUTHENTICATING
+    │ 凭证验证通过
+    ▼
+ONLINE ←──────────────── 空闲/活跃状态
+    ││
+    │├─ 加入频道 → IN_CHANNEL (开始语音数据流)
+    ││
+    │└─ NAT 穿透 → UDP 直连 / TCP 隧道 → 语音收发
+    │
+    └── 断线/超时 → DISCONNECTED (释放资源)</code></pre>
+
+  <h3>关键场景流程</h3>
+  <table>
+    <tr><th>场景</th><th>触发条件</th><th>处理流程</th></tr>
+    <tr><td>用户登入</td><td>TCP 连接 + 发送认证请求</td><td>验证用户名 → 分配 Session → 同步频道列表 → 通知在线用户</td></tr>
+    <tr><td>加入频道</td><td>权限验证通过</td><td>Channel 添加用户 → 通知频道内用户 → 音频流切换</td></tr>
+    <tr><td>开始说话</td><td>VAD 检测到语音 / PTT 按下</td><td>音频采集 → Opus 编码 → 加密 → UdpSocket 发送 → 服务端转发</td></tr>
+    <tr><td>NAT 穿透</td><td>UDP 尝试失败</td><td>STUN 绑定 → 若成功 UDP 直连，失败 TCP 隧道回退</td></tr>
+    <tr><td>密钥轮换</td><td>定时触发 / 包计数达阈值</td><td>服务端生成新密钥 → 广播至频道成员 → 切换加密密钥</td></tr>
+    <tr><td>服务器关闭</td><td>管理员操作 / Docker stop</td><td>通知所有客户端 → 保存 DB → 关闭监听 → 清理资源</td></tr>
+  </table>
+</section>
+
+<section class="page-section" data-page="responsive">
+  <div class="page-indicator"><span>第 6 章</span> 响应式设计规范</div>
+  <h2>6. 响应式设计规范</h2>
+
+  <h3>Web 管理面板 — 断点策略</h3>
+  <table>
+    <tr><th>断点</th><th>设备类型</th><th>布局</th></tr>
+    <tr><td><code>≥ 1024px</code></td><td>桌面端</td><td>侧边栏固定 + 主内容区自适应</td></tr>
+    <tr><td><code>768px — 1023px</code></td><td>平板端</td><td>折叠式侧边栏 (汉堡菜单开关)</td></tr>
+    <tr><td><code>&lt; 768px</code></td><td>手机端</td><td>隐藏侧边栏，全屏主内容区</td></tr>
+  </table>
+  <h3>响应式设计要点</h3>
+  <ul>
+    <li><strong>CSS Flexbox + Grid</strong>：主布局使用 Flexbox 实现弹性布局</li>
+    <li><strong>移动端菜单</strong>：通过 <code>#menu-open</code> / <code>#menu-close</code> 按钮切换侧边栏显示</li>
+    <li><strong>数据表格</strong>：小屏幕下使用 <code>overflow-x: auto</code> 水平滚动</li>
+    <li><strong>图表组件</strong>：SVG 自适应容器宽度，<code>viewBox</code> 保持比例</li>
+    <li><strong>触碰目标</strong>：移动端按钮最小 44×44px，满足 WCAG 2.1 AA</li>
+    <li><strong>辅助功能</strong>：提供 <code>.skip-link</code> 键盘跳过导航、<code>aria-*</code> 属性标注</li>
+  </ul>
+  <h3>桌面客户端 — 跨平台适配</h3>
+  <table>
+    <tr><th>平台</th><th>UI 框架</th><th>适配策略</th></tr>
+    <tr><td>Windows</td><td>Qt 6 Widgets</td><td>原生 Windows 渲染，DPI 自动缩放</td></tr>
+    <tr><td>macOS</td><td>Qt 6 Widgets</td><td>macOS 风格渲染，Retina 高 DPI 支持</td></tr>
+    <tr><td>Linux</td><td>Qt 6 Widgets</td><td>跟随系统主题 (GTK/Qt5ct)</td></tr>
+  </table>
+</section>
+
+<section class="page-section" data-page="performance">
+  <div class="page-indicator"><span>第 7 章</span> 性能优化策略</div>
+  <h2>7. 性能优化策略</h2>
+
+  <h3>音频流水线优化</h3>
+  <table>
+    <tr><th>优化点</th><th>策略</th><th>效果</th></tr>
+    <tr><td>Opus 编码帧</td><td>20ms 帧长，带内 FEC</td><td>带宽 6-510 kbps 自适应，单包丢失可恢复</td></tr>
+    <tr><td>JitterBuffer</td><td>自适应去抖 + 丢包重排</td><td>网络抖动 ≤50ms 无感知，≤150ms 可接受</td></tr>
+    <tr><td>AudioMixer</td><td>多路混音 + 音量归一化</td><td>支持 64 路并发，3ms 混音开销</td></tr>
+    <tr><td>VAD 静音检测</td><td>未说话时不编码发送</td><td>闲置带宽降低 70-90%</td></tr>
+    <tr><td>内存池</td><td>AudioMemoryPool 预分配</td><td>避免运行时动态分配，零堆碎片</td></tr>
+  </table>
+  <h3>网络层优化</h3>
+  <table>
+    <tr><th>优化点</th><th>策略</th></tr>
+    <tr><td>异步 I/O</td><td>Boost.Asio 协程，单线程事件循环驱动多连接</td></tr>
+    <tr><td>零拷贝</td><td>数据包内存池复用，避免内核态 <code>memcpy</code></td></tr>
+    <tr><td>TCP_NODELAY</td><td>禁用 Nagle 算法，即时发送小包</td></tr>
+    <tr><td>UDP 批量发送</td><td>sendmmsg 批量发送，减少系统调用次数</td></tr>
+  </table>
+  <h3>服务端优化</h3>
+  <table>
+    <tr><th>优化点</th><th>策略</th></tr>
+    <tr><td>多线程</td><td><code>--threads N</code> 配置工作线程数，I/O 与业务分离</td></tr>
+    <tr><td>SQLite WAL</td><td>WAL 模式写入，支持并发读 + 串行写</td></tr>
+    <tr><td>Docker 资源限制</td><td>CPU 2 核 / 内存 512M 上限，健康检查探活</td></tr>
+    <tr><td>日志轮转</td><td>json-file driver，单文件 20M，保留 5 个历史</td></tr>
+  </table>
+</section>
+
+<section class="page-section" data-page="compatibility">
+  <div class="page-indicator"><span>第 8 章</span> 浏览器兼容性要求</div>
+  <h2>8. 浏览器兼容性要求</h2>
+
+  <h3>Web 管理面板 — 目标浏览器</h3>
+  <table>
+    <tr><th>浏览器</th><th>最低版本</th><th>说明</th></tr>
+    <tr><td>Google Chrome</td><td>90+</td><td>推荐 — 完整支持所有 CSS/JS 特性</td></tr>
+    <tr><td>Microsoft Edge</td><td>90+</td><td>Chromium 内核，与 Chrome 等价</td></tr>
+    <tr><td>Mozilla Firefox</td><td>88+</td><td>支持所有现代特性</td></tr>
+    <tr><td>Safari (macOS/iOS)</td><td>14+</td><td>WebKit 内核</td></tr>
+  </table>
+  <h3>依赖的 Web 平台特性</h3>
+  <ul>
+    <li><strong>CSS Grid + Flexbox</strong> — 所有目标浏览器原生支持</li>
+    <li><strong>CSS Custom Properties (<code>var()</code>)</strong> — 主题变量</li>
+    <li><strong>SVG inline</strong> — 导航图标内嵌 SVG</li>
+    <li><strong>Fetch API</strong> — 与服务端 API 通信</li>
+    <li><strong>Google Fonts</strong> — Inter + JetBrains Mono 字体 (有回退字体栈)</li>
+    <li><strong>无外部 JS 框架依赖</strong> — 纯 Vanilla JS，降低兼容性风险</li>
+  </ul>
+  <h3>桌面客户端 — 操作系统兼容性</h3>
+  <table>
+    <tr><th>操作系统</th><th>最低版本</th><th>编译工具</th></tr>
+    <tr><td>Windows</td><td>Windows 10 (1809+)</td><td>MSVC 2022</td></tr>
+    <tr><td>macOS</td><td>macOS 12 (Monterey)</td><td>Clang 15+</td></tr>
+    <tr><td>Linux (Debian)</td><td>Debian 11 / Ubuntu 22.04</td><td>GCC 12+ / glibc 2.34+</td></tr>
+    <tr><td>Linux (其他)</td><td>glibc 2.34+, Qt 6</td><td>RPM/DEB 包分发</td></tr>
+  </table>
+  <h3>移动端兼容性</h3>
+  <table>
+    <tr><th>平台</th><th>最低版本</th><th>构建工具</th></tr>
+    <tr><td>Android</td><td>Android 13 (API 33)</td><td>Gradle KTS + NDK 26</td></tr>
+    <tr><td>iOS</td><td>iOS 15</td><td>Xcode 14 + Swift 5.7</td></tr>
+  </table>
+</section>
+
+<section class="page-section" data-page="issues">
+  <div class="page-indicator"><span>第 9 章</span> 已知问题与解决方案</div>
+  <h2>9. 已知问题与解决方案</h2>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠️ 已知问题清单</div>
+  </div>
+  <table>
+    <tr><th>编号</th><th>分类</th><th>描述</th><th>影响范围</th><th>严重程度</th><th>状态</th></tr>
+    <tr>
+      <td>#1</td><td>网络</td>
+      <td>对称型 NAT (Symmetric NAT) 环境下 STUN 穿透成功率极低，语音回退到完全依赖 TCP 隧道</td>
+      <td>企业网络 / 校园网用户</td>
+      <td>🟡 中等</td><td>已知 — TCP 隧道兜底</td>
+    </tr>
+    <tr>
+      <td>#2</td><td>协议</td>
+      <td>Protobuf 采用预生成的手写头文件 (<code>proto/generated/</code>) 替代标准 protoc 编译，协议版本更新需同步手动修改</td>
+      <td>协议迭代</td>
+      <td>🟡 中等</td><td>已知 — 脚本同步辅助</td>
+    </tr>
+    <tr>
+      <td>#3</td><td>音频</td>
+      <td>iOS 平台蓝牙耳机音频路由切换延迟偏高 (300-500ms)，在锁屏状态下音频采集可能中断</td>
+      <td>iOS 蓝牙用户</td>
+      <td>🟡 中等</td><td>持续优化中</td>
+    </tr>
+    <tr>
+      <td>#4</td><td>构建</td>
+      <td>Android NDK 跨平台编译 miniaudio 时需手动处理 NEON 指令集优化标志</td>
+      <td>Android ARM 构建</td>
+      <td>🟢 轻微</td><td>文档已注明</td>
+    </tr>
+    <tr>
+      <td>#5</td><td>UI</td>
+      <td>Qt 6 在 Linux Wayland 下部分 dock 面板拖拽行为异常</td>
+      <td>Linux Wayland 用户</td>
+      <td>🟢 轻微</td><td>建议 X11 模式运行</td>
+    </tr>
+  </table>
+
+  <h3>常见问题排查</h3>
+  <div class="callout error">
+    <div class="callout-title">🔴 客户端无法连接服务器</div>
+    <strong>排查步骤：</strong><br>
+    1. 检查服务器 TCP 24430 端口是否开放 <code>nc -zv SERVER_IP 24430</code><br>
+    2. 检查防火墙规则是否放行 TCP 24430 和 UDP 24431<br>
+    3. 检查 Docker 容器健康状态 <code>docker compose ps</code><br>
+    4. 查看服务器日志 <code>docker compose logs -f nevo-server</code>
+  </div>
+  <div class="callout warn">
+    <div class="callout-title">🟡 语音断续 / 卡顿</div>
+    — 检查网络丢包率 (应 &lt; 5%)<br>
+    — 增加 JitterBuffer 缓冲大小 (默认 60ms)<br>
+    — 确认 Opus 编码器未使用 stub 降级<br>
+    — 检查 CPU 利用率，音频编码需要 1 核心的 15-20%
+  </div>
+</section>
+
+<section class="page-section" data-page="development">
+  <div class="page-indicator"><span>第 10 章</span> 开发规范与指南</div>
+  <h2>10. 开发规范与指南</h2>
+
+  <h3>代码规范</h3>
+  <ul>
+    <li><strong>C++ 命名</strong>：类名 PascalCase (<code>AudioEngine</code>)，文件名 PascalCase (<code>AudioEngine.h</code>)，命名空间 snake_case (<code>nevo::audio</code>)</li>
+    <li><strong
+<p>当前测试框架为 Google Test (GTest v1.14.0)，测试目录 <code>tests/</code> 包含：</p>
+<ul>
+  <li><code>Result&lt;T&gt;</code> 错误处理单元测试</li>
+  <li>Channel 频道管理单元测试</li>
+  <li>Permission 权限系统单元测试</li>
+  <li>Opus 编解码器集成测试</li>
+  <li>JitterBuffer 去抖缓冲测试</li>
+  <li>AudioMixer 多路混音测试</li>
+  <li>AudioMemoryPool 内存池测试</li>
+  <li>TcpConnection 帧协议测试</li>
+  <li>VoiceCrypto 加解密测试</li>
+  <li>NatTraversal STUN 协议测试</li>
+  <li>Server 服务端集成测试</li>
+</ul>
+
+<h4>CMake 依赖管理策略</h4>
+<p>项目遵循 <strong>FindPackage → vcpkg CONFIG → stub 降级</strong> 的三级依赖查找策略：</p>
+<ol>
+  <li><strong>FindPackage</strong>：优先使用系统已安装的库</li>
+  <li><strong>vcpkg / pkg-config</strong>：使用包管理器提供的版本</li>
+  <li><strong>FetchContent</strong>：自动下载 (仅限 GTest 等测试依赖)</li>
+  <li><strong>Stub 降级</strong>：全部缺失时，编译不含该功能的精简版本</li>
+</ol>
+
+<hr>
+
+<div class="callout">
+  <div class="callout-title">📌 文档维护说明</div>
+  本文档应与项目代码同步更新。每当以下内容发生变化时，需更新本文档中对应章节：<br>
+  1. 新增/删除功能模块 → 更新第3章<br>
+  2. 技术栈升级 (库版本变更) → 更新第2.2节<br>
+  3. Web 页面重构 → 更新第4章<br>
+  4. 新增已知问题或问题修复 → 更新第9章<br>
+  5. 构建/部署流程变更 → 更新第2.3节和第10章
+</div>
+
+</main>
+
+<footer class="footer">
+  NEVO 项目技术架构文档 · 版本 0.1.0 · 最后更新 2026-05-27 · 内部文档
+</footer>
+
+</body>
+</html>>错误处理</strong>：统一使用 <code>Result&lt;T&gt;</code> 模板，禁止抛出 C++ 异常</li>
+    <li><strong

@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QFrame
 from qfluentwidgets import (
     LineEdit, SpinBox, PrimaryPushButton, PushButton,
     CaptionLabel, FluentIcon, StrongBodyLabel,
-    RoundMenu, Action,
+    RoundMenu, Action, ToolButton,
 )
 from theme_manager import (
     ThemeManager, button_stylesheet, status_dot_stylesheet,
@@ -37,10 +37,6 @@ class ConnectionBar(QFrame):
         # ── Row 1: Connection info ──
         row1 = QHBoxLayout()
         row1.setSpacing(6)
-
-        self.status_dot = CaptionLabel("●")
-        self.status_dot.setStyleSheet(status_dot_stylesheet(False))
-        row1.addWidget(self.status_dot)
 
         row1.addWidget(StrongBodyLabel(self.tr("Host:")))
         self.edit_host = LineEdit()
@@ -123,6 +119,14 @@ class ConnectionBar(QFrame):
 
         row2.addStretch(1)
 
+        # Status button with internet icon
+        self.btn_status = ToolButton()
+        self.btn_status.setIcon(FluentIcon.GLOBE)
+        self.btn_status.setToolTip(self.tr("Status"))
+        self.btn_status.setEnabled(False)
+        self._refresh_status_style(False)
+        row2.addWidget(self.btn_status)
+
         self.btn_admin_login = PushButton(self.tr("Admin"))
         self.btn_admin_login.setIcon(FluentIcon.PEOPLE)
         self.btn_admin_login.setEnabled(False)
@@ -158,6 +162,32 @@ class ConnectionBar(QFrame):
         pos = self.btn_admin_login.mapToGlobal(QPoint(0, -menu_height))
         menu.exec_(pos)
 
+    def _refresh_status_style(self, connected: bool):
+        if connected:
+            self.btn_status.setStyleSheet(
+                "ToolButton {"
+                "  background-color: transparent;"
+                "  border: none;"
+                "  border-radius: 6px;"
+                "}"
+                "ToolButton:hover {"
+                "  background-color: rgba(46, 204, 113, 0.15);"
+                "}"
+            )
+            self.btn_status.setIcon(FluentIcon.GLOBE)
+        else:
+            self.btn_status.setStyleSheet(
+                "ToolButton {"
+                "  background-color: transparent;"
+                "  border: none;"
+                "  border-radius: 6px;"
+                "}"
+                "ToolButton:hover {"
+                "  background-color: rgba(231, 76, 60, 0.15);"
+                "}"
+            )
+            self.btn_status.setIcon(FluentIcon.GLOBE)
+
     def set_admin_authenticated(self, authenticated: bool):
         self._admin_authenticated = authenticated
 
@@ -172,11 +202,10 @@ class ConnectionBar(QFrame):
         self.btn_deafen.setEnabled(connected)
         self.btn_share_screen.setEnabled(connected)
         self.btn_audio_share.setEnabled(connected)
+        self.btn_status.setEnabled(True)
+        self._refresh_status_style(connected)
 
-        if connected:
-            self.status_dot.setStyleSheet(status_dot_stylesheet(True))
-        else:
-            self.status_dot.setStyleSheet(status_dot_stylesheet(False))
+        if not connected:
             self.lbl_latency.setText(self.tr("Latency: --"))
             self.btn_share_screen.setChecked(False)
             self.set_audio_sharing(False)
@@ -260,5 +289,4 @@ class ConnectionBar(QFrame):
         self.btn_share_screen.setStyleSheet(button_stylesheet())
         if not self.btn_audio_share.property("sharing"):
             self.btn_audio_share.setStyleSheet(button_stylesheet())
-        self.status_dot.setStyleSheet(
-            status_dot_stylesheet(self._connected))
+        self._refresh_status_style(self._connected)

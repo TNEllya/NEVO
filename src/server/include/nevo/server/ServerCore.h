@@ -104,6 +104,8 @@ struct ServerStatusSnapshot {
     uint64_t uptime_seconds = 0;                       ///< Uptime (seconds)
     std::vector<SessionSnapshot> sessions;             ///< Session list
     std::vector<ChannelSnapshot> channels;             ///< Channel list
+    std::string ipv4_address;                          ///< Local IPv4 address
+    std::string ipv6_address;                          ///< Local IPv6 address
 };
 
 // ============================================================
@@ -488,7 +490,10 @@ public:
     /// Get current server name
     std::string serverName() const;
 
-    /// Set admin password (via IPC config)
+    /// Collect local IPv4/IPv6 addresses (non-loopback, up interfaces)
+    std::pair<std::string, std::string> collectLocalAddresses() const;
+
+    /// Set admin password (via IPC config) — persists encrypted hash to disk
     void setAdminPassword(const std::string& password);
 
     /// Check if admin password is set
@@ -604,8 +609,17 @@ private:
     std::string server_name_ = "NEVO Server";
     std::string admin_password_hash_;
 
+    /// Admin password file path (derived from db_path)
+    std::string password_file_path_;
+
+    /// Save admin password hash to encrypted local file
+    void saveAdminPassword();
+
+    /// Load admin password hash from encrypted local file
+    void loadAdminPassword();
+
     /// Control server for Python GUI IPC
-    uint16_t control_port_ = 24432;
+    uint16_t control_port_ = 24433;
     std::unique_ptr<ControlServer> control_server_;
 
     /// Key rotation timer

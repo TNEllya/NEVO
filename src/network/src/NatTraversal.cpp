@@ -1008,14 +1008,33 @@ NatTraversal::sendAndReceive(
             break; // 使用第一个解析结果
         }
 
-        // 创建 UDP socket
-        boost::asio::ip::udp::socket socket(executor,
-            boost::asio::ip::udp::v4());
+        // 根据解析结果的地址族创建 UDP socket
+        boost::asio::ip::udp::socket socket(executor);
+        boost::system::error_code open_ec;
+        if (server_endpoint.address().is_v6()) {
+            socket.open(boost::asio::ip::udp::v6(), open_ec);
+            if (!open_ec) {
+                boost::asio::ip::v6_only v6_only_opt(false);
+                socket.set_option(v6_only_opt, open_ec);
+                open_ec.clear();
+            }
+        }
+        if (!socket.is_open() || open_ec) {
+            socket.open(boost::asio::ip::udp::v4(), open_ec);
+            if (open_ec) {
+                NEVO_LOG_ERROR("network", "sendAndReceive: failed to open UDP socket: {}", open_ec.message());
+                co_return std::nullopt;
+            }
+        }
 
         // 绑定到任意端口
-        socket.open(boost::asio::ip::udp::v4());
+        boost::system::error_code bind_ec;
         socket.bind(boost::asio::ip::udp::endpoint(
-            boost::asio::ip::udp::v4(), 0));
+            server_endpoint.protocol(), 0), bind_ec);
+        if (bind_ec) {
+            NEVO_LOG_ERROR("network", "sendAndReceive: failed to bind UDP socket: {}", bind_ec.message());
+            co_return std::nullopt;
+        }
 
         // 发送请求
         co_await socket.async_send_to(

@@ -48,17 +48,19 @@ def _user_color(name: str) -> str:
 
 
 def _make_default_avatar(size=28):
+    tm = ThemeManager.instance()
+    pal = tm.palette()
     pix = QPixmap(size, size)
-    pix.fill(QColor("#3a3a50"))
+    pix.fill(QColor(pal["bg_avatar_empty"]))
     p = QPainter(pix)
     p.setRenderHint(QPainter.Antialiasing)
     path = QPainterPath()
     path.addEllipse(0, 0, size, size)
     p.setClipPath(path)
-    p.setBrush(QColor("#808080"))
+    p.setBrush(QColor(pal["text_muted"]))
     p.setPen(Qt.NoPen)
     p.drawEllipse(2, 2, size - 4, size - 4)
-    p.setBrush(Qt.white)
+    p.setBrush(QColor(pal["bg_card_solid"]))
     head_r = size // 5
     p.drawEllipse(
         size // 2 - head_r, size // 3 - head_r,
@@ -95,8 +97,12 @@ class _UserItem(QFrame):
         self.setMinimumWidth(200)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setCursor(Qt.PointingHandCursor)
-        self.setStyleSheet("QFrame { border: none; border-radius: 6px; }"
-                          "QFrame:hover { background-color: rgba(79, 84, 92, 0.4); }")
+        tm = ThemeManager.instance()
+        pal = tm.palette()
+        self.setStyleSheet(
+            f"QFrame {{ border: none; border-radius: 6px; }}"
+            f"QFrame:hover {{ background-color: {pal['bg_hover']}; }}"
+        )
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
         if avatar_pixmap and not avatar_pixmap.isNull():
@@ -151,10 +157,12 @@ class _UserItem(QFrame):
         dot_x = ax + 28 + 1
         dot_y = ay + 28 - 5
         dot_r = 4
+        tm = ThemeManager.instance()
+        pal = tm.palette()
         if self._speaking:
             p.setBrush(QColor(255, 193, 7))
         else:
-            p.setBrush(QColor(60, 60, 60))
+            p.setBrush(QColor(pal["text_muted"]))
         p.setPen(Qt.NoPen)
         p.drawEllipse(dot_x - dot_r, dot_y - dot_r, dot_r * 2, dot_r * 2)
 
@@ -162,7 +170,7 @@ class _UserItem(QFrame):
         ny_top = ay + 2
 
         p.setFont(QFont("Segoe UI", 9))
-        p.setPen(QColor("#FFFFFF"))
+        p.setPen(QColor(pal["text_primary"]))
         p.drawText(nx, ny_top + 12, self._username)
 
         if self._local_muted:
@@ -271,12 +279,14 @@ class _ChannelCard(QFrame):
         outer.setSpacing(0)
 
         card = QFrame()
+        tm = ThemeManager.instance()
+        pal = tm.palette()
         if is_current:
             card.setStyleSheet(inner_card_stylesheet())
         else:
             card.setStyleSheet(
-                "QFrame { background-color: #2b2d35; border-radius: 8px; }"
-                "QFrame:hover { background-color: #33354a; }"
+                f"QFrame {{ background-color: {pal['bg_card_solid']}; border-radius: 8px; }}"
+                f"QFrame:hover {{ background-color: {pal['bg_hover']}; }}"
             )
         card.setFixedHeight(42)
         card.setCursor(Qt.PointingHandCursor)
@@ -294,20 +304,20 @@ class _ChannelCard(QFrame):
         if is_sub:
             icon_lbl.setText("#")
             icon_lbl.setStyleSheet(
-                "background-color: transparent;"
-                "color: #6d6f78; font-size: 14px; font-weight: bold;"
+                f"background-color: transparent;"
+                f"color: {pal['text_muted']}; font-size: 14px; font-weight: bold;"
             )
         else:
             icon_lbl.setText("\u2588")
             icon_lbl.setStyleSheet(
-                "background-color: #5865f2; border-radius: 4px;"
-                "color: white; font-size: 11px; font-weight: bold;"
+                f"background-color: #5865f2; border-radius: 4px;"
+                f"color: {pal['bg_card_solid']}; font-size: 11px; font-weight: bold;"
             )
         row.addWidget(icon_lbl)
 
         name_lbl = QLabel(ch.get("name", ""))
         name_lbl.setFont(QFont("Segoe UI", 9))
-        name_lbl.setStyleSheet("color: #dbdee1; background: transparent;")
+        name_lbl.setStyleSheet(f"color: {pal['text_primary']}; background: transparent;")
         name_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         row.addWidget(name_lbl, 1)
 
@@ -315,7 +325,7 @@ class _ChannelCard(QFrame):
         counter.setFixedWidth(40)
         counter.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         counter.setFont(QFont("Segoe UI", 8))
-        counter.setStyleSheet("color: #6d6f78; background: transparent;")
+        counter.setStyleSheet(f"color: {pal['text_muted']}; background: transparent;")
         if is_sub:
             u_count = len(ch.get("users", []))
             max_u = 50
@@ -393,12 +403,14 @@ class _ChannelCard(QFrame):
 
     def set_current(self, current: bool):
         self._is_current = current
+        tm = ThemeManager.instance()
+        pal = tm.palette()
         if current:
             self._inner_card.setStyleSheet(inner_card_stylesheet())
         else:
             self._inner_card.setStyleSheet(
-                "QFrame { background-color: #2b2d35; border-radius: 8px; }"
-                "QFrame:hover { background-color: #33354a; }"
+                f"QFrame {{ background-color: {pal['bg_card_solid']}; border-radius: 8px; }}"
+                f"QFrame:hover {{ background-color: {pal['bg_hover']}; }}"
             )
 
     def set_speaking(self, user_id: int, speaking: bool):
@@ -440,15 +452,17 @@ class ChannelTreeView(QFrame):
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        tm = ThemeManager.instance()
+        pal = tm.palette()
         self._scroll.setStyleSheet(
-            "QScrollArea { border: none; background-color: #2b2d31; }"
+            f"QScrollArea {{ border: none; background-color: {pal['bg_primary']}; }}"
             "QScrollBar:vertical {"
             "  width: 6px; background: transparent; border-radius: 3px;"
             "}"
-            "QScrollBar::handle:vertical {"
-            "  background: #4f545c; border-radius: 3px; min-height: 16px;"
-            "}"
-            "QScrollBar::handle:vertical:hover { background: #686d75; }"
+            f"QScrollBar::handle:vertical {{"
+            f"  background: {pal['scrollbar_handle']}; border-radius: 3px; min-height: 16px;"
+            f"}}"
+            f"QScrollBar::handle:vertical:hover {{ background: {pal['text_muted']}; }}"
             "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
             "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }"
         )

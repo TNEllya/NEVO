@@ -1,0 +1,46 @@
+# ============================================================
+# NEVO Server - Docker Compose Development Override
+# ============================================================
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# ============================================================
+
+version: "3.8"
+
+services:
+  nevo-server:
+    build:
+      target: builder
+    image: nevo-server:dev
+    restart: "no"
+    ports:
+      - "${NEVO_TCP_PORT:-24430}:24430/tcp"
+      - "${NEVO_UDP_PORT:-24431}:24431/udp"
+      - "${NEVO_VIDEO_UDP_PORT:-24432}:24432/udp"
+      - "24433:24433/tcp"
+
+    volumes:
+      - nevo_dev_data:/var/lib/nevo
+      - nevo_dev_config:/etc/nevo
+      - ./server_config.json:/etc/nevo/server_config.json:ro
+
+    environment:
+      - NEVO_LOG_LEVEL=debug
+
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: "256M"
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  nevo_dev_data:
+    name: nevo_dev_data
+  nevo_dev_config:
+    name: nevo_dev_config

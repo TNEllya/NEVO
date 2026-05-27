@@ -1,10 +1,18 @@
 {
     "tcp_port": 24430,
     "udp_port": 24431,
-    "db_path": "nevo_server.db",
+    "db_path": "/var/lib/nevo/nevo_server.db",
     "threads": 4,
     "log_level": "info",
     "server_name": "NEVO Server",
     "max_users": 100,
-    "welcome_message": "Welcome to the NEVO server!"
+    "welcome_message": "Welcome to the NEVO server!",
+    "ft_limit_upload_speed": false,
+    "ft_upload_speed_kbps": 0,
+    "ft_limit_download_speed": false,
+    "ft_download_speed_kbps": 0,
+    "ft_max_concurrent_uploads": 3,
+    "ft_max_concurrent_downloads": 3,
+    "ft_max_file_size_mb": 100,
+    "ft_upload_dir": "uploads"
 }

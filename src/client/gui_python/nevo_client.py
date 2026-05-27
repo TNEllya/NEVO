@@ -247,10 +247,28 @@ class NevoClient:
         self._set_state(ClientState.Connecting)
 
         try:
-            self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self._sock.settimeout(10)
-            self._sock.connect((host, port))
-            self._sock.settimeout(None)
+            addr_info = socket.getaddrinfo(host, port, socket.AF_UNSPEC,
+                                           socket.SOCK_STREAM, socket.IPPROTO_TCP)
+            last_err = None
+            self._sock = None
+            for family, socktype, proto, canonname, sockaddr in addr_info:
+                try:
+                    self._sock = socket.socket(family, socktype, proto)
+                    self._sock.settimeout(10)
+                    self._sock.connect(sockaddr)
+                    self._sock.settimeout(None)
+                    last_err = None
+                    break
+                except Exception as e:
+                    last_err = e
+                    if self._sock:
+                        try:
+                            self._sock.close()
+                        except Exception:
+                            pass
+                        self._sock = None
+            if last_err or self._sock is None:
+                raise RuntimeError(f"Failed to connect to {host}:{port}: {last_err}")
 
             client_udp_port = 0
             if voice_engine is not None:

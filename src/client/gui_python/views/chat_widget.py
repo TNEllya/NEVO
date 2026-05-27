@@ -60,14 +60,16 @@ class _AvatarLabel(QLabel):
             self._set_avatar_style(False)
 
     def _set_avatar_style(self, has_image: bool):
+        tm = ThemeManager.instance()
+        pal = tm.palette()
         if has_image:
             self.setStyleSheet(
                 f"border-radius: {self._size // 2}px; background: transparent;"
             )
         else:
             self.setStyleSheet(
-                f"background-color: #3a3a50; border-radius: {self._size // 2}px;"
-                f"color: #8888aa; font-size: {self._size // 2}px; font-weight: bold;"
+                f"background-color: {pal['bg_avatar_empty']}; border-radius: {self._size // 2}px;"
+                f"color: {pal['text_muted']}; font-size: {self._size // 2}px; font-weight: bold;"
             )
 
 class _CodeBlock(QFrame):
@@ -105,10 +107,12 @@ class _ImageLabel(QLabel):
         self._pixmap = None
         self.setFixedSize(max_width, max_width)
         self.setAlignment(Qt.AlignCenter)
+        tm = ThemeManager.instance()
+        pal = tm.palette()
         self.setText("Loading image...")
         self.setStyleSheet(
-            "QLabel { color: #72767d; font-size: 12px; background-color: #3a3a50; "
-            "border-radius: 8px; }"
+            f"QLabel {{ color: {pal['text_muted']}; font-size: 12px; background-color: {pal['bg_avatar_empty']}; "
+            f"border-radius: 8px; }}"
         )
         self.setCursor(Qt.PointingHandCursor)
         self._load_async()
@@ -207,15 +211,17 @@ class _FileCard(QFrame):
         layout.addWidget(icon_lbl)
         info_layout = QVBoxLayout()
         info_layout.setSpacing(2)
+        tm = ThemeManager.instance()
+        pal = tm.palette()
         name_lbl = QLabel(filename)
         name_lbl.setStyleSheet(
-            "font-size: 13px; font-weight: bold; color: #ffffff; background: transparent;"
+            f"font-size: 13px; font-weight: bold; color: {pal['text_primary']}; background: transparent;"
         )
         info_layout.addWidget(name_lbl)
         size_lbl = "Unknown size"
         size_lbl_widget = QLabel(size_lbl)
         size_lbl_widget.setStyleSheet(
-            "font-size: 11px; color: #72767d; background: transparent;"
+            f"font-size: 11px; color: {pal['text_muted']}; background: transparent;"
         )
         info_layout.addWidget(size_lbl_widget)
         layout.addLayout(info_layout)
@@ -258,6 +264,8 @@ class _MessageBubble(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(4)
+        tm = ThemeManager.instance()
+        pal = tm.palette()
         parts = self._parse_message(text)
         is_image_only = len(parts) == 1 and parts[0]["type"] == "image"
         for part in parts:
@@ -266,8 +274,8 @@ class _MessageBubble(QFrame):
                 lbl.setWordWrap(True)
                 lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
                 lbl.setStyleSheet(
-                    "font-size: 13px; color: #ffffff; background: transparent;"
-                    "padding: 0px; border: none; line-height: 1.5;"
+                    f"font-size: 13px; color: {pal['text_primary']}; background: transparent;"
+                    f"padding: 0px; border: none; line-height: 1.5;"
                 )
                 layout.addWidget(lbl)
             elif part["type"] == "code":
@@ -284,7 +292,7 @@ class _MessageBubble(QFrame):
             self.setStyleSheet("_MessageBubble { background-color: transparent; }")
             self._radius = 0
         else:
-            bubble_color = "#5865F2" if is_self else "#3d3f47"
+            bubble_color = "#5865F2" if is_self else pal["bg_inner_card"]
             radius = 10
             self.setStyleSheet(f"""
                 _MessageBubble {{
@@ -405,7 +413,7 @@ class ChatMessageWidget(QFrame):
         else:
             ts_str = datetime.datetime.now().strftime("%H:%M")
         time_lbl = QLabel(ts_str)
-        time_lbl.setStyleSheet("font-size: 11px; color: #72767d; background: transparent;")
+        time_lbl.setStyleSheet(timestamp_stylesheet())
         header.addWidget(time_lbl)
         header.addStretch()
         right_layout.addLayout(header)
@@ -426,7 +434,7 @@ class SystemMessageWidget(QFrame):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 6, 16, 6)
         lbl = QLabel(text)
-        lbl.setStyleSheet("font-size: 12px; color: #72767d; font-style: italic; background: transparent;")
+        lbl.setStyleSheet(system_msg_stylesheet())
         layout.addWidget(lbl, alignment=Qt.AlignCenter)
 
 class ChatScrollArea(QScrollArea):
@@ -435,20 +443,22 @@ class ChatScrollArea(QScrollArea):
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        tm = ThemeManager.instance()
+        pal = tm.palette()
         self.setStyleSheet(
-            f"QScrollArea {{ border: none; background-color: {ThemeManager.instance().color('chat_bg')}; }}"
-            "QScrollBar:vertical {"
-            "  width: 8px; background: #2b2d31; border-radius: 4px;"
-            "}"
-            "QScrollBar::handle:vertical {"
-            "  background: #4f545c; border-radius: 4px; min-height: 20px;"
-            "}"
-            "QScrollBar::handle:vertical:hover { background: #686d75; }"
+            f"QScrollArea {{ border: none; background-color: {pal['chat_bg']}; }}"
+            f"QScrollBar:vertical {{"
+            f"  width: 8px; background: {pal['bg_primary']}; border-radius: 4px;"
+            f"}}"
+            f"QScrollBar::handle:vertical {{"
+            f"  background: {pal['scrollbar_handle']}; border-radius: 4px; min-height: 20px;"
+            f"}}"
+            f"QScrollBar::handle:vertical:hover {{ background: {pal['text_muted']}; }}"
             "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
             "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }"
         )
         container = QWidget()
-        container.setStyleSheet(f"background-color: {ThemeManager.instance().color('chat_bg')};")
+        container.setStyleSheet(f"background-color: {pal['chat_bg']};")
         self._layout = QVBoxLayout(container)
         self._layout.setContentsMargins(0, 8, 0, 8)
         self._layout.setSpacing(4)
@@ -488,8 +498,10 @@ class ChatWidget(QFrame):
         self.message_display = ChatScrollArea()
         layout.addWidget(self.message_display, 1)
         self.input_bar = ChatInputBar()
+        tm = ThemeManager.instance()
+        pal = tm.palette()
         self.input_bar.setStyleSheet(
-            "ChatInputBar { background-color: #2b2d31; border-top: 1px solid #1e1f22; }"
+            f"ChatInputBar {{ background-color: {pal['bg_primary']}; border-top: 1px solid {pal['bg_hover']}; }}"
         )
         self.input_bar.message_sent.connect(self._on_send)
         self.input_bar.emoji_requested.connect(self._show_emoji)
@@ -579,15 +591,19 @@ class ChatWidget(QFrame):
         pal = tm.palette()
         self.message_display.setStyleSheet(
             f"QScrollArea {{ border: none; background-color: {pal['chat_bg']}; }}"
-            "QScrollBar:vertical {"
-            "  width: 8px; background: #2b2d31; border-radius: 4px;"
-            "}"
-            "QScrollBar::handle:vertical {"
-            "  background: #4f545c; border-radius: 4px; min-height: 20px;"
-            "}"
-            "QScrollBar::handle:vertical:hover { background: #686d75; }"
+            f"QScrollBar:vertical {{"
+            f"  width: 8px; background: {pal['bg_primary']}; border-radius: 4px;"
+            f"}}"
+            f"QScrollBar::handle:vertical {{"
+            f"  background: {pal['scrollbar_handle']}; border-radius: 4px; min-height: 20px;"
+            f"}}"
+            f"QScrollBar::handle:vertical:hover {{ background: {pal['text_muted']}; }}"
             "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
             "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }"
         )
         if self.message_display.widget():
             self.message_display.widget().setStyleSheet(f"background-color: {pal['chat_bg']};")
+        self.input_bar.setStyleSheet(
+            f"ChatInputBar {{ background-color: {pal['bg_primary']}; border-top: 1px solid {pal['bg_hover']}; }}"
+        )
+        self.input_bar.refresh_theme()

@@ -28,12 +28,14 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <chrono>
 #include <thread>
 #include <csignal>
 #include <cstdlib>
 
 #ifdef _WIN32
 #include <windows.h>
+#include <shellapi.h>
 #else
 #include <unistd.h>
 #endif
@@ -45,6 +47,130 @@ nevo::ServerCore* g_server_core = nullptr;
 
 /// 全局 io_context 指针（用于信号处理时停止）
 boost::asio::io_context* g_io_context = nullptr;
+
+// ============================================================
+// Web 管理界面自动启动
+// ============================================================
+
+#ifdef _WIN32
+
+/**
+ * @brief 获取当前 EXE 所在目录路径
+ */
+std::string getExeDirectory() {
+    char buffer[MAX_PATH];
+    DWORD len = GetModuleFileNameA(nullptr, buffer, MAX_PATH);
+    if (len == 0) return ".";
+    std::string path(buffer, len);
+    size_t pos = path.find_last_of("\\/");
+    return (pos != std::string::npos) ? path.substr(0, pos) : ".";
+}
+
+/**
+ * @brief 启动 Python Web 代理（后台进程）
+ *
+ * 在 nevo_server.exe 同目录下的 web/ 子目录中查找 server.py 并启动。
+ * 优先使用 python3，其次 python。
+ */
+void launchWebProxy() {
+    std::string exe_dir = getExeDirectory();
+    std::string web_dir = exe_dir + "\\web";
+    std::string server_py = web_dir + "\\server.py";
+
+    // 检查 server.py 是否存在
+    DWORD attrs = GetFileAttributesA(server_py.c_str());
+    if (attrs == INVALID_FILE_ATTRIBUTES) {
+        std::cout << "[WebUI] server.py not found at " << server_py
+                  << " — web UI will not be available" << std::endl;
+        return;
+    }
+
+    STARTUPINFOA si = {};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+
+    PROCESS_INFORMATION pi = {};
+
+    // 尝试 python3 → python 依次查找
+    std::string cmd = "python -c \"import http.server; print('ok')\"";
+    std::string python = "python";
+
+    // 构建命令行：python server.py（在 web 目录下运行）
+    std::string cmd_line = "cmd /c \"cd /d \"" + web_dir + "\" && " + python + " server.py\"";
+
+    // cmd_line 需要可修改的缓冲区
+    std::vector<char> cmd_buf(cmd_line.begin(), cmd_line.end());
+    cmd_buf.push_back('\0');
+
+    if (CreateProcessA(
+            nullptr, cmd_buf.data(),
+            nullptr, nullptr, FALSE,
+            CREATE_NO_WINDOW, nullptr, nullptr,
+            &si, &pi)) {
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        std::cout << "[WebUI] Web proxy started (PID: " << pi.dwProcessId << ")" << std::endl;
+        NEVO_LOG_INFO("server", "Web proxy started on http://127.0.0.1:8090 (PID: {})", pi.dwProcessId);
+    } else {
+        DWORD err = GetLastError();
+        std::cout << "[WebUI] Failed to start web proxy: error " << err << std::endl;
+        NEVO_LOG_WARN("server", "Failed to start web proxy: error {}", err);
+    }
+}
+
+/**
+ * @brief 在默认浏览器中打开 Web 管理界面
+ *
+ * 等待 Web 代理启动后就就绪后打开 http://127.0.0.1:8090。
+ * 使用异步方式，不阻塞主线程。
+ */
+void openBrowserAsync() {
+    // 在独立线程中等待服务就绪后打开浏览器
+    std::thread([url = std::string("http://127.0.0.1:8090")]() {
+        for (int i = 0; i < 10; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            std::string curl_cmd = std::string("curl -s --max-time 1 ") + url + "/api/health >nul 2>&1";
+            if (system(curl_cmd.c_str()) == 0) {
+                break;
+            }
+        }
+        ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }).detach();
+}
+
+#else
+// Linux/macOS：使用 xdg-open / open
+void launchWebProxy() {
+    std::string web_dir;
+    // 尝试从可执行文件路径推断 web 目录
+    char buf[4096];
+    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (len != -1) {
+        buf[len] = '\0';
+        std::string exe_path(buf);
+        size_t pos = exe_path.find_last_of("/");
+        if (pos != std::string::npos) {
+            web_dir = exe_path.substr(0, pos) + "/web";
+        }
+    }
+    if (web_dir.empty()) web_dir = "./web";
+
+    std::string cmd = "cd \"" + web_dir + "\" && python3 server.py &";
+    if (system(cmd.c_str()) != 0) {
+        cmd = "cd \"" + web_dir + "\" && python server.py &";
+        system(cmd.c_str());
+    }
+    NEVO_LOG_INFO("server", "Web proxy started on http://127.0.0.1:8090");
+}
+
+void openBrowserAsync() {
+    std::thread([]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+        system("xdg-open http://127.0.0.1:8090 2>/dev/null || open http://127.0.0.1:8090 2>/dev/null &");
+    }).detach();
+}
+#endif
 
 // ============================================================
 // 帮助信息
@@ -73,59 +199,7 @@ void printHelp(const char* program_name) {
               << std::endl;
 }
 
-// ============================================================
-// 命令行解析
-// ============================================================
 
-template <typename T>
-bool parseIntSafe(const std::string& str, T& out, const std::string& name) {
-    try {
-        int value = std::stoi(str);
-        out = static_cast<T>(value);
-        return true;
-    } catch (const std::invalid_argument&) {
-        std::cerr << "Invalid " << name << ": '" << str << "' (not a number)" << std::endl;
-        return false;
-    } catch (const std::out_of_range&) {
-        std::cerr << "Invalid " << name << ": '" << str << "' (out of range)" << std::endl;
-        return false;
-    }
-}
-
-bool parseArgs(int argc, char* argv[], nevo::ServerConfig& config) {
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-
-        if (arg == "--help" || arg == "-h") {
-            printHelp(argv[0]);
-            return false;
-        } else if (arg == "--tcp-port" && i + 1 < argc) {
-            if (!parseIntSafe(argv[++i], config.tcp_port, "TCP port")) {
-                printHelp(argv[0]);
-                return false;
-            }
-        } else if (arg == "--udp-port" && i + 1 < argc) {
-            if (!parseIntSafe(argv[++i], config.udp_port, "UDP port")) {
-                printHelp(argv[0]);
-                return false;
-            }
-        } else if (arg == "--db" && i + 1 < argc) {
-            config.db_path = argv[++i];
-        } else if (arg == "--threads" && i + 1 < argc) {
-            if (!parseIntSafe(argv[++i], config.threads, "thread count")) {
-                printHelp(argv[0]);
-                return false;
-            }
-        } else if (arg == "--log-level" && i + 1 < argc) {
-            config.log_level = argv[++i];
-        } else {
-            std::cerr << "Unknown argument: " << arg << std::endl;
-            printHelp(argv[0]);
-            return false;
-        }
-    }
-    return true;
-}
 
 // ============================================================
 // 日志级别转换
@@ -185,17 +259,7 @@ BOOL WINAPI consoleHandler(DWORD event_type) {
 // ============================================================
 
 int main(int argc, char* argv[]) {
-    // 解析命令行参数和配置文件
     nevo::ServerConfig config = nevo::ServerConfig::fromArgs(argc, argv);
-    if (argc > 1) {
-        for (int i = 1; i < argc; ++i) {
-            std::string arg = argv[i];
-            if (arg == "--help" || arg == "-h") {
-                printHelp(argv[0]);
-                return 0;
-            }
-        }
-    }
 
     // 自动检测 CPU 核心数
     uint32_t thread_count = static_cast<uint32_t>(config.threads);
@@ -247,6 +311,10 @@ int main(int argc, char* argv[]) {
 
     // 启动服务器
     server.start();
+
+    // 自动启动 Web 管理界面
+    launchWebProxy();
+    openBrowserAsync();
 
     NEVO_LOG_INFO("server", "Server is now running");
 

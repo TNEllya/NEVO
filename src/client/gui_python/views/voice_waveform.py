@@ -43,14 +43,20 @@ _SMOOTH_FACTOR = 0.35
 _COLOR_LOW = QColor("#43b581")
 _COLOR_MID = QColor("#faa61a")
 _COLOR_HIGH = QColor("#f04747")
-_COLOR_MUTED_BG = QColor("#3c3f44")
 _COLOR_MUTED_STRIKE = QColor("#ed4245")
-_COLOR_BG = QColor("#2b2d31")
-_COLOR_CARD_BG = QColor("#313338")
-_COLOR_TEXT_PRIMARY = QColor("#ffffff")
-_COLOR_TEXT_SECONDARY = QColor("#b5bac1")
-_COLOR_TEXT_MUTED = QColor("#94999f")
-_COLOR_BORDER = QColor("#3f4147")
+
+def _get_theme_colors():
+    tm = ThemeManager.instance()
+    pal = tm.palette()
+    return {
+        "muted_bg": QColor(pal["bg_inner_card"]),
+        "bg": QColor(pal["bg_primary"]),
+        "card_bg": QColor(pal["bg_card_solid"]),
+        "text_primary": QColor(pal["text_primary"]),
+        "text_secondary": QColor(pal["text_secondary"]),
+        "text_muted": QColor(pal["text_muted"]),
+        "border": QColor(pal["bg_hover"]),
+    }
 
 
 class VoiceAmplitudeSampler(QWidget):
@@ -221,7 +227,7 @@ class _WaveformUserRow(QWidget):
 
         self._name_label = QLabel(self._username)
         self._name_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
-        self._name_label.setStyleSheet("color: white; background: transparent;")
+        self._name_label.setStyleSheet(f"color: {_get_theme_colors()['text_primary'].name()}; background: transparent;")
         name_layout.addWidget(self._name_label)
 
         if self._is_admin:
@@ -238,7 +244,8 @@ class _WaveformUserRow(QWidget):
 
         self._status_label = QLabel("")
         self._status_label.setFont(QFont("Segoe UI", 8))
-        self._status_label.setStyleSheet("color: #94999f; background: transparent;")
+        tc = _get_theme_colors()
+        self._status_label.setStyleSheet(f"color: {tc['text_muted'].name()}; background: transparent;")
         name_layout.addWidget(self._status_label)
         self._update_status_text()
 
@@ -258,10 +265,11 @@ class _WaveformUserRow(QWidget):
         path = QPainterPath()
         path.addEllipse(0, 0, _AVATAR_SIZE, _AVATAR_SIZE)
         p.setClipPath(path)
-        p.setBrush(QColor("#5b5d63"))
+        tc = _get_theme_colors()
+        p.setBrush(tc["muted_bg"])
         p.setPen(Qt.NoPen)
         p.drawEllipse(0, 0, _AVATAR_SIZE, _AVATAR_SIZE)
-        p.setBrush(QColor("#b5bac1"))
+        p.setBrush(tc["text_secondary"])
         head_r = _AVATAR_SIZE // 5
         p.drawEllipse(
             _AVATAR_SIZE // 2 - head_r, _AVATAR_SIZE // 3 - head_r,
@@ -340,10 +348,11 @@ class _WaveformUserRow(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
 
+        tc = _get_theme_colors()
         if self._hovered:
-            p.setBrush(QColor("#3c3f47"))
+            p.setBrush(tc["border"])
         else:
-            p.setBrush(QColor("#2b2d31"))
+            p.setBrush(tc["bg"])
         p.setPen(Qt.NoPen)
         p.drawRoundedRect(self.rect().adjusted(4, 2, -4, -2), 6, 6)
 
@@ -381,21 +390,24 @@ class VoiceWaveformPanel(QFrame):
 
         self._title_label = QLabel(self.tr("Voice Activity"))
         self._title_label.setFont(QFont("Segoe UI", 11, QFont.Bold))
-        self._title_label.setStyleSheet("color: white; background: transparent;")
+        tc = _get_theme_colors()
+        self._title_label.setStyleSheet(f"color: {tc['text_primary'].name()}; background: transparent;")
         header.addWidget(self._title_label)
 
         header.addStretch()
 
         self._info_label = QLabel("")
         self._info_label.setFont(QFont("Segoe UI", 8))
-        self._info_label.setStyleSheet("color: #94999f; background: transparent;")
+        tc = _get_theme_colors()
+        self._info_label.setStyleSheet(f"color: {tc['text_muted'].name()}; background: transparent;")
         header.addWidget(self._info_label)
 
         main_layout.addLayout(header)
 
         self._empty_label = QLabel(self.tr("Join a channel to see voice activity"))
         self._empty_label.setFont(QFont("Segoe UI", 9))
-        self._empty_label.setStyleSheet("color: #94999f; background: transparent; padding: 20px;")
+        tc = _get_theme_colors()
+        self._empty_label.setStyleSheet(f"color: {tc['text_muted'].name()}; background: transparent; padding: 20px;")
         self._empty_label.setAlignment(Qt.AlignCenter)
         self._empty_label.setWordWrap(True)
         main_layout.addWidget(self._empty_label)
@@ -404,17 +416,20 @@ class VoiceWaveformPanel(QFrame):
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        tc = _get_theme_colors()
+        sb_color = tc["text_muted"].name()
+        sb_hover = tc["text_secondary"].name()
         self._scroll.setStyleSheet(
-            "QScrollArea { border: none; background-color: transparent; }"
-            "QScrollBar:vertical {"
-            "  width: 5px; background: transparent; border-radius: 2px;"
-            "}"
-            "QScrollBar::handle:vertical {"
-            "  background: #4f545c; border-radius: 2px; min-height: 16px;"
-            "}"
-            "QScrollBar::handle:vertical:hover { background: #686d75; }"
-            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
-            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }"
+            f"QScrollArea {{ border: none; background-color: transparent; }}"
+            f"QScrollBar:vertical {{"
+            f"  width: 5px; background: transparent; border-radius: 2px;"
+            f"}}"
+            f"QScrollBar::handle:vertical {{"
+            f"  background: {sb_color}; border-radius: 2px; min-height: 16px;"
+            f"}}"
+            f"QScrollBar::handle:vertical:hover {{ background: {sb_hover}; }}"
+            f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}"
+            f"QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}"
         )
         self._scroll.setVisible(False)
 
@@ -428,11 +443,13 @@ class VoiceWaveformPanel(QFrame):
         self._scroll.setWidget(self._container)
         main_layout.addWidget(self._scroll, 1)
 
+        tc = _get_theme_colors()
         self.setStyleSheet(
-            "#voiceWaveformPanel {"
-            "  background-color: #2b2d31;"
-            "  border-top: 1px solid #3f4147;"
-            "}"
+            f"#voiceWaveformPanel {{"
+            f"  background-color: {tc['bg'].name()};"
+            f"  border-top: 1px solid {tc['border'].name()};"
+            f"  border-radius: 12px;"
+            f"}}"
         )
 
     def set_voice_engine(self, engine):
@@ -514,7 +531,32 @@ class VoiceWaveformPanel(QFrame):
     def refresh_theme(self):
         tm = ThemeManager.instance()
         pal = tm.palette()
+        tc = _get_theme_colors()
         self._info_label.setStyleSheet(f"color: {pal['text_muted']}; background: transparent;")
         self._empty_label.setStyleSheet(f"color: {pal['text_muted']}; background: transparent; padding: 20px;")
+        self._title_label.setStyleSheet(f"color: {pal['text_primary']}; background: transparent;")
+        self.setStyleSheet(
+            f"#voiceWaveformPanel {{"
+            f"  background-color: {tc['bg'].name()};"
+            f"  border-top: 1px solid {tc['border'].name()};"
+            f"  border-radius: 12px;"
+            f"}}"
+        )
+        sb_color = tc["text_muted"].name()
+        sb_hover = tc["text_secondary"].name()
+        self._scroll.setStyleSheet(
+            f"QScrollArea {{ border: none; background-color: transparent; }}"
+            f"QScrollBar:vertical {{"
+            f"  width: 5px; background: transparent; border-radius: 2px;"
+            f"}}"
+            f"QScrollBar::handle:vertical {{"
+            f"  background: {sb_color}; border-radius: 2px; min-height: 16px;"
+            f"}}"
+            f"QScrollBar::handle:vertical:hover {{ background: {sb_hover}; }}"
+            f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}"
+            f"QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}"
+        )
         for row in self._user_rows.values():
             row._status_label.setStyleSheet(f"color: {pal['text_muted']}; background: transparent;")
+            row._name_label.setStyleSheet(f"color: {pal['text_primary']}; background: transparent;")
+        self.update()

@@ -11,14 +11,22 @@ from avatar_manager import AvatarManager
 from theme_manager import ThemeManager, THEME_DARK, THEME_LIGHT, THEME_SYSTEM
 import i18n
 
+try:
+    from updater import Updater, UpdateState
+    HAS_UPDATER = True
+except ImportError:
+    HAS_UPDATER = False
+
 
 class SettingsPage(QFrame):
     input_mode_changed = pyqtSignal(str)
 
-    def __init__(self, audio_manager: AudioManager, avatar_manager: AvatarManager = None, parent=None):
+    def __init__(self, audio_manager: AudioManager, avatar_manager: AvatarManager = None,
+                 updater=None, parent=None):
         super().__init__(parent)
         self._audio = audio_manager
         self._avatar = avatar_manager
+        self._updater = updater
         self._testing_input = False
         self._level_timer = QTimer(self)
         self._level_timer.setInterval(50)
@@ -27,6 +35,7 @@ class SettingsPage(QFrame):
         self._setup_ui()
         self._refresh_devices()
         self._refresh_avatar()
+        self._refresh_update_card()
 
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
@@ -61,6 +70,8 @@ class SettingsPage(QFrame):
         layout.addWidget(self._create_output_card())
         layout.addWidget(self._create_noise_card())
         layout.addWidget(self._create_language_card())
+        if HAS_UPDATER and self._updater:
+            layout.addWidget(self._create_update_card())
         layout.addStretch(1)
 
         scroll.setWidget(content)
@@ -633,6 +644,257 @@ class SettingsPage(QFrame):
 
         from PyQt5.QtCore import QTimer
         QTimer.singleShot(2500, on_done)
+
+    def _create_update_card(self) -> HeaderCardWidget:
+        card = HeaderCardWidget(self)
+        card.setTitle(self.tr("Software Update"))
+
+        tm = ThemeManager.instance()
+        pal = tm.palette()
+
+        self._update_version_row = QHBoxLayout()
+        self._update_version_row.setContentsMargins(16, 8, 16, 0)
+        self._update_version_row.addWidget(StrongBodyLabel(self.tr("Current Version:")))
+        self._update_version_label = CaptionLabel(
+            self._updater.current_version if self._updater else "-")
+        self._update_version_row.addWidget(self._update_version_label)
+        self._update_version_row.addStretch(1)
+        self._add_row_to_card(card, self._update_version_row)
+
+        self._update_status_row = QHBoxLayout()
+        self._update_status_row.setContentsMargins(16, 4, 16, 0)
+        self._update_status_label = CaptionLabel("")
+        self._update_status_label.setWordWrap(True)
+        self._update_status_row.addWidget(self._update_status_label)
+        self._update_status_row.addStretch(1)
+        self._add_row_to_card(card, self._update_status_row)
+
+        self._update_changelog_label = QLabel("")
+        self._update_changelog_label.setWordWrap(True)
+        self._update_changelog_label.setTextFormat(Qt.RichText)
+        self._update_changelog_label.setVisible(False)
+        changelog_row = QHBoxLayout()
+        changelog_row.setContentsMargins(16, 8, 16, 0)
+        changelog_row.addWidget(self._update_changelog_label)
+        self._add_row_to_card(card, changelog_row)
+
+        self._update_progress = ProgressBar()
+        self._update_progress.setRange(0, 100)
+        self._update_progress.setValue(0)
+        self._update_progress.setFixedHeight(8)
+        self._update_progress.setVisible(False)
+        progress_row = QHBoxLayout()
+        progress_row.setContentsMargins(16, 8, 16, 0)
+        progress_row.addWidget(self._update_progress)
+        self._add_row_to_card(card, progress_row)
+
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(16, 12, 16, 8)
+        btn_row.setSpacing(12)
+
+        self._btn_check_update = PushButton(self.tr("Check for Updates"))
+        self._btn_check_update.setIcon(FluentIcon.SYNC)
+        self._btn_check_update.clicked.connect(self._on_check_update)
+        btn_row.addWidget(self._btn_check_update)
+
+        self._btn_download_update = PushButton(self.tr("Download Update"))
+        self._btn_download_update.setIcon(FluentIcon.DOWNLOAD)
+        self._btn_download_update.clicked.connect(self._on_start_download)
+        self._btn_download_update.setVisible(False)
+        btn_row.addWidget(self._btn_download_update)
+
+        self._btn_install_update = PushButton(self.tr("Install & Restart"))
+        self._btn_install_update.setIcon(FluentIcon.ACCEPT)
+        self._btn_install_update.clicked.connect(self._on_install_update)
+        self._btn_install_update.setVisible(False)
+        btn_row.addWidget(self._btn_install_update)
+
+        self._btn_cancel_update = PushButton(self.tr("Cancel"))
+        self._btn_cancel_update.clicked.connect(self._on_cancel_update)
+        self._btn_cancel_update.setVisible(False)
+        btn_row.addWidget(self._btn_cancel_update)
+
+        btn_row.addStretch()
+        self._add_row_to_card(card, btn_row)
+
+        self._update_check_thread = None
+        self._update_download_thread = None
+        self._downloaded_file = None
+
+        return card
+
+    def _refresh_update_card(self):
+        if not self._updater:
+            return
+        tm = ThemeManager.instance()
+        pal = tm.palette()
+        self._update_version_label.setText(self._updater.current_version)
+
+    def _on_check_update(self):
+        if not self._updater:
+            return
+        tm = ThemeManager.instance()
+        pal = tm.palette()
+        self._set_update_checking_ui()
+        from update_dialog import UpdateCheckThread
+        self._update_check_thread = UpdateCheckThread(self._updater, self)
+        self._update_check_thread.finished.connect(self._on_check_finished)
+        self._update_check_thread.error.connect(self._on_check_error)
+        self._update_check_thread.start()
+
+    def _on_check_finished(self, result):
+        tm = ThemeManager.instance()
+        pal = tm.palette()
+        self._btn_check_update.setEnabled(True)
+        if result:
+            info = self._updater.latest_info
+            if info:
+                self._update_status_label.setText(
+                    self.tr("New version available: v%s") % info.version)
+                self._update_status_label.setStyleSheet(
+                    f"color: {pal['text_accent']}; font-size: 13px; font-weight: bold;")
+                if info.changelog:
+                    self._update_changelog_label.setVisible(True)
+                    self._update_changelog_label.setText(
+                        self.tr("<b>Changelog:</b><br>%s") % info.changelog)
+                    self._update_changelog_label.setStyleSheet(
+                        f"color: {pal['text_secondary']}; font-size: 12px;")
+                self._btn_check_update.setVisible(False)
+                self._btn_download_update.setVisible(True)
+        else:
+            self._update_status_label.setText(self.tr("You are using the latest version."))
+            self._update_status_label.setStyleSheet(
+                f"color: {pal['text_secondary']}; font-size: 13px;")
+            self._update_changelog_label.setVisible(False)
+            self._btn_check_update.setVisible(True)
+            self._btn_download_update.setVisible(False)
+            self._btn_install_update.setVisible(False)
+            self._btn_cancel_update.setVisible(False)
+
+    def _on_check_error(self, error_msg: str):
+        tm = ThemeManager.instance()
+        pal = tm.palette()
+        self._btn_check_update.setEnabled(True)
+        self._update_status_label.setText(self.tr("Check failed: %s") % error_msg)
+        self._update_status_label.setStyleSheet(
+            f"color: {pal['text_warning']}; font-size: 13px;")
+        self._update_changelog_label.setVisible(False)
+        self._btn_check_update.setVisible(True)
+        self._btn_download_update.setVisible(False)
+        self._btn_install_update.setVisible(False)
+        self._btn_cancel_update.setVisible(False)
+
+    def _set_update_checking_ui(self):
+        tm = ThemeManager.instance()
+        pal = tm.palette()
+        self._btn_check_update.setEnabled(False)
+        self._btn_check_update.setVisible(True)
+        self._btn_download_update.setVisible(False)
+        self._btn_install_update.setVisible(False)
+        self._btn_cancel_update.setVisible(False)
+        self._update_progress.setVisible(False)
+        self._update_status_label.setText(self.tr("Checking for updates..."))
+        self._update_status_label.setStyleSheet(
+            f"color: {pal['text_secondary']}; font-size: 13px;")
+
+    def _on_start_download(self):
+        if not self._updater:
+            return
+        tm = ThemeManager.instance()
+        pal = tm.palette()
+        self._btn_check_update.setVisible(False)
+        self._btn_download_update.setVisible(False)
+        self._btn_install_update.setVisible(False)
+        self._btn_cancel_update.setVisible(True)
+        self._update_progress.setVisible(True)
+        self._update_progress.setValue(0)
+        self._update_status_label.setText(self.tr("Downloading update... 0%"))
+        self._update_status_label.setStyleSheet(
+            f"color: {pal['text_secondary']}; font-size: 13px;")
+        from update_dialog import UpdateDownloadThread
+        self._update_download_thread = UpdateDownloadThread(self._updater, self)
+        self._update_download_thread.progress.connect(self._on_download_progress)
+        self._update_download_thread.finished.connect(self._on_download_finished)
+        self._update_download_thread.error.connect(self._on_download_error)
+        self._update_download_thread.start()
+
+    def _on_download_progress(self, percent, speed, downloaded, total):
+        self._update_progress.setValue(int(percent))
+        tm = ThemeManager.instance()
+        pal = tm.palette()
+        if speed > 1024 * 1024:
+            speed_str = self.tr("%.1f MB/s") % (speed / (1024 * 1024))
+        elif speed > 1024:
+            speed_str = self.tr("%.1f KB/s") % (speed / 1024)
+        else:
+            speed_str = self.tr("%.0f B/s") % speed
+        if total > 0:
+            dl_mb = downloaded / (1024 * 1024)
+            total_mb = total / (1024 * 1024)
+            self._update_status_label.setText(
+                self.tr("Downloading... %.0f%%  |  %.1f / %.1f MB  |  %s") % (
+                    percent, dl_mb, total_mb, speed_str))
+        else:
+            self._update_status_label.setText(
+                self.tr("Downloading... %.0f%%  |  %s") % (percent, speed_str))
+        self._update_status_label.setStyleSheet(
+            f"color: {pal['text_secondary']}; font-size: 13px;")
+
+    def _on_download_finished(self, path):
+        tm = ThemeManager.instance()
+        pal = tm.palette()
+        self._downloaded_file = path
+        self._update_progress.setValue(100)
+        self._update_progress.setVisible(True)
+        self._btn_download_update.setVisible(False)
+        self._btn_cancel_update.setVisible(False)
+        self._btn_install_update.setVisible(True)
+        self._update_status_label.setText(
+            self.tr("Download complete! Click 'Install & Restart' to apply the update."))
+        self._update_status_label.setStyleSheet(
+            f"color: {pal['text_accent']}; font-size: 13px; font-weight: bold;")
+
+    def _on_download_error(self, error_msg: str):
+        tm = ThemeManager.instance()
+        pal = tm.palette()
+        self._update_progress.setVisible(False)
+        self._btn_check_update.setVisible(True)
+        self._btn_download_update.setVisible(False)
+        self._btn_install_update.setVisible(False)
+        self._btn_cancel_update.setVisible(False)
+        self._update_status_label.setText(self.tr("Download failed: %s") % error_msg)
+        self._update_status_label.setStyleSheet(
+            f"color: {pal['text_warning']}; font-size: 13px;")
+
+    def _on_install_update(self):
+        if self._downloaded_file and self._updater:
+            try:
+                self._updater.install_update(self._downloaded_file)
+            except Exception as e:
+                tm = ThemeManager.instance()
+                pal = tm.palette()
+                self._update_status_label.setText(
+                    self.tr("Installation failed: %s") % str(e))
+                self._update_status_label.setStyleSheet(
+                    f"color: {pal['text_warning']}; font-size: 13px;")
+
+    def _on_cancel_update(self):
+        if self._updater:
+            self._updater.cancel_download()
+        tm = ThemeManager.instance()
+        pal = tm.palette()
+        self._update_progress.setVisible(False)
+        self._btn_cancel_update.setVisible(False)
+        if self._updater and self._updater.latest_info:
+            self._btn_download_update.setVisible(True)
+            self._update_status_label.setText(
+                self.tr("Download cancelled. You can download again."))
+        else:
+            self._btn_check_update.setVisible(True)
+            self._update_status_label.setText(self.tr("Download cancelled."))
+        self._btn_install_update.setVisible(False)
+        self._update_status_label.setStyleSheet(
+            f"color: {pal['text_secondary']}; font-size: 13px;")
 
     def cleanup(self):
         self._stop_input_test()

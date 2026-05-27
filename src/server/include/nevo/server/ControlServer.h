@@ -122,6 +122,10 @@ private:
     ControlJson cmdSetAdminPassword(const ControlJson& params);
     ControlJson cmdSetConfig(const ControlJson& params);
     ControlJson cmdConfigureSsl(const ControlJson& params);
+    ControlJson cmdCreateChannel(const ControlJson& params);
+    ControlJson cmdDeleteChannel(const ControlJson& params);
+    ControlJson cmdUpdateChannel(const ControlJson& params);
+    ControlJson cmdReorderChannels(const ControlJson& params);
 
     boost::asio::io_context& io_ctx_;
     Tcp::acceptor acceptor_;

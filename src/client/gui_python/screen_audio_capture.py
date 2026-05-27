@@ -1,3 +1,4 @@
+import sys
 import threading
 import numpy as np
 
@@ -14,6 +15,21 @@ AUDIO_APPLICATION = 2
 SAMPLE_RATE = 48000
 CHANNELS = 2
 FRAME_SIZE = 960
+
+_MACOS_LOOPBACK_NAMES = [
+    "blackhole",
+    "soundflower",
+    "loopback",
+    "virtual",
+    "aggregate",
+]
+
+_WINDOWS_LOOPBACK_NAMES = [
+    "loopback",
+    "stereo mix",
+    "wave out mix",
+    "what u hear",
+]
 
 
 class ScreenAudioCapture:
@@ -69,15 +85,34 @@ class ScreenAudioCapture:
         if not HAS_SD:
             return None
         devices = sd.query_devices()
+
+        if sys.platform == "darwin":
+            name_list = _MACOS_LOOPBACK_NAMES
+        else:
+            name_list = _WINDOWS_LOOPBACK_NAMES
+
         for i, dev in enumerate(devices):
             name = dev.get("name", "").lower()
-            if "loopback" in name and dev.get("max_input_channels", 0) > 0:
-                return i
-        for i, dev in enumerate(devices):
-            name = dev.get("name", "").lower()
-            if "stereo mix" in name and dev.get("max_input_channels", 0) > 0:
-                return i
+            for keyword in name_list:
+                if keyword in name and dev.get("max_input_channels", 0) > 0:
+                    return i
         return None
+
+    @staticmethod
+    def list_available_devices():
+        if not HAS_SD:
+            return []
+        devices = sd.query_devices()
+        result = []
+        for i, dev in enumerate(devices):
+            if dev.get("max_input_channels", 0) > 0:
+                result.append({
+                    "index": i,
+                    "name": dev.get("name", ""),
+                    "channels": dev.get("max_input_channels", 0),
+                    "sample_rate": int(dev.get("default_samplerate", 0)),
+                })
+        return result
 
     @property
     def running(self):

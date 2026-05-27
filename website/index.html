@@ -130,10 +130,11 @@ h3 { font-size: 1.125rem; line-height: 1.3; }
   align-items: center;
   justify-content: center;
   transition: transform var(--transition);
+  overflow: hidden;
 }
-.nav-logo svg {
-  width: 120%; height: 120%;
-  transform: scale(1.1);
+.nav-logo img {
+  width: 100%; height: 100%;
+  object-fit: contain;
 }
 .nav-brand:hover .nav-logo { transform: scale(1.08); }
 .nav-brand:hover span { color: var(--accent); }
@@ -385,6 +386,7 @@ h3 { font-size: 1.125rem; line-height: 1.3; }
 .footer {
   padding: 60px 0 32px;
   border-top: 1px solid var(--border);
+  background: #000000;
 }
 
 .footer-inner {
@@ -428,6 +430,61 @@ h3 { font-size: 1.125rem; line-height: 1.3; }
 .reveal-delay-2 { transition-delay: 0.16s; }
 .reveal-delay-3 { transition-delay: 0.24s; }
 
+/* ---------- Typewriter Effect ---------- */
+.typewriter {
+  display: inline;
+  border-right: 3px solid var(--accent);
+  animation: blink 0.8s step-end infinite;
+}
+@keyframes blink {
+  0%, 100% { border-color: var(--accent); }
+  50% { border-color: transparent; }
+}
+
+/* ---------- Stat Counter Animation ---------- */
+.hero-stat-value.counting {
+  animation: countPulse 0.3s ease-out;
+}
+@keyframes countPulse {
+  0% { transform: scale(1.2); }
+  100% { transform: scale(1); }
+}
+
+/* ---------- 3D Card Tilt ---------- */
+.feature-card {
+  transform-style: preserve-3d;
+  perspective: 1000px;
+}
+.feature-card.tilt {
+  transition: transform 0.15s ease-out;
+}
+
+/* ---------- Ripple Effect ---------- */
+.btn {
+  position: relative;
+  overflow: hidden;
+}
+.btn .ripple {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.3);
+  transform: scale(0);
+  animation: rippleAnim 0.6s ease-out;
+  pointer-events: none;
+}
+@keyframes rippleAnim {
+  to { transform: scale(4); opacity: 0; }
+}
+
+/* ---------- Glow Pulse on Hover ---------- */
+.feature-icon {
+  transition: all 0.3s ease;
+}
+.feature-card:hover .feature-icon {
+  box-shadow: 0 0 20px var(--accent-glow);
+  transform: scale(1.1);
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 768px) {
   .hero { padding: 120px 0 80px; }
@@ -445,28 +502,17 @@ h3 { font-size: 1.125rem; line-height: 1.3; }
 </head>
 <body>
 
+
+
 <nav class="nav" id="nav">
   <div class="nav-inner">
     <a href="#" class="nav-brand">
       <div class="nav-logo">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="60 100 500 400">
-          <defs>
-            <style>
-              .s0{fill:#ffff00;stroke:#000000;stroke-width:3;}
-              .s1{fill:none;stroke:#ffffff;stroke-width:2.5;}
-            </style>
-          </defs>
-          <polygon class="s0" points="420 150 160 150 100 170 100 210 370 280 550 230 550 180 470 150 "/>
-          <polygon class="s1" points="100 200 100 160 160 140 390 140 450 160 450 200 250 250 200 220 "/>
-          <polygon class="s1" points="110 240 110 200 170 180 410 180 470 200 470 240 270 290 220 260 "/>
-          <polygon class="s0" points="440 510 100 430 100 390 160 370 410 370 480 390 480 440 550 460 550 500 "/>
-          <polygon class="s1" points="100 420 100 380 160 360 390 360 460 380 460 420 270 460 220 440 "/>
-          <polygon class="s1" points="110 460 110 420 170 400 410 400 470 420 470 460 280 500 230 480 "/>
-        </svg>
+        <img src="logo.svg" alt="NEVO Logo" width="40" height="40">
       </div>
       NEVO
     </a>
-    <a href="#features" aria-label="了解更多 NEVO 核心功能" class="btn btn-primary" style="padding:9px 22px;font-size:0.8125rem;">了解更多</a>
+    <a href="/docs/" aria-label="了解更多 NEVO 核心功能" class="btn btn-primary" style="padding:9px 22px;font-size:0.8125rem;">了解更多</a>
   </div>
 </nav>
 
@@ -475,30 +521,17 @@ h3 { font-size: 1.125rem; line-height: 1.3; }
     <div class="hero-orb"></div>
     <div class="hero-grid"></div>
     <div class="hero-geom">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600">
-        <defs>
-          <style>
-            .g0{fill:none;stroke:#ffff00;stroke-width:8;}
-            .g1{fill:none;stroke:#ffffff;stroke-width:6;}
-          </style>
-        </defs>
-        <polygon class="g0" points="420 150 160 150 100 170 100 210 370 280 550 230 550 180 470 150 "/>
-        <polygon class="g1" points="100 200 100 160 160 140 390 140 450 160 450 200 250 250 200 220 "/>
-        <polygon class="g1" points="110 240 110 200 170 180 410 180 470 200 470 240 270 290 220 260 "/>
-        <polygon class="g0" points="440 510 100 430 100 390 160 370 410 370 480 390 480 440 550 460 550 500 "/>
-        <polygon class="g1" points="100 420 100 380 160 360 390 360 460 380 460 420 270 460 220 440 "/>
-        <polygon class="g1" points="110 460 110 420 170 400 410 400 470 420 470 460 280 500 230 480 "/>
-      </svg>
+      <img src="logo.svg" alt="" aria-hidden="true" width="300" height="300" style="opacity:0.06;">
     </div>
   </div>
   <div class="container">
     <div class="hero-content">
-      <h1>让每一次通话<br><span>都安全如初</span></h1>
+      <h1>让每一次通话<br><span class="typewriter" data-text="都安全如初">都安全如初</span></h1>
       <p class="hero-desc">
         NEVO 是面向现代团队的低延迟加密 VoIP 平台。军事级加密保护每一个语音数据包，自托管架构确保数据主权完全由你掌控。
       </p>
       <div class="hero-actions">
-        <a href="https://github.com" aria-label="开始使用 NEVO，访问 GitHub 仓库" class="btn btn-primary" target="_blank" rel="noopener">
+        <a href="https://github.com/TNEllya/NEVO" aria-label="开始使用 NEVO，访问 GitHub 仓库" class="btn btn-primary" target="_blank" rel="noopener">
           开始使用
           <svg aria-hidden="true" width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </a>
@@ -567,7 +600,7 @@ h3 { font-size: 1.125rem; line-height: 1.3; }
     <div class="cta-inner reveal">
       <h2>准备好开始了吗？</h2>
       <p>克隆仓库、构建部署，几分钟内即可拥有属于你自己的加密语音通信平台。</p>
-      <a href="https://github.com" aria-label="查看 NEVO GitHub 项目仓库" class="btn btn-primary" target="_blank" rel="noopener">
+      <a href="https://github.com/TNEllya/NEVO" aria-label="查看 NEVO GitHub 项目仓库" class="btn btn-primary" target="_blank" rel="noopener">
         查看 GitHub
         <svg aria-hidden="true" width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </a>
@@ -580,26 +613,13 @@ h3 { font-size: 1.125rem; line-height: 1.3; }
     <div class="footer-inner">
       <div class="footer-brand">
         <div class="nav-logo">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="60 100 500 400">
-            <defs>
-              <style>
-                .s0{fill:#ffff00;stroke:#000000;stroke-width:3;}
-                .s1{fill:none;stroke:#ffffff;stroke-width:2.5;}
-              </style>
-            </defs>
-            <polygon class="s0" points="420 150 160 150 100 170 100 210 370 280 550 230 550 180 470 150 "/>
-            <polygon class="s1" points="100 200 100 160 160 140 390 140 450 160 450 200 250 250 200 220 "/>
-            <polygon class="s1" points="110 240 110 200 170 180 410 180 470 200 470 240 270 290 220 260 "/>
-            <polygon class="s0" points="440 510 100 430 100 390 160 370 410 370 480 390 480 440 550 460 550 500 "/>
-            <polygon class="s1" points="100 420 100 380 160 360 390 360 460 380 460 420 270 460 220 440 "/>
-            <polygon class="s1" points="110 460 110 420 170 400 410 400 470 420 470 460 280 500 230 480 "/>
-          </svg>
+          <img src="logo.svg" alt="" aria-hidden="true" width="28" height="28">
         </div>
         <span>NEVO</span>
       </div>
       <p class="footer-copy">&copy; 2026 NEVO. All rights reserved.</p>
       <div class="footer-social">
-        <a href="https://github.com" target="_blank" rel="noopener" aria-label="访问 NEVO GitHub 仓库">
+        <a href="https://github.com/TNEllya/NEVO" target="_blank" rel="noopener" aria-label="访问 NEVO GitHub 仓库">
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
         </a>
         <a href="#" aria-label="加入 NEVO Discord 社区">
@@ -615,11 +635,119 @@ h3 { font-size: 1.125rem; line-height: 1.3; }
 
 <script>
 (function() {
+  'use strict';
+
+  // ---------- Navigation Scroll Effect ----------
   var nav = document.getElementById('nav');
   window.addEventListener('scroll', function() {
     nav.classList.toggle('scrolled', window.scrollY > 50);
   });
 
+  // ---------- Typewriter Effect ----------
+  var typewriterElements = document.querySelectorAll('.typewriter');
+  typewriterElements.forEach(function(el) {
+    var text = el.getAttribute('data-text');
+    var index = 0;
+    el.textContent = '';
+    
+    function type() {
+      if (index < text.length) {
+        el.textContent += text.charAt(index);
+        index++;
+        setTimeout(type, 150);
+      }
+    }
+    
+    // Start typing after hero animation
+    setTimeout(type, 800);
+  });
+
+  // ---------- Number Counter Animation ----------
+  var statValues = document.querySelectorAll('.hero-stat-value');
+  var counterObserver = new IntersectionObserver(function(entries) {
+    entries.forEach(function(entry) {
+      if (entry.isIntersecting) {
+        var el = entry.target;
+        var text = el.textContent;
+        var hasLt = text.indexOf('<') !== -1;
+        var hasMs = text.indexOf('ms') !== -1;
+        var hasBit = text.indexOf('bit') !== -1;
+        
+        if (hasLt && hasMs) {
+          // <20ms
+          var target = 20;
+          var current = 0;
+          var interval = setInterval(function() {
+            current += 1;
+            el.textContent = '<' + current + 'ms';
+            el.classList.add('counting');
+            if (current >= target) {
+              clearInterval(interval);
+              el.classList.remove('counting');
+            }
+          }, 50);
+        } else if (hasBit) {
+          // 256-bit
+          var target = 256;
+          var current = 0;
+          var interval = setInterval(function() {
+            current += 8;
+            el.textContent = current + '-bit';
+            el.classList.add('counting');
+            if (current >= target) {
+              clearInterval(interval);
+              el.classList.remove('counting');
+            }
+          }, 30);
+        }
+        
+        counterObserver.unobserve(el);
+      }
+    });
+  }, { threshold: 0.5 });
+  
+  statValues.forEach(function(el) { counterObserver.observe(el); });
+
+  // ---------- 3D Card Tilt Effect ----------
+  document.querySelectorAll('.feature-card').forEach(function(card) {
+    card.classList.add('tilt');
+    
+    card.addEventListener('mousemove', function(e) {
+      var rect = card.getBoundingClientRect();
+      var x = e.clientX - rect.left;
+      var y = e.clientY - rect.top;
+      var centerX = rect.width / 2;
+      var centerY = rect.height / 2;
+      var rotateX = (y - centerY) / centerY * -8;
+      var rotateY = (x - centerX) / centerX * 8;
+      
+      card.style.transform = 'perspective(1000px) rotateX(' + rotateX + 'deg) rotateY(' + rotateY + 'deg) translateY(-3px)';
+    });
+    
+    card.addEventListener('mouseleave', function() {
+      card.style.transform = 'perspective(1000px) rotateX(0) rotateY(0) translateY(0)';
+    });
+  });
+
+  // ---------- Ripple Effect on Buttons ----------
+  document.querySelectorAll('.btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      var ripple = document.createElement('span');
+      ripple.className = 'ripple';
+      var rect = btn.getBoundingClientRect();
+      var size = Math.max(rect.width, rect.height);
+      ripple.style.width = ripple.style.height = size + 'px';
+      ripple.style.left = (e.clientX - rect.left - size / 2) + 'px';
+      ripple.style.top = (e.clientY - rect.top - size / 2) + 'px';
+      btn.appendChild(ripple);
+      
+      setTimeout(function() {
+        ripple.remove();
+      }, 600);
+    });
+  });
+
+  // ---------- Mouse Light Effect on Cards ----------
   document.querySelectorAll('[data-mouse]').forEach(function(card) {
     card.addEventListener('mousemove', function(e) {
       var r = card.getBoundingClientRect();
@@ -628,11 +756,24 @@ h3 { font-size: 1.125rem; line-height: 1.3; }
     });
   });
 
+  // ---------- Scroll Reveal Animation ----------
   var obs = new IntersectionObserver(function(entries) {
     entries.forEach(function(e) { if (e.isIntersecting) e.target.classList.add('visible'); });
   }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
 
   document.querySelectorAll('.reveal').forEach(function(el) { obs.observe(el); });
+
+  // ---------- Smooth Scroll for Anchor Links ----------
+  document.querySelectorAll('a[href^="#"]').forEach(function(anchor) {
+    anchor.addEventListener('click', function(e) {
+      var target = document.querySelector(this.getAttribute('href'));
+      if (target) {
+        e.preventDefault();
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  });
+
 })();
 </script>
 

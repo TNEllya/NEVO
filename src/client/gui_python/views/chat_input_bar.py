@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
     QApplication,
 )
 from PyQt5.QtGui import QFont, QKeyEvent, QPixmap
+from theme_manager import ThemeManager
 
 
 class ChatInputEdit(QWidget):
@@ -41,10 +42,8 @@ class ChatInputEdit(QWidget):
         self._text = QTextEdit(self)
         self._text.setFixedHeight(44)
         self._text.setFont(QFont("Segoe UI", 10))
+        self._refresh_input_style()
         self._text.setStyleSheet(
-            "QTextEdit { background-color: #383a40; border: 1px solid #404249; "
-            "border-radius: 6px; color: #dbdee1; padding: 8px 12px; }"
-            "QTextEdit:focus { border: 1px solid #5865F2; }"
             "QTextEdit::verticalScrollBar { width: 0px; }"
         )
         self._text.setPlaceholderText("Type a message...")
@@ -78,6 +77,23 @@ class ChatInputEdit(QWidget):
 
     def clear(self):
         self._text.clear()
+
+    def _refresh_input_style(self):
+        tm = ThemeManager.instance()
+        pal = tm.palette()
+        self._text.setStyleSheet(
+            f"QTextEdit {{"
+            f"  background-color: {pal['bg_card_solid']};"
+            f"  border: 1px solid {pal['bg_hover']};"
+            f"  border-radius: 6px;"
+            f"  color: {pal['text_primary']};"
+            f"  padding: 8px 12px;"
+            f"}}"
+            f"QTextEdit:focus {{"
+            f"  border: 1px solid #5865F2;"
+            f"}}"
+            f"QTextEdit::verticalScrollBar {{ width: 0px; }}"
+        )
 
     def insertPlainText(self, text: str):
         self._text.insertPlainText(text)
@@ -128,14 +144,50 @@ class ChatInputBar(QWidget):
         self._send_btn.setFixedHeight(36)
         self._send_btn.setCursor(Qt.PointingHandCursor)
         self._send_btn.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        self._send_btn.setStyleSheet(
-            "QPushButton { background-color: #5865F2; color: #fff; border: none; "
-            "border-radius: 6px; padding: 0 16px; }"
-            "QPushButton:hover { background-color: #4752c4; }"
-            "QPushButton:pressed { background-color: #3c45a5; }"
-        )
+        self._refresh_send_btn_style()
         self._send_btn.clicked.connect(self._on_send)
         layout.addWidget(self._send_btn)
+
+    def _refresh_send_btn_style(self):
+        tm = ThemeManager.instance()
+        pal = tm.palette()
+        self._send_btn.setStyleSheet(
+            f"QPushButton {{"
+            f"  background-color: #5865F2;"
+            f"  color: #ffffff;"
+            f"  border: none;"
+            f"  border-radius: 6px;"
+            f"  padding: 0 16px;"
+            f"}}"
+            f"QPushButton:hover {{ background-color: #4752c4; }}"
+            f"QPushButton:pressed {{ background-color: #3c45a5; }}"
+        )
+
+    def refresh_theme(self):
+        self._input._refresh_input_style()
+        self._refresh_send_btn_style()
+        self._refresh_tool_btn_styles()
+
+    def _refresh_tool_btn_styles(self):
+        tm = ThemeManager.instance()
+        pal = tm.palette()
+        for btn in [self._emoji_btn, self._file_btn]:
+            btn.setStyleSheet(
+                f"QPushButton {{"
+                f"  background-color: transparent;"
+                f"  border: none;"
+                f"  border-radius: 6px;"
+                f"}}"
+                f"QPushButton:hover {{"
+                f"  background-color: {pal['bg_hover']};"
+                f"}}"
+            )
+            lbl = btn.findChild(QLabel)
+            if lbl:
+                lbl.setStyleSheet(
+                    f"background: transparent; border: none; font-size: 20px;"
+                    f"color: {pal['text_muted']};"
+                )
 
     @staticmethod
     def _tool_btn(icon_text: str, tooltip: str) -> QPushButton:
@@ -144,15 +196,8 @@ class ChatInputBar(QWidget):
         btn.setFixedSize(36, 36)
         btn.setToolTip(tooltip)
         btn.setCursor(Qt.PointingHandCursor)
-        btn.setStyleSheet(
-            "QPushButton { background-color: transparent; border: none; border-radius: 6px; }"
-            "QPushButton:hover { background-color: #383a40; }"
-        )
         lbl = QLabel(icon_text, btn)
         lbl.setAlignment(Qt.AlignCenter)
-        lbl.setStyleSheet(
-            "background: transparent; border: none; font-size: 20px; color: #b9bbbe;"
-        )
         lbl.setFixedSize(36, 36)
         return btn
 

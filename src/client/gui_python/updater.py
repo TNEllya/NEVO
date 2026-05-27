@@ -13,7 +13,34 @@ from typing import Callable, Optional
 
 import requests
 
-logger = logging.getLogger("nevo.updater")
+import i18n
+
+def _tr(text: str) -> str:
+    return i18n._translate(text)
+
+logger = logging.getLogger("NEVO.Updater")
+
+_current_version_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "version.txt")
+
+
+if sys.platform == "darwin":
+    _EXTRACT_PREFIX = "NEVO.app"
+    _BUNDLE_CANDIDATES = [
+        os.path.expanduser("~/Applications/NEVO.app"),
+        "/Applications/NEVO.app",
+    ]
+else:
+    _EXTRACT_PREFIX = "NEVO"
+    _BUNDLE_CANDIDATES = []
+
+
+def _get_platform_asset_keywords():
+    if sys.platform == "darwin":
+        return ["mac", "darwin", "osx"]
+    elif sys.platform == "win32":
+        return ["win", "windows"]
+    else:
+        return ["linux", "ubuntu"]
 
 GITHUB_OWNER = "TNEllya"
 GITHUB_REPO = "NEVO"
@@ -273,8 +300,8 @@ class Updater:
 
         resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
         if resp.status_code == 404:
-            logger.info("No release found on GitHub")
-            return None
+                logger.info(_tr("No release found on GitHub"))
+                return None
         resp.raise_for_status()
 
         data = resp.json()
@@ -287,12 +314,23 @@ class Updater:
         sha256_hash = ""
         file_size = 0
 
+        platform_keywords = _get_platform_asset_keywords()
+
         for asset in data.get("assets", []):
             name = asset.get("name", "").lower()
-            if "client" in name and name.endswith(".zip"):
+
+            is_platform_match = False
+            for kw in platform_keywords:
+                if kw in name:
+                    is_platform_match = True
+                    break
+
+            if is_platform_match and name.endswith((".zip", ".dmg")):
                 download_url = asset.get("browser_download_url", "")
                 file_size = asset.get("size", 0)
-            elif "sha256" in name or name.endswith(".sha256"):
+
+            sha_name = name
+            if is_platform_match and ("sha256" in sha_name or sha_name.endswith(".sha256")):
                 sha256_url = asset.get("browser_download_url", "")
                 if sha256_url:
                     try:
@@ -300,12 +338,12 @@ class Updater:
                         sha_resp.raise_for_status()
                         sha256_hash = sha_resp.text.strip().split()[0]
                     except Exception as e:
-                        logger.warning("Failed to fetch SHA256: %s", e)
+                        logger.warning(_tr("Failed to fetch SHA256: %s"), e)
 
         if not download_url:
             for asset in data.get("assets", []):
                 name = asset.get("name", "")
-                if name.endswith(".zip"):
+                if name.endswith((".zip", ".dmg")):
                     download_url = asset.get("browser_download_url", "")
                     file_size = asset.get("size", 0)
                     break
@@ -322,11 +360,11 @@ class Updater:
 
     def download_update(self) -> Path:
         if not self._latest_info or not self._latest_info.download_url:
-            raise DownloadError("No download URL available")
+            raise DownloadError(_tr("No download URL available"))
 
         with self._lock:
             if self._state == UpdateState.DOWNLOADING:
-                raise DownloadError("Download already in progress")
+                raise DownloadError(_tr("Download already in progress"))
             self._set_state(UpdateState.DOWNLOADING)
             self._stop_event.clear()
 
@@ -353,7 +391,7 @@ class Updater:
             for attempt in range(MAX_RETRIES):
                 if self._stop_event.is_set():
                     self._set_state(UpdateState.IDLE)
-                    raise DownloadError("Download cancelled")
+                    raise DownloadError(_tr("Download cancelled"))
 
                 try:
                     resp = requests.get(
@@ -370,7 +408,7 @@ class Updater:
 
                     if resp.status_code not in (200, 206):
                         raise DownloadError(
-                            f"HTTP {resp.status_code} downloading update")
+                            f"HTTP {resp.status_code} " + _tr("downloading update"))
 
                     total = int(resp.headers.get("Content-Length", 0))
                     if resp.status_code == 206:
@@ -391,7 +429,7 @@ class Updater:
                                 chunk_size=DOWNLOAD_CHUNK_SIZE):
                             if self._stop_event.is_set():
                                 self._set_state(UpdateState.IDLE)
-                                raise DownloadError("Download cancelled")
+                                raise DownloadError(_tr("Download cancelled"))
 
                             f.write(chunk)
                             downloaded += len(chunk)
@@ -420,12 +458,12 @@ class Updater:
                     if attempt < MAX_RETRIES - 1:
                         wait = RETRY_DELAY * (attempt + 1)
                         logger.warning(
-                            "Download attempt %d failed, retrying in %ds: %s",
+                            _tr("Download attempt %d failed, retrying in %ds: %s"),
                             attempt + 1, wait, e)
                         time.sleep(wait)
                     else:
                         raise DownloadError(
-                            f"Download failed after {MAX_RETRIES} attempts: {e}")
+                            _tr("Download failed after %d attempts: %s") % (MAX_RETRIES, e))
 
             temp_path.rename(dest_path)
 
@@ -437,8 +475,7 @@ class Updater:
                 if actual_hash != info.sha256:
                     dest_path.unlink(missing_ok=True)
                     raise VerifyError(
-                        f"SHA256 mismatch: expected {info.sha256}, "
-                        f"got {actual_hash}")
+                        _tr("SHA256 mismatch: expected %s, got %s") % (info.sha256, actual_hash))
 
             with self._lock:
                 self._set_state(UpdateState.READY_TO_INSTALL)
@@ -454,7 +491,7 @@ class Updater:
 
         except (DownloadError, VerifyError):
             with self._lock:
-                self._error_message = "Download/verify failed"
+                self._error_message = _tr("Download/verify failed")
                 self._set_state(UpdateState.ERROR)
             raise
         except Exception as e:
@@ -475,26 +512,30 @@ class Updater:
     def install_update(self, downloaded_file: Path):
         with self._lock:
             if self._state != UpdateState.READY_TO_INSTALL:
-                raise InstallError("Not ready to install")
+                raise InstallError(_tr("Not ready to install"))
             self._set_state(UpdateState.INSTALLING)
 
         try:
             install_dir = self._get_install_dir()
-            if not install_dir:
-                raise InstallError("Cannot determine install directory")
 
-            backup_dir = install_dir.parent / ".nevo_backup"
-            if backup_dir.exists():
-                shutil.rmtree(backup_dir, ignore_errors=True)
-            shutil.copytree(install_dir, backup_dir)
+            if sys.platform == "darwin" and downloaded_file.suffix == ".dmg":
+                self._install_dmg_update(downloaded_file)
+            else:
+                if not install_dir:
+                    raise InstallError(_tr("Cannot determine install directory"))
 
-            temp_extract = get_update_dir() / "extracted"
-            if temp_extract.exists():
-                shutil.rmtree(temp_extract, ignore_errors=True)
+                backup_dir = install_dir.parent / ".nevo_backup"
+                if backup_dir.exists():
+                    shutil.rmtree(backup_dir, ignore_errors=True)
+                shutil.copytree(install_dir, backup_dir)
 
-            shutil.unpack_archive(str(downloaded_file), str(temp_extract))
+                temp_extract = get_update_dir() / "extracted"
+                if temp_extract.exists():
+                    shutil.rmtree(temp_extract, ignore_errors=True)
 
-            self._apply_update(temp_extract, install_dir)
+                shutil.unpack_archive(str(downloaded_file), str(temp_extract))
+
+                self._apply_update(temp_extract, install_dir)
 
             log_update_event("install_complete", {
                 "version": self._latest_info.version if self._latest_info else "unknown",
@@ -508,8 +549,50 @@ class Updater:
                 self._error_message = str(e)
                 self._set_state(UpdateState.ERROR)
             log_update_event("install_error", {"error": str(e)})
-            self._rollback_update()
+            if sys.platform != "darwin":
+                self._rollback_update()
             raise InstallError(str(e))
+
+    def _install_dmg_update(self, dmg_path: Path):
+        mount_point = Path("/Volumes/NEVO")
+        try:
+            subprocess.run(
+                ["hdiutil", "attach", str(dmg_path),
+                 "-mountpoint", str(mount_point),
+                 "-nobrowse", "-quiet"],
+                check=True, timeout=30,
+            )
+
+            app_path = mount_point / "NEVO.app"
+            if not app_path.exists():
+                app_paths = list(mount_point.glob("*.app"))
+                if app_paths:
+                    app_path = app_paths[0]
+
+            if not app_path.exists():
+                raise InstallError(_tr("No .app bundle found in DMG"))
+
+            for candidate in _BUNDLE_CANDIDATES:
+                if candidate.exists():
+                    backup = candidate.parent / ".nevo_backup"
+                    if backup.exists():
+                        shutil.rmtree(backup, ignore_errors=True)
+                    if candidate.exists():
+                        shutil.move(str(candidate), str(backup))
+                    break
+
+            target = _BUNDLE_CANDIDATES[0]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                shutil.rmtree(target, ignore_errors=True)
+
+            shutil.copytree(str(app_path), str(target), symlinks=True)
+
+        finally:
+            subprocess.run(
+                ["hdiutil", "detach", str(mount_point), "-quiet"],
+                timeout=10,
+            )
 
     def _get_install_dir(self) -> Optional[Path]:
         if getattr(sys, "frozen", False):
@@ -542,10 +625,17 @@ class Updater:
             log_update_event("rollback_error", {"error": str(e)})
 
     def _restart_application(self):
-        python = sys.executable
+        if sys.platform == "darwin":
+            for candidate in _BUNDLE_CANDIDATES:
+                if candidate.exists():
+                    subprocess.Popen(["open", str(candidate)])
+                    os._exit(0)
+                    return
+
         if getattr(sys, "frozen", False):
             subprocess.Popen([sys.executable])
         else:
+            python = sys.executable
             subprocess.Popen([python] + sys.argv)
         os._exit(0)
 
