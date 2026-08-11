@@ -24,7 +24,7 @@ const CFG = {
   maxRetries: 3,
   retryDelaysMs: [3000, 6000, 9000],
   deltaRatio: 0.5,          // 增量包小于全量包 50% 时用增量
-  mirrorPrefixes: ['https://ghproxy.com/'],
+  mirrorPrefixes: ['https://ghproxy.com/', 'https://ghfast.top/', 'https://gh-proxy.com/'],
   maxLogEntries: 200,
   chunkSize: 65536,
   progressThrottleMs: 200,
@@ -280,6 +280,7 @@ class UpdateEngine {
       return spawn(cmd, args, { detached: true, stdio: 'ignore' });
     });
     this._state = 'idle';
+    this._busy = false;
     this._cancel = false;
     this._stateListeners = [];
     this._progressListeners = [];
@@ -315,57 +316,89 @@ class UpdateEngine {
 
   /** 检测新版本。返回 {version, mode, source, manifest} 或 null（无更新）。 */
   async checkForUpdates() {
-    this._cancel = false;
-    this._log('check_start', {});
-    await this._setState('checking');
-    const errors = [];
+    if (this._busy) throw new Error('check already in progress');
+    this._busy = true;
+    try {
+      this._cancel = false;
+      this._log('check_start', {});
+      await this._setState('checking');
+      const errors = [];
 
-    for (const attempt of ['github', 'mirror']) {
-      const isMirror = attempt === 'mirror';
-      this._source = attempt;
+      // 1) 主源 API（404 = 无 release → 无更新）
+      let assetUrl = null;
+      let tagName = '';
       try {
-        let apiData;
-        try {
-          apiData = await this._fetch('api', githubApiLatestUrl(), { timeoutMs: CFG.timeoutMs });
-        } catch (err) {
-          errors.push(`${attempt} api: ${err.message}`);
-          if (!isMirror) { this._log('switch_mirror', { reason: err.message }); }
-          continue;
-        }
+        const apiData = await this._fetch('api', githubApiLatestUrl(), { timeoutMs: CFG.timeoutMs });
         const asset = (apiData.assets || []).find((a) => a.name === CFG.assetName);
-        if (!asset) {
-          this._log('no_update', { target_version: (apiData.tag_name || '').replace(/^[vV]/, '') });
+        tagName = apiData.tag_name || '';
+        assetUrl = asset ? asset.browser_download_url : null;
+        if (!assetUrl) {
+          this._log('no_update', { target_version: (tagName || '').replace(/^[vV]/, ''), reason: 'asset_missing' });
           await this._setState('idle');
           return null;
         }
-        const manifestText = await this._fetch('manifest', asset.browser_download_url, {
-          timeoutMs: CFG.timeoutMs,
-          isMirror,
-          source: attempt,
-        });
-        const manifest = parseManifest(manifestText);
-        this._manifest = manifest;
-        if (!isNewerVersion(manifest.version, this.currentVersion)) {
-          this._log('no_update', { target_version: manifest.version });
-          await this._setState('idle');
-          return null;
-        }
-        this._mode = decideMode(manifest, this.currentVersion);
-        this._log('check_ok', { target_version: manifest.version, source: attempt, mode: this._mode });
-        await this._setState('download_available');
-        return {
-          version: manifest.version,
-          mode: this._mode,
-          source: attempt,
-          manifest,
-          changelog: manifest.changelog,
-        };
       } catch (err) {
-        errors.push(`${attempt}: ${err.message}`);
+        if (err.message === 'HTTP 404') {
+          this._log('no_update', { reason: 'no_release' });
+          await this._setState('idle');
+          return null;
+        }
+        errors.push(`github api: ${err.message}`);
+        // 主源 API 失败：尝试镜像 API
+        for (let i = 0; i < CFG.mirrorPrefixes.length; i++) {
+          const prefix = CFG.mirrorPrefixes[i];
+          try {
+            const apiData = await this._fetch('api', githubApiLatestUrl(), { timeoutMs: CFG.timeoutMs, isMirror: true, mirrorPrefix: prefix });
+            const asset = (apiData.assets || []).find((a) => a.name === CFG.assetName);
+            tagName = apiData.tag_name || '';
+            assetUrl = asset ? asset.browser_download_url : null;
+            if (assetUrl) break;
+          } catch (e) {
+            errors.push(`mirror api: ${e.message}`);
+          }
+        }
+        if (!assetUrl) {
+          this._log('check_error', { error: errors.join(' | '), result: 'failed' });
+          await this._setState('error');
+          throw new Error(errors.join(' | '));
+        }
+      }
+
+      // 2) 多源清单下载：主源直连 + 各镜像，复用同一 assetUrl
+      const { text, source } = await this._fetchManifestMulti(assetUrl, errors);
+      const manifest = parseManifest(text);
+      this._manifest = manifest;
+      this._source = source;
+      if (!isNewerVersion(manifest.version, this.currentVersion)) {
+        this._log('no_update', { target_version: manifest.version });
+        await this._setState('idle');
+        return null;
+      }
+      this._mode = decideMode(manifest, this.currentVersion);
+      this._log('check_ok', { target_version: manifest.version, source, mode: this._mode });
+      await this._setState('download_available');
+      return { version: manifest.version, mode: this._mode, source, manifest, changelog: manifest.changelog };
+    } finally {
+      this._busy = false;
+    }
+  }
+
+  /** 依次从主源与各镜像下载清单，首个成功即返回。 */
+  async _fetchManifestMulti(assetUrl, errors) {
+    const candidates = [
+      { name: 'github', url: assetUrl },
+    ];
+    for (let i = 0; i < CFG.mirrorPrefixes.length; i++) {
+      candidates.push({ name: `mirror${i + 1}`, url: proxyGithubUrl(assetUrl, CFG.mirrorPrefixes[i]) });
+    }
+    for (const c of candidates) {
+      try {
+        const text = await this._fetch('manifest', c.url, { timeoutMs: CFG.timeoutMs });
+        return { text, source: c.name };
+      } catch (err) {
+        errors.push(`${c.name}: ${err.message}`);
       }
     }
-
-    this._log('check_error', { error: errors.join(' | '), result: 'failed' });
     await this._setState('error');
     throw new Error(errors.join(' | '));
   }

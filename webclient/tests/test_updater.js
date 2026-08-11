@@ -8,6 +8,12 @@ const U = require('../electron/updater.js');
 let pass = 0, fail = 0;
 function t(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  FAIL:', msg); } }
 
+// 主进程必须在创建更新引擎前导入更新模块
+const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+const updaterImportAt = mainSource.indexOf("const updater = require('./updater.js');");
+const updaterUseAt = mainSource.indexOf('new updater.UpdateEngine()');
+t(updaterImportAt >= 0 && updaterImportAt < updaterUseAt, 'main imports updater before creating engine');
+
 // 版本解析
 t(JSON.stringify(U.parseVersion('BETA0.0.1')) === '[0,0,1]', 'parseVersion BETA0.0.1');
 t(JSON.stringify(U.parseVersion('v1.2.3-beta')) === '[1,2,3]', 'parseVersion v1.2.3-beta');
@@ -118,6 +124,54 @@ engine.onState((oldS, newS) => states.push(newS));
   let err = null;
   try { await e3.checkForUpdates(); } catch (e) { err = e; }
   t(!!err && e3.state === 'error', 'check failure -> error state');
+
+  // --- 多源清单检测：镜像轮次复用 assetUrl，不重复调用 API ---
+  const calls = [];
+  const e4 = new U.UpdateEngine({
+    currentVersion: 'BETA0.0.1',
+    fetcher: async (kind, url, opts = {}) => {
+      calls.push({ kind, url, isMirror: !!opts.isMirror });
+      if (kind === 'api') {
+        return { tag_name: 'BETA0.0.2', assets: [{ name: 'latest.json', browser_download_url: 'https://github.com/TNEllya/NEVO/releases/download/BETA0.0.2/latest.json' }] };
+      }
+      if (kind === 'manifest') {
+        return JSON.stringify({ version: 'BETA0.0.2', full_package: { url: 'https://github.com/x/Setup.exe', size: 10, sha256: 'a' } });
+      }
+      throw new Error('unknown');
+    },
+  });
+  const info4 = await e4.checkForUpdates();
+  t(info4 && info4.version === 'BETA0.0.2', 'multi-round check finds update');
+  const apiCalls = calls.filter((c) => c.kind === 'api');
+  t(apiCalls.length === 1, 'mirror rounds do not re-call API (only github round calls API)');
+  const manifestCalls = calls.filter((c) => c.kind === 'manifest');
+  t(manifestCalls.length === 1, 'first manifest success stops further rounds');
+  t(manifestCalls[0].url === 'https://github.com/TNEllya/NEVO/releases/download/BETA0.0.2/latest.json', 'github manifest uses assetUrl directly');
+
+  // --- 主源清单失败时镜像可兜底 ---
+  const calls2 = [];
+  const e5 = new U.UpdateEngine({
+    currentVersion: 'BETA0.0.1',
+    fetcher: async (kind, url, opts = {}) => {
+      calls2.push({ kind, url });
+      if (kind === 'api') {
+        return { tag_name: 'BETA0.0.2', assets: [{ name: 'latest.json', browser_download_url: 'https://github.com/TNEllya/NEVO/releases/download/BETA0.0.2/latest.json' }] };
+      }
+      if (kind === 'manifest') {
+        if (!url.startsWith('https://ghproxy.com/')) throw new Error('request timeout');
+        return JSON.stringify({ version: 'BETA0.0.2', full_package: { url: 'https://github.com/x/Setup.exe', size: 10, sha256: 'a' } });
+      }
+      throw new Error('unknown');
+    },
+  });
+  const info5 = await e5.checkForUpdates();
+  t(info5 && info5.source === 'mirror1', 'mirror manifest fallback when github times out');
+  t(apiCalls2_guard(calls2), 'manifest tried github then mirror');
   console.log(`\nResult: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
+
+function apiCalls2_guard(calls2) {
+  return calls2.some((c) => c.kind === 'manifest' && !c.url.startsWith('https://ghproxy.com/'))
+    && calls2.some((c) => c.kind === 'manifest' && c.url.startsWith('https://ghproxy.com/'));
+}
