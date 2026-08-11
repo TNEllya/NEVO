@@ -259,9 +259,203 @@ async function downloadWithResume(url, destPath, opts = {}) {
   throw new Error('unreachable');
 }
 
+// ============================================================
+// UpdateEngine — 状态机
+// ============================================================
+class UpdateEngine {
+  /**
+   * opts: {
+   *   baseDir,           // 安装目录（含 .nevo_update 子目录）
+   *   currentVersion,    // 当前版本号（默认读 package.json buildVersion）
+   *   fetcher,           // 可注入的网络拉取器（测试用），默认走真实网络
+   *   execFn,            // 可注入的 spawn（测试用）
+   * }
+   */
+  constructor(opts = {}) {
+    this.baseDir = opts.baseDir || defaultBaseDir();
+    this.currentVersion = opts.currentVersion || defaultCurrentVersion();
+    this._fetcher = opts.fetcher || defaultFetcher();
+    this._exec = opts.execFn || ((cmd, args) => {
+      const { spawn } = require('child_process');
+      return spawn(cmd, args, { detached: true, stdio: 'ignore' });
+    });
+    this._state = 'idle';
+    this._cancel = false;
+    this._stateListeners = [];
+    this._progressListeners = [];
+    this._manifest = null;
+    this._mode = null;
+    this._source = 'github';
+    this._downloadedPath = null;
+    this._log = (ev, det) => logUpdateEvent(this.baseDir, Object.assign(
+      { current_version: this.currentVersion }, det || {}, { event: ev, result: 'success' }));
+  }
+
+  get state() { return this._state; }
+
+  onState(fn) { this._stateListeners.push(fn); }
+  onProgress(fn) { this._progressListeners.push(fn); }
+  cancel() { this._cancel = true; }
+
+  async _setState(s) {
+    const old = this._state;
+    this._state = s;
+    for (const fn of this._stateListeners) { try { fn(old, s); } catch (_) {} }
+  }
+
+  async _emitProgress(percent, speed, downloaded, total) {
+    for (const fn of this._progressListeners) {
+      try { fn(percent, speed, downloaded, total); } catch (_) {}
+    }
+  }
+
+  async _fetch(kind, url, opts) {
+    return this._fetcher(kind, url, opts);
+  }
+
+  /** 检测新版本。返回 {version, mode, source, manifest} 或 null（无更新）。 */
+  async checkForUpdates() {
+    this._cancel = false;
+    this._log('check_start', {});
+    await this._setState('checking');
+    const errors = [];
+
+    for (const attempt of ['github', 'mirror']) {
+      const isMirror = attempt === 'mirror';
+      this._source = attempt;
+      try {
+        let apiData;
+        try {
+          apiData = await this._fetch('api', githubApiLatestUrl(), { timeoutMs: CFG.timeoutMs });
+        } catch (err) {
+          errors.push(`${attempt} api: ${err.message}`);
+          if (!isMirror) { this._log('switch_mirror', { reason: err.message }); }
+          continue;
+        }
+        const asset = (apiData.assets || []).find((a) => a.name === CFG.assetName);
+        if (!asset) {
+          this._log('no_update', { target_version: (apiData.tag_name || '').replace(/^[vV]/, '') });
+          await this._setState('idle');
+          return null;
+        }
+        const manifestText = await this._fetch('manifest', asset.browser_download_url, {
+          timeoutMs: CFG.timeoutMs,
+          isMirror,
+          source: attempt,
+        });
+        const manifest = parseManifest(manifestText);
+        this._manifest = manifest;
+        if (!isNewerVersion(manifest.version, this.currentVersion)) {
+          this._log('no_update', { target_version: manifest.version });
+          await this._setState('idle');
+          return null;
+        }
+        this._mode = decideMode(manifest, this.currentVersion);
+        this._log('check_ok', { target_version: manifest.version, source: attempt, mode: this._mode });
+        await this._setState('download_available');
+        return {
+          version: manifest.version,
+          mode: this._mode,
+          source: attempt,
+          manifest,
+          changelog: manifest.changelog,
+        };
+      } catch (err) {
+        errors.push(`${attempt}: ${err.message}`);
+      }
+    }
+
+    this._log('check_error', { error: errors.join(' | '), result: 'failed' });
+    await this._setState('error');
+    throw new Error(errors.join(' | '));
+  }
+
+  /** 下载并准备更新。返回 {mode, path}。 */
+  async downloadUpdate() {
+    if (!this._manifest) throw new Error('no manifest, run checkForUpdates first');
+    const manifest = this._manifest;
+    const mode = this._mode || decideMode(manifest, this.currentVersion);
+    this._mode = mode;
+    const updateDir = getUpdateDir(this.baseDir);
+    const target = mode === 'delta'
+      ? manifest.delta.url
+      : manifest.full.url;
+    const sha = mode === 'delta' ? manifest.delta.sha256 : manifest.full.sha256;
+    const filename = target.split('/').pop() || (mode === 'delta' ? 'delta.zip' : 'setup.exe');
+    const destPath = path.join(updateDir, filename);
+    this._log('download_start', { mode, target_version: manifest.version, source: this._source });
+    await this._setState('downloading');
+    try {
+      this._downloadedPath = await downloadWithResume(target, destPath, {
+        timeoutMs: CFG.timeoutMs,
+        sha256: sha || undefined,
+        shouldCancel: () => this._cancel,
+        onProgress: (p, s, d, t) => this._emitProgress(p, s, d, t),
+      });
+    } catch (err) {
+      this._log('download_error', { mode, error: err.message, result: 'failed' });
+      await this._setState('error');
+      throw err;
+    }
+    this._log('download_complete', { mode, size: fs.statSync(destPath).size });
+    await this._setState('ready');
+    return { mode, path: destPath };
+  }
+}
+
+function defaultBaseDir() {
+  if (electron && electron.app) {
+    return path.dirname(electron.app.getPath('exe'));
+  }
+  return process.cwd();
+}
+
+function defaultCurrentVersion() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf-8'));
+    return pkg.buildVersion || pkg.version || '0.0.0';
+  } catch (_) { return '0.0.0'; }
+}
+
+function defaultFetcher() {
+  return async (kind, url, opts = {}) => {
+    const headers = { 'User-Agent': 'NEVO-Client/Updater' };
+    if (kind === 'api') {
+      headers.Accept = 'application/vnd.github+json';
+    }
+    if (opts.isMirror) url = proxyGithubUrl(url);
+    if (kind === 'api') {
+      const res = await httpGet(url, headers, opts.timeoutMs || CFG.timeoutMs);
+      return new Promise((resolve, reject) => {
+        if (res.statusCode !== 200) { res.resume(); return reject(new Error('HTTP ' + res.statusCode)); }
+        let body = '';
+        res.setEncoding('utf-8');
+        res.on('data', (c) => { body += c; });
+        res.on('end', () => {
+          try { resolve(JSON.parse(body)); } catch (e) { reject(new Error('bad json')); }
+        });
+        res.on('error', reject);
+      });
+    }
+    if (kind === 'manifest') {
+      const res = await httpGet(url, headers, opts.timeoutMs || CFG.timeoutMs);
+      return new Promise((resolve, reject) => {
+        if (res.statusCode !== 200) { res.resume(); return reject(new Error('HTTP ' + res.statusCode)); }
+        let body = '';
+        res.setEncoding('utf-8');
+        res.on('data', (c) => { body += c; });
+        res.on('end', () => resolve(body));
+        res.on('error', reject);
+      });
+    }
+    throw new Error('unknown fetch kind ' + kind);
+  };
+}
+
 module.exports = {
   CFG, parseVersion, isNewerVersion,
   githubApiLatestUrl, proxyGithubUrl, parseManifest, decideMode,
   getUpdateDir, getLogPath, logUpdateEvent, readUpdateLog,
   computeRetryDelays, sleep, httpGet, sha256File, downloadWithResume,
+  UpdateEngine, defaultBaseDir, defaultCurrentVersion, defaultFetcher,
 };

@@ -83,5 +83,41 @@ U.CFG.maxLogEntries = backupMax;
 const delays = U.computeRetryDelays(3, [3000, 6000, 9000]);
 t(delays.length === 3 && delays[0] === 3000 && delays[2] === 9000, 'computeRetryDelays');
 
-console.log(`\nResult: ${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// 状态机：状态流转与回调
+const engine = new U.UpdateEngine({ baseDir: path.join(tmpDir, 'engine') });
+const states = [];
+engine.onState((oldS, newS) => states.push(newS));
+(async () => {
+  try {
+    await engine._setState('checking');
+    await engine._setState('idle');
+  } catch (e) { /* ignore */ }
+  t(states.includes('checking') && states.includes('idle'), 'state transitions fire callbacks');
+  t(engine.state === 'idle', 'engine final state idle');
+
+  // 检测：mock 拉取器
+  const fakeFetch = async (kind, url, opts) => {
+    if (kind === 'api') {
+      return { assets: [{ name: 'latest.json', browser_download_url: 'https://github.com/x/latest.json' }] };
+    }
+    if (kind === 'manifest') {
+      return JSON.stringify({
+        version: 'BETA0.0.2', files: [],
+        full_package: { url: 'https://github.com/x/Setup.exe', size: 1000, sha256: 'f' },
+        delta: { from: 'BETA0.0.1', url: 'https://github.com/x/d.zip', size: 10, sha256: 'd' },
+      });
+    }
+    throw new Error('unexpected fetch kind ' + kind);
+  };
+  const e2 = new U.UpdateEngine({ baseDir: path.join(tmpDir, 'e2'), fetcher: fakeFetch, currentVersion: 'BETA0.0.1' });
+  const info = await e2.checkForUpdates();
+  t(info && info.mode === 'delta', 'check detects newer and decides delta');
+  t(e2.state === 'download_available', 'state download_available');
+  t(info.source === 'github', 'source github recorded');
+  const e3 = new U.UpdateEngine({ baseDir: path.join(tmpDir, 'e3'), fetcher: async () => { throw new Error('net down'); }, currentVersion: 'BETA0.0.1' });
+  let err = null;
+  try { await e3.checkForUpdates(); } catch (e) { err = e; }
+  t(!!err && e3.state === 'error', 'check failure -> error state');
+  console.log(`\nResult: ${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();
