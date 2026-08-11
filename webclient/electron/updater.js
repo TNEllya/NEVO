@@ -107,7 +107,37 @@ function decideMode(manifest, currentVersion) {
   return 'full';
 }
 
+// ============================================================
+// 更新日志
+// ============================================================
+function getUpdateDir(baseDir) {
+  const dir = path.join(baseDir, '.nevo_update');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function getLogPath(baseDir) {
+  return path.join(getUpdateDir(baseDir), 'update_log.json');
+}
+
+function logUpdateEvent(baseDir, entry) {
+  const logPath = getLogPath(baseDir);
+  let entries = [];
+  try { entries = JSON.parse(fs.readFileSync(logPath, 'utf-8')); } catch (_) { /* 首次写入 */ }
+  if (!Array.isArray(entries)) entries = [];
+  entries.push(Object.assign({ timestamp: new Date().toISOString() }, entry));
+  if (entries.length > CFG.maxLogEntries) entries = entries.slice(-CFG.maxLogEntries);
+  try { fs.writeFileSync(logPath, JSON.stringify(entries, null, 2), 'utf-8'); }
+  catch (e) { console.warn('[Updater] log write failed:', e.message); }
+}
+
+function readUpdateLog(baseDir) {
+  try { return JSON.parse(fs.readFileSync(getLogPath(baseDir), 'utf-8')); }
+  catch (_) { return []; }
+}
+
 module.exports = {
   CFG, parseVersion, isNewerVersion,
   githubApiLatestUrl, proxyGithubUrl, parseManifest, decideMode,
+  getUpdateDir, getLogPath, logUpdateEvent, readUpdateLog,
 };

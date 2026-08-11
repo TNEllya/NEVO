@@ -1,5 +1,8 @@
 'use strict';
 const assert = require('assert');
+const os = require('os');
+const path = require('path');
+const fs = require('fs');
 const U = require('../electron/updater.js');
 
 let pass = 0, fail = 0;
@@ -55,6 +58,26 @@ const bigDelta = U.parseManifest(JSON.stringify({
 }));
 t(U.decideMode(bigDelta, 'BETA0.0.1') === 'full', 'delta >= 50% full -> full mode');
 t(U.decideMode(noDelta, 'BETA0.0.1') === 'full', 'no delta -> full mode');
+
+// 日志：写入、读取、截断
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nevo-upd-'));
+const baseDir = path.join(tmpDir, 'install');
+fs.mkdirSync(baseDir, { recursive: true });
+U.logUpdateEvent(baseDir, { event: 'check_ok', current_version: 'BETA0.0.1', result: 'success', source: 'github' });
+let log = U.readUpdateLog(baseDir);
+t(log.length === 1 && log[0].event === 'check_ok', 'log entry written');
+t(typeof log[0].timestamp === 'string' && log[0].timestamp.length > 0, 'log has timestamp');
+U.logUpdateEvent(baseDir, { event: 'download_complete', target_version: 'BETA0.0.2' });
+log = U.readUpdateLog(baseDir);
+t(log.length === 2, 'log appends');
+// 截断：写入 5 条超过上限的日志（maxLogEntries 临时改小验证）
+const backupMax = U.CFG.maxLogEntries;
+U.CFG.maxLogEntries = 3;
+for (let i = 0; i < 5; i++) U.logUpdateEvent(baseDir, { event: 'x' + i });
+log = U.readUpdateLog(baseDir);
+t(log.length === 3, 'log truncated to maxLogEntries');
+t(log[0].event === 'x2', 'log keeps newest');
+U.CFG.maxLogEntries = backupMax;
 
 console.log(`\nResult: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
