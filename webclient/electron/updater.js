@@ -401,6 +401,80 @@ class UpdateEngine {
     await this._setState('ready');
     return { mode, path: destPath };
   }
+
+  /** 增量模式：解压 delta 包并按清单替换文件；本进程退出后由辅助脚本完成替换。 */
+  async applyDelta(deltaZipPath) {
+    const updateDir = getUpdateDir(this.baseDir);
+    const extracted = path.join(updateDir, 'extracted');
+    fs.rmSync(extracted, { recursive: true, force: true });
+    fs.mkdirSync(extracted, { recursive: true });
+
+    // 解压 zip（纯 Node 实现，避免引入依赖）
+    await extractZip(deltaZipPath, extracted);
+
+    // 校验 zip 内 manifest 与 latest.json 一致
+    const innerManifestPath = path.join(extracted, 'manifest.json');
+    if (!fs.existsSync(innerManifestPath)) throw new Error('delta package missing manifest.json');
+    const inner = parseManifest(fs.readFileSync(innerManifestPath, 'utf-8'));
+    if (inner.version !== this._manifest.version) {
+      throw new Error('delta manifest version mismatch');
+    }
+    this._log('apply_start', { mode: 'delta', target_version: inner.version });
+    await this._setState('installing');
+
+    const resourcesDir = getResourcesDir();
+    const staged = path.join(updateDir, 'staged');
+    fs.rmSync(staged, { recursive: true, force: true });
+    fs.mkdirSync(staged, { recursive: true });
+
+    const entries = [];
+    for (const f of inner.files) {
+      const rel = f.path.replace(/\\/g, '/');
+      const src = path.join(extracted, rel);
+      if (!fs.existsSync(src)) continue;
+      const dst = path.join(staged, rel);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.copyFileSync(src, dst);
+      entries.push({ rel, sha256: f.sha256 });
+    }
+    if (entries.length === 0) throw new Error('delta package contains no files');
+
+    // 生成替换脚本：等主进程退出 → 备份 → 替换 → 失败回滚 → 启动
+    const pid = process.pid;
+    const appExe = process.execPath;
+    const cmdPath = path.join(updateDir, 'apply_update.cmd');
+    const backupDir = path.join(updateDir, 'backup');
+    const cmd = buildApplyCmd(pid, appExe, staged, resourcesDir, backupDir, entries);
+    fs.writeFileSync(cmdPath, cmd, { encoding: 'utf-8' });
+    this._stagedCmd = cmdPath;
+    this._log('apply_ready', { mode: 'delta', file_count: entries.length });
+    await this._setState('ready_to_install');
+    return { cmdPath };
+  }
+
+  /** 全量模式：spawn NSIS Setup /S 静默安装；主进程随后退出。 */
+  applyFull(setupExePath) {
+    this._log('apply_start', { mode: 'full', target_version: this._manifest.version });
+    const { spawn } = require('child_process');
+    const child = spawn(setupExePath, ['/S'], { detached: true, stdio: 'ignore' });
+    child.unref();
+    this._log('apply_success', { mode: 'full' });
+    if (electron && electron.app) electron.app.quit();
+  }
+
+  /** 用户点击"立即重启"：执行已准备的增量替换脚本并退出主进程。 */
+  restartToApply() {
+    if (this._stagedCmd) {
+      this._log('restart', { mode: 'delta' });
+      this._exec('cmd.exe', ['/c', this._stagedCmd]);
+      if (electron && electron.app) electron.app.quit();
+      return;
+    }
+    if (this._downloadedPath && this._mode === 'full') {
+      this._log('restart', { mode: 'full' });
+      this.applyFull(this._downloadedPath);
+    }
+  }
 }
 
 function defaultBaseDir() {
@@ -452,10 +526,92 @@ function defaultFetcher() {
   };
 }
 
+// ============================================================
+// 增量应用辅助
+// ============================================================
+function getResourcesDir() {
+  if (electron && electron.app && electron.app.isPackaged) {
+    return electron.app.getAppPath(); // packaged: <resources>/app.asar 所在目录
+  }
+  return path.join(__dirname, '..');
+}
+
+// 纯 Node zip 解压（仅支持无压缩/存储与 deflate 的 zip，足以满足发布产物）
+function extractZip(zipPath, outDir) {
+  const zlib = require('zlib');
+  const buf = fs.readFileSync(zipPath);
+  let offset = 0;
+  const pending = [];
+  while (offset + 30 <= buf.length) {
+    // 局部文件头签名 0x04034b50
+    if (buf.readUInt32LE(offset) !== 0x04034b50) break;
+    const method = buf.readUInt16LE(offset + 8);
+    const compSize = buf.readUInt32LE(offset + 18);
+    const nameLen = buf.readUInt16LE(offset + 26);
+    const extraLen = buf.readUInt16LE(offset + 28);
+    const name = buf.toString('utf-8', offset + 30, offset + 30 + nameLen);
+    const dataStart = offset + 30 + nameLen + extraLen;
+    const data = buf.slice(dataStart, dataStart + compSize);
+    offset = dataStart + compSize;
+    if (/\/$/.test(name)) continue;
+    const dest = path.join(outDir, name);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    if (method === 0) fs.writeFileSync(dest, data);
+    else if (method === 8) fs.writeFileSync(dest, zlib.inflateRawSync(data));
+    else throw new Error('unsupported zip method ' + method);
+  }
+  if (pending) pending.length = 0;
+  return Promise.resolve();
+}
+
+// 生成增量替换脚本（等待主进程退出后逐文件备份+替换+回滚+启动）
+function buildApplyCmd(pid, appExe, stagedDir, resourcesDir, backupDir, entries) {
+  const lines = ['@echo off', 'chcp 65001 >nul', 'setlocal enabledelayedexpansion', ''];
+  lines.push('rem wait for app to exit');
+  lines.push(':wait_loop');
+  lines.push(`tasklist /fi "PID eq ${pid}" 2>nul | findstr /I "${pid}" >nul`);
+  lines.push('if !errorlevel! == 0 (');
+  lines.push('  timeout /t 1 /nobreak >nul');
+  lines.push('  goto wait_loop');
+  lines.push(')');
+  lines.push('timeout /t 1 /nobreak >nul');
+  lines.push('set "STAGED=' + stagedDir.replace(/\//g, '\\') + '"');
+  lines.push('set "RES=' + resourcesDir.replace(/\//g, '\\') + '"');
+  lines.push('set "BACKUP=' + backupDir.replace(/\//g, '\\') + '"');
+  lines.push('set "FAILED=0"');
+  lines.push('mkdir "%BACKUP%" >nul 2>&1');
+  for (const e of entries) {
+    const rel = e.rel.replace(/\//g, '\\');
+    lines.push('');
+    lines.push(`if exist "%RES%\\${rel}" (`);
+    lines.push(`  copy /y "%RES%\\${rel}" "%BACKUP%\\${rel}" >nul 2>&1`);
+    lines.push(')');
+    lines.push(`if not exist "%STAGED%\\${rel}" ( echo MISSING %STAGED%\\${rel} & set "FAILED=1" )`);
+    lines.push(`xcopy /y /q "%STAGED%\\${rel}" "%RES%\\${rel}" >nul 2>&1`);
+    lines.push(`if errorlevel 1 ( set "FAILED=1" )`);
+  }
+  lines.push('');
+  lines.push('if !FAILED! == 1 (');
+  lines.push('  echo rollback...');
+  lines.push('  set "FAILED=0"');
+  for (const e of entries) {
+    const rel = e.rel.replace(/\//g, '\\');
+    lines.push(`  if exist "%BACKUP%\\${rel}" ( copy /y "%BACKUP%\\${rel}" "%RES%\\${rel}" >nul 2>&1 )`);
+    lines.push(`  if errorlevel 1 ( set "FAILED=1" )`);
+  }
+  lines.push('  echo Update failed, rollback done.');
+  lines.push(') else (');
+  lines.push(`  start "" "${appExe.replace(/\//g, '\\')}"`);
+  lines.push(')');
+  lines.push('endlocal');
+  return lines.join('\r\n');
+}
+
 module.exports = {
   CFG, parseVersion, isNewerVersion,
   githubApiLatestUrl, proxyGithubUrl, parseManifest, decideMode,
   getUpdateDir, getLogPath, logUpdateEvent, readUpdateLog,
   computeRetryDelays, sleep, httpGet, sha256File, downloadWithResume,
   UpdateEngine, defaultBaseDir, defaultCurrentVersion, defaultFetcher,
+  getResourcesDir, extractZip, buildApplyCmd,
 };
