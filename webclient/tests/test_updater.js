@@ -79,5 +79,9 @@ t(log.length === 3, 'log truncated to maxLogEntries');
 t(log[0].event === 'x2', 'log keeps newest');
 U.CFG.maxLogEntries = backupMax;
 
+// 下载辅助：重试延迟
+const delays = U.computeRetryDelays(3, [3000, 6000, 9000]);
+t(delays.length === 3 && delays[0] === 3000 && delays[2] === 9000, 'computeRetryDelays');
+
 console.log(`\nResult: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

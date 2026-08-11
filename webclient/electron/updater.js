@@ -136,8 +136,132 @@ function readUpdateLog(baseDir) {
   catch (_) { return []; }
 }
 
+// ============================================================
+// 下载器（Range 断点续传 + 进度 + 重试 + SHA256）
+// ============================================================
+function computeRetryDelays(retries, delays) {
+  const out = [];
+  for (let i = 0; i < retries; i++) out.push(delays[i % delays.length]);
+  return out;
+}
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+function httpGet(url, headers, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let parsed;
+    try { parsed = new URL(url); } catch (e) { reject(e); return; }
+    const mod = parsed.protocol === 'https:' ? https : http;
+    const req = mod.request(parsed, { method: 'GET', headers, timeout: timeoutMs }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        httpGet(res.headers.location, headers, timeoutMs).then(resolve, reject);
+        return;
+      }
+      resolve(res);
+    });
+    req.on('timeout', () => req.destroy(new Error('request timeout')));
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+function sha256File(filePath) {
+  const h = crypto.createHash('sha256');
+  const data = fs.readFileSync(filePath);
+  h.update(data);
+  return h.digest('hex');
+}
+
+/**
+ * 断点续传下载。
+ * opts: { onProgress(percent,speed,downloaded,total), shouldCancel(), retries, timeoutMs, sha256 }
+ */
+async function downloadWithResume(url, destPath, opts = {}) {
+  const { onProgress, shouldCancel, sha256 } = opts;
+  const retries = opts.retries === undefined ? CFG.maxRetries : opts.retries;
+  const timeoutMs = opts.timeoutMs === undefined ? CFG.timeoutMs : opts.timeoutMs;
+  const partPath = destPath + '.part';
+  const delays = computeRetryDelays(retries, CFG.retryDelaysMs);
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (shouldCancel && shouldCancel()) throw new Error('cancelled');
+
+    let existing = 0;
+    try { existing = fs.existsSync(partPath) ? fs.statSync(partPath).size : 0; } catch (_) {}
+
+    const headers = {};
+    if (existing > 0) headers.Range = `bytes=${existing}-`;
+
+    let res;
+    try {
+      res = await httpGet(url, headers, timeoutMs);
+    } catch (err) {
+      if (attempt < retries) { await sleep(delays[attempt]); continue; }
+      throw new Error('download network error: ' + err.message);
+    }
+
+    if (res.statusCode === 416) { // 已完整，丢弃续传标记
+      res.resume();
+      fs.unlinkSync(partPath);
+      existing = 0;
+      if (attempt < retries) continue;
+      throw new Error('HTTP 416');
+    }
+    if (res.statusCode !== 200 && res.statusCode !== 206) {
+      res.resume();
+      if (attempt < retries) { await sleep(delays[attempt]); continue; }
+      throw new Error('HTTP ' + res.statusCode);
+    }
+    if (res.statusCode === 200) existing = 0;
+
+    const serverLen = parseInt(res.headers['content-length'] || '0', 10);
+    const total = existing + serverLen;
+    let downloaded = existing;
+    let startTime = Date.now();
+    let lastNotify = 0;
+    const flags = existing > 0 ? 'a' : 'w';
+
+    await new Promise((resolve, reject) => {
+      const stream = fs.createWriteStream(partPath, { flags });
+      res.pipe(stream);
+      res.on('data', (chunk) => {
+        downloaded += chunk.length;
+        const now = Date.now();
+        if (now - lastNotify >= CFG.progressThrottleMs && onProgress) {
+          lastNotify = now;
+          const elapsed = (now - startTime) / 1000 || 0.001;
+          onProgress(total ? (downloaded / total) * 100 : 0,
+                     downloaded / elapsed, downloaded, total);
+        }
+      });
+      res.on('error', reject);
+      stream.on('error', reject);
+      stream.on('finish', resolve);
+    });
+
+    if (shouldCancel && shouldCancel()) {
+      fs.unlinkSync(partPath);
+      throw new Error('cancelled');
+    }
+
+    fs.renameSync(partPath, destPath);
+    if (sha256) {
+      const actual = sha256File(destPath);
+      if (actual !== sha256) {
+        fs.unlinkSync(destPath);
+        if (attempt < retries) { await sleep(delays[attempt]); continue; }
+        throw new Error('sha256 mismatch');
+      }
+    }
+    return destPath;
+  }
+  throw new Error('unreachable');
+}
+
 module.exports = {
   CFG, parseVersion, isNewerVersion,
   githubApiLatestUrl, proxyGithubUrl, parseManifest, decideMode,
   getUpdateDir, getLogPath, logUpdateEvent, readUpdateLog,
+  computeRetryDelays, sleep, httpGet, sha256File, downloadWithResume,
 };
