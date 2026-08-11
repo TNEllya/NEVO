@@ -1,0 +1,60 @@
+{
+  "name": "nevo-web-client",
+  "version": "0.0.2-beta.0",
+  "buildVersion": "BETA0.0.2",
+  "description": "NEVO Web Client — Discord-style frontend with Python gateway backend",
+  "main": "main.js",
+  "author": "NEVO",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win nsis",
+    "build:dir": "electron-builder --win dir"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.nevo.webclient",
+    "productName": "NEVO Web Client",
+    "buildVersion": "BETA0.0.1",
+    "directories": {
+      "output": "../../NEVO"
+    },
+    "files": [
+      "main.js",
+      "package.json",
+      "preload.js",
+      "updater.js",
+      "app-icon.ico"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/nevo_gateway",
+        "to": "nevo_gateway"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "app-icon.ico",
+      "artifactName": "NEVO Web Client BETA0.0.2 Setup.${ext}",
+      "signAndEditExecutable": false,
+      "verifyUpdateCodeSignature": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "NEVO Web Client",
+      "include": "nsis/shortcuts.nsh",
+      "installerIcon": "app-icon.ico",
+      "uninstallerIcon": "app-icon.ico",
+      "installerHeaderIcon": "app-icon.ico"
+    }
+  },
+  "allowScripts": {}
+}
