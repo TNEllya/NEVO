@@ -50,4 +50,64 @@ function isNewerVersion(candidate, current) {
   return false;
 }
 
-module.exports = { CFG, parseVersion, isNewerVersion };
+// ============================================================
+// 更新源 URL
+// ============================================================
+function githubApiLatestUrl() {
+  return `https://api.github.com/repos/${CFG.owner}/${CFG.repo}/releases/latest`;
+}
+
+function proxyGithubUrl(url, prefix) {
+  const p = prefix || CFG.mirrorPrefixes[0];
+  if (/^https:\/\/(ghproxy|gh-proxy)/.test(url)) return url;
+  if (/^https:\/\/(github\.com|objects\.githubusercontent\.com)/.test(url)) {
+    return p + url;
+  }
+  return url;
+}
+
+// ============================================================
+// 清单解析
+// ============================================================
+function parseManifest(text) {
+  const data = JSON.parse(text);
+  if (!data || typeof data.version !== 'string') {
+    throw new Error('Invalid manifest: version missing');
+  }
+  if (!data.full_package || typeof data.full_package.url !== 'string') {
+    throw new Error('Invalid manifest: full_package.url missing');
+  }
+  return {
+    version: data.version,
+    changelog: data.changelog || '',
+    files: Array.isArray(data.files) ? data.files : [],
+    full: {
+      url: data.full_package.url,
+      size: data.full_package.size || 0,
+      sha256: data.full_package.sha256 || '',
+    },
+    delta: (data.delta && data.delta.url)
+      ? { from: data.delta.from || '', url: data.delta.url, size: data.delta.size || 0, sha256: data.delta.sha256 || '' }
+      : null,
+  };
+}
+
+// ============================================================
+// 增量/全量决策
+// ============================================================
+function decideMode(manifest, currentVersion) {
+  const full = manifest.full;
+  if (manifest.delta && manifest.delta.size > 0 && full.size > 0) {
+    const fromOk = !manifest.delta.from ||
+      parseVersion(manifest.delta.from).join('.') === parseVersion(currentVersion).join('.');
+    if (fromOk && manifest.delta.size < full.size * CFG.deltaRatio) {
+      return 'delta';
+    }
+  }
+  return 'full';
+}
+
+module.exports = {
+  CFG, parseVersion, isNewerVersion,
+  githubApiLatestUrl, proxyGithubUrl, parseManifest, decideMode,
+};
