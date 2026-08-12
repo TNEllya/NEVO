@@ -27,4 +27,11 @@ contextBridge.exposeInMainWorld('updaterAPI', {
     ipcRenderer.on('updater:progress', listener);
     return () => ipcRenderer.removeListener('updater:progress', listener);
   },
+  probeRoutes: () => ipcRenderer.invoke('updater:probe'),
+  setAutoCheck: (enabled) => ipcRenderer.invoke('updater:set-auto-check', enabled),
+  onProbeResult: (callback) => {
+    const listener = (_event, data) => callback(data);
+    ipcRenderer.on('updater:probe-result', listener);
+    return () => ipcRenderer.removeListener('updater:probe-result', listener);
+  },
 });
