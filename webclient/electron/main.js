@@ -4,6 +4,7 @@ const path = require('path');
 const http = require('http');
 const net = require('net');
 const fs = require('fs');
+const updater = require('./updater.js');
 
 const GATEWAY_HOST = '127.0.0.1';
 const GATEWAY_PORT = 8088;
@@ -278,10 +279,24 @@ if (!gotTheLock) {
 // ============================================================
 const updateEngine = new updater.UpdateEngine();
 
+let updaterServiceReady = false;
+let updaterAutoCheck = true;
+
+function checkNowQuiet() {
+  if (!updaterAutoCheck) return;
+  updateEngine.checkForUpdates().catch(() => {});
+}
+
 function startUpdaterService(win) {
   const send = (channel, data) => {
     if (win && !win.isDestroyed()) win.webContents.send(channel, data);
   };
+  if (updaterServiceReady) {
+    send('updater:state', { state: updateEngine.state, currentVersion: updateEngine.currentVersion });
+    return;
+  }
+  updaterServiceReady = true;
+
   updateEngine.onState((oldState, newState) => send('updater:state', { state: newState }));
   updateEngine.onProgress((percent, speed, downloaded, total) => {
     send('updater:progress', { percent, speed, downloaded, total });
@@ -300,15 +315,25 @@ function startUpdaterService(win) {
   ipcMain.handle('updater:status', () => ({
     state: updateEngine.state,
     currentVersion: updateEngine.currentVersion,
-    info: updateEngine._manifest ? { version: updateEngine._manifest.version, mode: updateEngine._mode } : null,
+    info: updateEngine._manifest ? { version: updateEngine._manifest.version, mode: updateEngine._mode, source: updateEngine._source } : null,
   }));
   ipcMain.handle('updater:log', () => updater.readUpdateLog(updateEngine.baseDir));
 
-  // 定时检测（首次 30s 后，之后每小时）
-  setTimeout(() => {
-    updateEngine.checkForUpdates().catch(() => {});
-  }, 30000);
-  setInterval(() => {
-    updateEngine.checkForUpdates().catch(() => {});
-  }, updater.CFG.checkIntervalMs);
+  // 多线路测速：返回线路状态列表
+  ipcMain.handle('updater:probe', async () => {
+    try {
+      const results = await updateEngine.probeAllRoutes();
+      return { ok: true, routes: results };
+    } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  // 自动检测开关：控制定时任务
+  ipcMain.handle('updater:set-auto-check', (_e, enabled) => {
+    updaterAutoCheck = !!enabled;
+    return { ok: true, autoCheck: updaterAutoCheck };
+  });
+
+  // 定时检测（首次 30s 后，之后每小时；受 autoCheck 控制）
+  setTimeout(checkNowQuiet, 30000);
+  setInterval(checkNowQuiet, updater.CFG.checkIntervalMs);
 }

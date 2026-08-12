@@ -653,6 +653,22 @@ class UpdateEngine {
     return { mode, path: destPath };
   }
 
+  /** 对当前更新包（或 latest.json）进行多线路实时测速，返回排序结果。 */
+  async probeAllRoutes(probeUrl) {
+    const target = probeUrl || ((this._mode === 'delta' && this._manifest && this._manifest.delta)
+      ? this._manifest.delta.url
+      : (this._manifest && this._manifest.full ? this._manifest.full.url : githubApiLatestUrl()));
+    const routes = [
+      { name: 'github', label: 'GitHub 直连', url: (u) => u },
+    ];
+    for (let i = 0; i < CFG.mirrorPrefixes.length; i++) {
+      routes.push({ name: `mirror${i + 1}`, label: '镜像 ' + (i + 1), url: (u) => proxyGithubUrl(u, CFG.mirrorPrefixes[i]) });
+    }
+    const results = await probeRoutes(routes, target, { timeoutMs: CFG.timeoutMs });
+    this._probeResults = results;
+    return results;
+  }
+
   /** 增量模式：解压 delta 包并按清单替换文件；本进程退出后由辅助脚本完成替换。 */
   async applyDelta(deltaZipPath) {
     const updateDir = getUpdateDir(this.baseDir);
