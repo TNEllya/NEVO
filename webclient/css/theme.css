@@ -1712,3 +1712,16 @@ body {
   text-align: right;
   font-family: var(--font-mono);
 }
+
+/* 更新线路列表 */
+.route-list { display:flex; flex-direction:column; gap:6px; }
+.route-item { display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid #333a44; border-radius:8px; background:rgba(255,255,255,.02); }
+.route-item.active { border-color:var(--color-primary); background:rgba(245,183,49,.08); }
+.route-dot { width:9px; height:9px; border-radius:50%; background:#5b6470; flex:none; }
+.route-dot.ok { background:#39d98a; }
+.route-dot.unreachable { background:#ef6464; }
+.route-name { flex:1; font-size:13px; }
+.route-meta { font-size:12px; color:var(--color-text-muted); }
+.route-switch { border:1px solid var(--color-border-light); background:var(--color-bg-tertiary); color:var(--color-text-primary); border-radius:6px; padding:4px 10px; font-size:12px; cursor:pointer; }
+.route-switch.active { background:var(--color-primary); color:var(--color-text-inverse); border-color:var(--color-primary); }
+.route-switch:disabled { opacity:.4; cursor:not-allowed; }

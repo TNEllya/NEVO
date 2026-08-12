@@ -1668,6 +1668,61 @@
         ).join('\n');
         alert(t('更新日志') + '\n' + (lines || t('暂无日志')));
       });
+
+      // --- 更新线路：状态显示 + 手动切换 + 重新测速 ---
+      const routeModeEl = $('upd-route-mode');
+      let routeManualName = null;
+
+      function renderRoutes(routes) {
+        const box = $('upd-routes');
+        if (!routes || routes.length === 0) { box.innerHTML = ''; return; }
+        const firstOk = routes.find((x) => x.status === 'ok');
+        const activeName = routeManualName || (firstOk ? firstOk.name : null);
+        box.innerHTML = '<div class="route-list">' + routes.map((r) => {
+          const active = r.name === activeName;
+          const cls = active ? 'route-item active' : 'route-item';
+          const meta = r.status === 'ok'
+            ? `${r.latencyMs}ms · ${(r.speedBps / 1024).toFixed(1)}KB/s`
+            : t('不可用');
+          return `<div class="${cls}">
+            <span class="route-dot ${r.status}"></span>
+            <span class="route-name">${r.label}</span>
+            <span class="route-meta">${meta}</span>
+            <button class="route-switch${active ? ' active' : ''}" data-route="${r.name}" ${r.status !== 'ok' ? 'disabled' : ''}>${active ? t('当前') : t('切换')}</button>
+          </div>`;
+        }).join('') + '</div>';
+        box.querySelectorAll('.route-switch:not(:disabled)').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            routeManualName = btn.dataset.route;
+            saveSetting('update_route_manual', routeManualName);
+            renderRoutes(routes);
+            routeModeEl.textContent = t('手动模式') + ': ' + routeManualName;
+          });
+        });
+      }
+
+      async function reprobe() {
+        const res = await upd.probeRoutes();
+        if (res && res.ok) {
+          renderRoutes(res.routes);
+          const best = res.routes.filter((r) => r.status === 'ok').sort((a, b) => a.latencyMs - b.latencyMs)[0];
+          if (best) routeModeEl.textContent = t('自动选择') + ': ' + best.label;
+        }
+      }
+
+      $('btn-reprobe-routes').addEventListener('click', reprobe);
+      const savedManual = getSetting('update_route_manual', '');
+      if (savedManual) routeManualName = savedManual;
+      // 初始化：无更新包时测 latest.json 仍返回线路状态；静默失败
+      upd.getStatus().then(() => reprobe().catch(() => {}));
+      // 自动检测开关同步主进程
+      const autoToggle = document.querySelector('.toggle[data-setting="auto_check_update"]');
+      if (autoToggle) {
+        upd.setAutoCheck(autoToggle.classList.contains('on'));
+        autoToggle.addEventListener('click', () => {
+          setTimeout(() => upd.setAutoCheck(autoToggle.classList.contains('on')), 0);
+        });
+      }
     }
 
     // Settings: theme + language
