@@ -130,6 +130,34 @@ function t(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  FA
   t(log.some((e) => e.event === 'check_ok'), 'log has check_ok');
   t(log.some((e) => e.event === 'download_complete'), 'log has download_complete');
 
+  // --- 多线路故障转移 ---
+  const badBody = Buffer.from('server error', 'utf-8');
+  const goodBody = Buffer.from('hello-partial', 'utf-8');
+  const badSrv = http.createServer((req, res) => { res.writeHead(500); res.end(badBody); });
+  const goodSrv = http.createServer((req, res) => {
+    if (req.headers.range) {
+      res.writeHead(206, { 'Content-Range': 'bytes=0-' + (goodBody.length - 1) + '/' + goodBody.length, 'Content-Length': String(goodBody.length) });
+      res.end(goodBody);
+    } else {
+      res.writeHead(200, { 'Content-Length': String(goodBody.length) });
+      res.end(goodBody);
+    }
+  });
+  await new Promise((r) => badSrv.listen(0, '127.0.0.1', r));
+  await new Promise((r) => goodSrv.listen(0, '127.0.0.1', r));
+  const dlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dlroutes-'));
+  const failovers = [];
+  const routeDest = path.join(dlDir, 'f.bin');
+  const dl2 = await U.downloadWithRoutes(
+    [`http://127.0.0.1:${badSrv.address().port}/f.bin`, `http://127.0.0.1:${goodSrv.address().port}/f.bin`],
+    routeDest,
+    { retries: 0, timeoutMs: 2000, onFailover: (i, u) => failovers.push(i) }
+  );
+  t(dl2 === routeDest, 'downloadWithRoutes returns dest');
+  t(fs.readFileSync(routeDest, 'utf-8') === 'hello-partial', 'downloaded from second route after failover');
+  t(failovers.length >= 1, 'failover event emitted');
+  badSrv.close(); goodSrv.close(); fs.rmSync(dlDir, { recursive: true, force: true });
+
   server.close();
   console.log(`\nResult: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

@@ -259,6 +259,117 @@ async function downloadWithResume(url, destPath, opts = {}) {
   throw new Error('unreachable');
 }
 
+/**
+ * 多线路断点续传：按 urls 顺序尝试，统一使用 destPath + '.part'，
+ * 线路失败自动切换下一线路；全部线路失败后按 retries 退避重试。
+ * opts: { onProgress, shouldCancel, sha256, retries, timeoutMs, onFailover(urlIndex, url) }
+ */
+async function downloadWithRoutes(urls, destPath, opts = {}) {
+  const { onProgress, shouldCancel, sha256, onFailover } = opts;
+  const retries = opts.retries === undefined ? CFG.maxRetries : opts.retries;
+  const timeoutMs = opts.timeoutMs === undefined ? CFG.timeoutMs : opts.timeoutMs;
+  const partPath = destPath + '.part';
+  const delays = computeRetryDelays(retries, CFG.retryDelaysMs);
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (shouldCancel && shouldCancel()) throw new Error('cancelled');
+    let existing = 0;
+    try { existing = fs.existsSync(partPath) ? fs.statSync(partPath).size : 0; } catch (_) {}
+    let lastErr = null;
+    let lastUrl = null;
+
+    for (let u = 0; u < urls.length; u++) {
+      const url = urls[u];
+      const headers = {};
+      if (existing > 0) headers.Range = `bytes=${existing}-`;
+      let res;
+      try {
+        res = await httpGet(url, headers, timeoutMs);
+      } catch (err) {
+        lastErr = err;
+        lastUrl = url;
+        if (u < urls.length - 1) { if (onFailover) onFailover(u, url); continue; }
+        break;
+      }
+      if (res.statusCode === 416) {
+        res.resume();
+        fs.unlinkSync(partPath);
+        existing = 0;
+        lastUrl = url;
+        if (u < urls.length - 1) { if (onFailover) onFailover(u, url); continue; }
+        break;
+      }
+      if (res.statusCode !== 200 && res.statusCode !== 206) {
+        res.resume();
+        lastErr = new Error('HTTP ' + res.statusCode);
+        lastUrl = url;
+        if (u < urls.length - 1) { if (onFailover) onFailover(u, url); continue; }
+        break;
+      }
+      if (res.statusCode === 200) existing = 0;
+
+      const serverLen = parseInt(res.headers['content-length'] || '0', 10);
+      const total = existing + serverLen;
+      let downloaded = existing;
+      let startTime = Date.now();
+      let lastNotify = 0;
+      const flags = existing > 0 ? 'a' : 'w';
+
+      try {
+        await new Promise((resolve, reject) => {
+          const stream = fs.createWriteStream(partPath, { flags });
+          res.pipe(stream);
+          res.on('data', (chunk) => {
+            downloaded += chunk.length;
+            const now = Date.now();
+            if (now - lastNotify >= CFG.progressThrottleMs && onProgress) {
+              lastNotify = now;
+              const elapsed = (now - startTime) / 1000 || 0.001;
+              onProgress(total ? (downloaded / total) * 100 : 0, downloaded / elapsed, downloaded, total);
+            }
+          });
+          res.on('error', reject);
+          stream.on('error', reject);
+          stream.on('finish', resolve);
+        });
+      } catch (err) {
+        lastErr = err;
+        lastUrl = url;
+        if (u < urls.length - 1) { if (onFailover) onFailover(u, url); continue; }
+        break;
+      }
+
+      if (shouldCancel && shouldCancel()) { fs.unlinkSync(partPath); throw new Error('cancelled'); }
+
+      // 全部数据已写入：校验后再改名
+      if (sha256) {
+        const tmp = destPath + '.sha';
+        fs.renameSync(partPath, tmp);
+        const actual = sha256File(tmp);
+        if (actual !== sha256) {
+          fs.unlinkSync(tmp);
+          lastErr = new Error('sha256 mismatch');
+          lastUrl = url;
+          if (u < urls.length - 1) { if (onFailover) onFailover(u, url); continue; }
+          break;
+        }
+        fs.renameSync(tmp, destPath);
+      } else {
+        fs.renameSync(partPath, destPath);
+      }
+      return destPath;
+    }
+
+    // 所有线路本轮均失败
+    if (attempt < retries) await sleep(delays[attempt]);
+    if (attempt === retries) {
+      const err = lastErr || new Error('download failed');
+      throw new Error((err.message === 'download failed' ? '' : err.message) + ' (route ' + (lastUrl || 'unknown') + ')');
+    }
+  }
+  throw new Error('unreachable');
+}
+
 // ============================================================
 // 多线路实时测速与选路
 // ============================================================
@@ -730,6 +841,7 @@ module.exports = {
   githubApiLatestUrl, proxyGithubUrl, parseManifest, decideMode,
   getUpdateDir, getLogPath, logUpdateEvent, readUpdateLog,
   computeRetryDelays, sleep, httpGet, sha256File, downloadWithResume,
+  downloadWithRoutes,
   median, probeOne, probeRoutes,
   UpdateEngine, defaultBaseDir, defaultCurrentVersion, defaultFetcher,
   getResourcesDir, extractZip, buildApplyCmd,
