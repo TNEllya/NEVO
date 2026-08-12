@@ -167,8 +167,41 @@ engine.onState((oldS, newS) => states.push(newS));
   const info5 = await e5.checkForUpdates();
   t(info5 && info5.source === 'mirror1', 'mirror manifest fallback when github times out');
   t(apiCalls2_guard(calls2), 'manifest tried github then mirror');
-  console.log(`\nResult: ${pass} passed, ${fail} failed`);
-  process.exit(fail ? 1 : 0);
+
+  // --- 多线路测速 ---
+  t(U.proxyGithubUrl('https://api.github.com/repos/a/b', 'https://ghfast.top/') === 'https://ghfast.top/https://api.github.com/repos/a/b', 'proxy api.github.com');
+  t(U.proxyGithubUrl('https://ghfast.top/https://github.com/a/b', 'https://ghfast.top/') === 'https://ghfast.top/https://github.com/a/b', 'do not double-proxy existing mirror');
+
+  (async () => {
+    const called = [];
+    const routes = [
+      { name: 'r1', label: 'R1', url: (u) => u },
+      { name: 'r2', label: 'R2', url: (u) => 'M:' + u },
+    ];
+    const results = await U.probeRoutes(routes, 'https://x/file.bin', {
+      attempts: 2,
+      probeFn: (url) => {
+        called.push(url);
+        if (url.startsWith('M:')) return Promise.resolve({ ok: true, ttfbMs: 30, bytes: 32768, speedBps: 1000000, totalMs: 33 });
+        return Promise.resolve({ ok: true, ttfbMs: 90, bytes: 32768, speedBps: 400000, totalMs: 82 });
+      },
+    });
+    const ranked = results.slice().sort((a, b) => a.rank - b.rank);
+    t(ranked[0].name === 'r2', 'lower latency route ranked first');
+    t(ranked[1].name === 'r1', 'higher latency route ranked second');
+    t(called.filter((u) => u.startsWith('M:')).length === 2, 'each route probed attempts times');
+    t(results[0].status === 'ok' && results[0].latencyMs === 90, 'route result carries latency');
+
+    const routes2 = [{ name: 'x', label: 'X', url: (u) => u }];
+    const results2 = await U.probeRoutes(routes2, 'https://x/f.bin', {
+      attempts: 1,
+      probeFn: () => Promise.reject(new Error('request timeout')),
+    });
+    t(results2[0].status === 'unreachable', 'failed probe marked unreachable');
+    t(results2[0].latencyMs === null, 'unreachable route has no latency');
+    console.log(`\nResult: ${pass} passed, ${fail} failed`);
+    process.exit(fail ? 1 : 0);
+  })();
 })();
 
 function apiCalls2_guard(calls2) {

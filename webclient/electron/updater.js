@@ -59,8 +59,8 @@ function githubApiLatestUrl() {
 
 function proxyGithubUrl(url, prefix) {
   const p = prefix || CFG.mirrorPrefixes[0];
-  if (/^https:\/\/(ghproxy|gh-proxy)/.test(url)) return url;
-  if (/^https:\/\/(github\.com|objects\.githubusercontent\.com)/.test(url)) {
+  if (/^https:\/\/(ghproxy|gh-proxy|ghfast|gh\.proxy)/.test(url)) return url;
+  if (/^https:\/\/(github\.com|objects\.githubusercontent\.com|api\.github\.com)/.test(url)) {
     return p + url;
   }
   return url;
@@ -257,6 +257,91 @@ async function downloadWithResume(url, destPath, opts = {}) {
     return destPath;
   }
   throw new Error('unreachable');
+}
+
+// ============================================================
+// 多线路实时测速与选路
+// ============================================================
+function median(arr) {
+  if (arr.length === 0) return 0;
+  const s = arr.slice().sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+/** 单线路单次探测：Range 请求 32KB，统计 TTFB 与速度。 */
+function probeOne(url, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let parsed;
+    try { parsed = new URL(url); } catch (e) { reject(e); return; }
+    const mod = parsed.protocol === 'https:' ? https : http;
+    const start = Date.now();
+    let firstByteAt = 0;
+    let bytes = 0;
+    const req = mod.request(parsed, {
+      method: 'GET',
+      headers: { Range: 'bytes=0-32767', 'User-Agent': 'NEVO-Client/Updater' },
+      timeout: timeoutMs,
+    }, (res) => {
+      if (res.statusCode !== 200 && res.statusCode !== 206) {
+        res.resume();
+        reject(new Error('HTTP ' + res.statusCode));
+        return;
+      }
+      res.on('data', (c) => {
+        if (!firstByteAt) firstByteAt = Date.now();
+        bytes += c.length;
+      });
+      res.on('end', () => {
+        const ttfbMs = firstByteAt ? firstByteAt - start : Date.now() - start;
+        const totalMs = (Date.now() - start) || 1;
+        resolve({ ok: true, ttfbMs, bytes, speedBps: Math.round((bytes / totalMs) * 1000), totalMs });
+      });
+      res.on('error', reject);
+    });
+    req.on('timeout', () => req.destroy(new Error('request timeout')));
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+/** 并行测速所有线路（每条 attempts 次取中位值），返回带 rank 的排序结果。 */
+async function probeRoutes(routes, probeUrl, opts = {}) {
+  const attempts = opts.attempts || 2;
+  const timeoutMs = opts.timeoutMs || CFG.timeoutMs;
+  const probeFn = opts.probeFn || probeOne;
+  const raw = await Promise.all(routes.map(async (route) => {
+    const samples = [];
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const s = await probeFn(route.url(probeUrl), timeoutMs);
+        if (s && s.ok) samples.push(s);
+        else samples.push({ ok: false, error: (s && s.error) || 'probe failed' });
+      } catch (err) {
+        samples.push({ ok: false, error: err.message });
+      }
+    }
+    const ok = samples.filter((s) => s.ok);
+    return {
+      name: route.name,
+      label: route.label,
+      status: ok.length === 0 ? 'unreachable' : 'ok',
+      latencyMs: ok.length ? Math.round(median(ok.map((s) => s.ttfbMs))) : null,
+      speedBps: ok.length ? Math.round(median(ok.map((s) => s.speedBps))) : null,
+      samples,
+    };
+  }));
+  const okRoutes = raw.filter((r) => r.status === 'ok').sort((a, b) => {
+    const d = a.latencyMs - b.latencyMs;
+    if (d !== 0) return d;
+    return b.speedBps - a.speedBps;
+  });
+  const order = okRoutes.map((r) => r.name);
+  okRoutes.forEach((r, i) => { r.rank = i; });
+  return raw.map((r) => {
+    const idx = order.indexOf(r.name);
+    return Object.assign(r, { rank: idx === -1 ? okRoutes.length : idx });
+  });
 }
 
 // ============================================================
@@ -645,6 +730,7 @@ module.exports = {
   githubApiLatestUrl, proxyGithubUrl, parseManifest, decideMode,
   getUpdateDir, getLogPath, logUpdateEvent, readUpdateLog,
   computeRetryDelays, sleep, httpGet, sha256File, downloadWithResume,
+  median, probeOne, probeRoutes,
   UpdateEngine, defaultBaseDir, defaultCurrentVersion, defaultFetcher,
   getResourcesDir, extractZip, buildApplyCmd,
 };
