@@ -118,8 +118,10 @@ function t(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  FA
   t(info && info.mode === 'delta' && info.source === 'github', 'e2e check -> delta github');
   const dlRes = await engine.downloadUpdate();
   t(dlRes.mode === 'delta' && fs.existsSync(dlRes.path), 'e2e download delta');
+  t(dlRes.staged === true, 'delta auto-staged after download');
+  t(engine._stagedCmd && fs.existsSync(engine._stagedCmd), 'staged cmd exists after auto-stage');
 
-  // --- 增量应用 ---
+  // --- 增量应用（自动暂存后再手动 apply 验证幂等） ---
   const applyRes = await engine.applyDelta(dlRes.path);
   t(applyRes && applyRes.cmdPath && fs.existsSync(applyRes.cmdPath), 'apply delta generates cmd');
   const cmdText = fs.readFileSync(applyRes.cmdPath, 'utf-8');

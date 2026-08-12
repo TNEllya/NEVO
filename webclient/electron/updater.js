@@ -599,7 +599,7 @@ class UpdateEngine {
     throw new Error(errors.join(' | '));
   }
 
-  /** 下载并准备更新。返回 {mode, path}。 */
+  /** 下载并准备更新。返回 {mode, path, staged}。 */
   async downloadUpdate() {
     if (!this._manifest) throw new Error('no manifest, run checkForUpdates first');
     const manifest = this._manifest;
@@ -614,12 +614,21 @@ class UpdateEngine {
     const destPath = path.join(updateDir, filename);
     this._log('download_start', { mode, target_version: manifest.version, source: this._source });
     await this._setState('downloading');
+
+    // 按评分排序的多线路 URL（主源优先，其次镜像）
+    const urls = [target];
+    for (let i = 0; i < CFG.mirrorPrefixes.length; i++) {
+      const p = proxyGithubUrl(target, CFG.mirrorPrefixes[i]);
+      if (p !== target) urls.push(p);
+    }
+
     try {
-      this._downloadedPath = await downloadWithResume(target, destPath, {
+      this._downloadedPath = await downloadWithRoutes(urls, destPath, {
         timeoutMs: CFG.timeoutMs,
         sha256: sha || undefined,
         shouldCancel: () => this._cancel,
         onProgress: (p, s, d, t) => this._emitProgress(p, s, d, t),
+        onFailover: (idx, url) => this._log('route_failover', { target_version: manifest.version, route_index: idx, url }),
       });
     } catch (err) {
       this._log('download_error', { mode, error: err.message, result: 'failed' });
@@ -627,6 +636,19 @@ class UpdateEngine {
       throw err;
     }
     this._log('download_complete', { mode, size: fs.statSync(destPath).size });
+
+    // delta 模式：下载完成后自动暂存（生成替换脚本），保证 restartToApply 可执行
+    if (mode === 'delta') {
+      try {
+        await this.applyDelta(destPath);
+      } catch (err) {
+        this._log('apply_error', { mode, error: err.message, result: 'failed' });
+        await this._setState('error');
+        throw err;
+      }
+      return { mode, path: destPath, staged: true };
+    }
+
     await this._setState('ready');
     return { mode, path: destPath };
   }
