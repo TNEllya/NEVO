@@ -13,7 +13,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # 统一日志引导（日志目录/文件、TeeStream 重定向、全局异常钩子）
-from logging_setup import setup_client_logging  # noqa: E402
+from logging_setup import setup_client_logging, log_directory  # noqa: E402
 logger = setup_client_logging("v1")
 
 import qfluentwidgets  # noqa: F401
@@ -62,13 +62,10 @@ def _load_font(app: QApplication):
 
 
 def main():
-    # 重定向 stdout 和 stderr 到日志
-    sys.stdout = TeeStream(sys.stdout, _LOG_FILE)
-    sys.stderr = TeeStream(sys.stderr, _LOG_FILE)
-    
+    # 日志重定向已由 setup_client_logging 完成（logging_setup.TeeStream）
     logger.info("=" * 50)
     logger.info("NEVO Client Starting")
-    logger.info(f"Log file: {_LOG_FILE}")
+    logger.info(f"Log file: {log_directory()}")
     logger.info(f"Python version: {sys.version}")
     logger.info(f"Working directory: {os.getcwd()}")
     logger.info("=" * 50)

@@ -29,7 +29,6 @@ def _dlog(msg: str):
 
 CLIENT_BUILD_VERSION = "2026.07.04-fix-v3"
 _dlog(f"=== nevo_client.py loaded (build {CLIENT_BUILD_VERSION}) from {__file__} ===")
-_dlog(f"Debug log path: {_DEBUG_LOG_PATH}")
 
 from nevo_wire import (
     MessageType as WireMessageType,

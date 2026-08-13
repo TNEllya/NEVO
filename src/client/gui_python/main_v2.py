@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # ───────────────────────── Logging ─────────────────────────
 # 统一日志引导（与 main.py 共用 logging_setup，消除重复实现）
-from logging_setup import setup_client_logging  # noqa: E402
+from logging_setup import setup_client_logging, log_directory  # noqa: E402
 logger = setup_client_logging("v2")
 
 # ───────────────────────── Qt app bootstrap ─────────────────────────
