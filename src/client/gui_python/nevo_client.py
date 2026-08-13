@@ -418,7 +418,8 @@ class NevoClient:
                     pass
 
     def connect(self, host: str, port: int, username: str, password: str = "",
-                voice_engine=None, video_engine=None) -> bool:
+                voice_engine=None, video_engine=None,
+                client_udp_port: int = 0, client_video_udp_port: int = 0) -> bool:
         with self._lock:
             if self._state != ClientState.Disconnected:
                 return False
@@ -452,15 +453,17 @@ class NevoClient:
             if last_err or self._sock is None:
                 raise RuntimeError(f"Failed to connect to {host}:{port}: {last_err}")
 
-            client_udp_port = 0
-            if voice_engine is not None:
-                voice_engine.pre_create_udp_socket()
-                client_udp_port = voice_engine.local_udp_port
+            # 显式传入的 UDP 端口优先（Web 网关预建媒体套接字场景）；
+            # 否则沿用 voice_engine/video_engine 预建的端口
+            if not client_udp_port:
+                if voice_engine is not None:
+                    voice_engine.pre_create_udp_socket()
+                    client_udp_port = voice_engine.local_udp_port
 
-            client_video_port = 0
-            if video_engine is not None:
-                video_engine.pre_create_udp_socket()
-                client_video_port = video_engine.local_udp_port
+            if not client_video_udp_port:
+                if video_engine is not None:
+                    video_engine.pre_create_udp_socket()
+                    client_video_udp_port = video_engine.local_udp_port
 
             key_exchange_methods = ["X25519"]
             client_public_key = b""
@@ -485,7 +488,7 @@ class NevoClient:
                 key_exchange_methods=key_exchange_methods,
                 client_public_key=client_public_key,
                 client_udp_port=client_udp_port,
-                client_video_udp_port=client_video_port,
+                client_video_udp_port=client_video_udp_port,
             )
             self._send_message(WireMessageType.LOGIN_REQUEST, login_msg)
 

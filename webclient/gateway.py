@@ -301,18 +301,58 @@ class ClientBridge:
                 password = params.get("password", "")
                 if not username:
                     return {"ok": False, "error": "用户名不能为空"}
-                ok = c.connect(host, port, username, password)
-                # 登录成功后创建并启动媒体桥接
+                # 预创建 UDP 媒体套接字：把本地端口随 LoginRequest 上报服务器，
+                # 服务端在登录时即建立 UDP 端点映射（fail-closed 中继要求，
+                # 未映射端点的一切语音/视频包都会被丢弃）；MediaBridge 随后复用。
+                voice_sock = None
+                video_sock = None
+                if CLIENT_AVAILABLE and HAS_MEDIA:
+                    try:
+                        voice_sock, video_sock = MediaBridge.pre_create_sockets()
+                    except Exception as e:
+                        print(f"[GATEWAY] MediaBridge pre-create failed: {e}")
+                client_udp_port = 0
+                client_video_port = 0
+                if voice_sock:
+                    try:
+                        client_udp_port = voice_sock.getsockname()[1]
+                    except Exception:
+                        pass
+                if video_sock:
+                    try:
+                        client_video_port = video_sock.getsockname()[1]
+                    except Exception:
+                        pass
+                ok = c.connect(host, port, username, password,
+                               client_udp_port=client_udp_port,
+                               client_video_udp_port=client_video_port)
+                # 登录成功后创建并启动媒体桥接（复用预创建套接字）
                 if ok and c.session_key and c.server_udp_port:
                     if CLIENT_AVAILABLE and HAS_MEDIA:
                         try:
-                            self._media_bridge = MediaBridge(self._wfile, self._ws_lock, c)
+                            self._media_bridge = MediaBridge(
+                                self._wfile, self._ws_lock, c,
+                                voice_sock=voice_sock, video_sock=video_sock)
                             self._media_bridge.start(
                                 host, c.server_udp_port, c.server_video_udp_port,
                                 c.user_id, c.session_key)
                         except Exception as e:
                             print(f"[GATEWAY] MediaBridge start failed: {e}")
                             self._media_bridge = None
+                            for _s in (voice_sock, video_sock):
+                                if _s:
+                                    try:
+                                        _s.close()
+                                    except Exception:
+                                        pass
+                elif voice_sock:
+                    # 登录失败：关闭预创建套接字，避免句柄泄漏
+                    for _s in (voice_sock, video_sock):
+                        if _s:
+                            try:
+                                _s.close()
+                            except Exception:
+                                pass
                 return {
                     "ok": ok,
                     "user_id": c.user_id,
@@ -630,12 +670,13 @@ class _FragmentReassembler:
 class MediaBridge:
     """桥接浏览器 WebCodecs 编码帧到 NEVO UDP 语音/视频协议。"""
 
-    def __init__(self, wfile, ws_lock, client):
+    def __init__(self, wfile, ws_lock, client, voice_sock=None, video_sock=None):
         self._wfile = wfile
         self._ws_lock = ws_lock
         self._client = client
-        self._voice_sock = None
-        self._video_sock = None
+        # 复用登录前预创建的 UDP 套接字（端口已随 LoginRequest 上报服务器）
+        self._voice_sock = voice_sock
+        self._video_sock = video_sock
         self._crypto = VoiceCrypto() if HAS_MEDIA else None
         self._voice_seq = 0
         self._video_seq = 0
@@ -656,6 +697,19 @@ class MediaBridge:
 
     # ---- 生命周期 ----
 
+    @staticmethod
+    def pre_create_sockets():
+        """预创建 UDP 媒体套接字，返回 (voice_sock, video_sock)。
+
+        登录前调用：本地端口随 LoginRequest 上报服务器，服务端在登录时
+        建立 UDP 端点映射（fail-closed 中继要求，未知端点一律丢弃）。
+        """
+        voice_sock = MediaBridge._create_dualstack_udp(256 * 1024)
+        video_sock = None
+        if voice_sock:
+            video_sock = MediaBridge._create_dualstack_udp(512 * 1024)
+        return voice_sock, video_sock
+
     def start(self, host, voice_port, video_port, user_id, session_key):
         """初始化 UDP 套接字并启动接收循环。"""
         self._user_id = user_id
@@ -663,13 +717,22 @@ class MediaBridge:
         # 设置加密会话密钥
         if self._crypto and session_key:
             self._crypto.set_session_key(bytes(session_key))
-        # 创建语音 UDP 套接字（IPv6 双栈）
-        self._voice_sock = self._create_dualstack_udp(256 * 1024)
+        # 复用登录前预创建的语音套接字；未预创建时（旧调用路径）再创建
+        if not self._voice_sock:
+            self._voice_sock = self._create_dualstack_udp(256 * 1024)
         self._server_voice_addr = (host, voice_port)
-        # 创建视频 UDP 套接字（IPv6 双栈）
+        # 视频套接字（IPv6 双栈）
         if video_port and video_port > 0:
-            self._video_sock = self._create_dualstack_udp(512 * 1024)
+            if not self._video_sock:
+                self._video_sock = self._create_dualstack_udp(512 * 1024)
             self._server_video_addr = (host, video_port)
+        elif self._video_sock:
+            # 服务器未提供视频端口时关闭预建视频套接字
+            try:
+                self._video_sock.close()
+            except Exception:
+                pass
+            self._video_sock = None
         # 启动接收线程
         self._voice_recv_thread = threading.Thread(
             target=self._voice_recv_loop, daemon=True)
