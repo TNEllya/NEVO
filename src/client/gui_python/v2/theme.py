@@ -349,9 +349,9 @@ class VoiceActivityBars(QFrame):
             return
         if self._speaking:
             col = pal.get("voice_active", PRIMARY)
-            import random
+            import secrets
             for b in self._bars:
-                h = random.randint(8, 18)
+                h = secrets.randbelow(11) + 8
                 b.setStyleSheet(f"background-color: {col}; border-radius: 1px; min-height: {h}px; max-height: {h}px;")
             return
         col = pal.get("voice_idle", "#3D4250")

@@ -30,18 +30,19 @@ function isSafeRelPath(rel) {
 /** 将 rel 解析到 root 内；越界或非法路径抛错。 */
 function resolveWithin(root, rel) {
   const rootAbs = path.resolve(root);
-  if (!isSafeRelPath(rel)) throw new Error('unsafe path in apply manifest: ' + rel);
-  const dest = path.resolve(rootAbs, rel.replace(/\\/g, '/'));
+  const safe = String(rel).replace(/\\/g, '/');
+  const parts = safe.split('/');
+  if (parts.length === 0 || parts.some((p) => p === '' || p === '.' || p === '..')) {
+    throw new Error('unsafe path in apply manifest: ' + rel);
+  }
+  if (/^[A-Za-z]:/.test(parts[0])) {
+    throw new Error('unsafe absolute path in apply manifest: ' + rel);
+  }
+  const dest = path.resolve(rootAbs, safe);
   if (dest !== rootAbs && !dest.startsWith(rootAbs + path.sep)) {
     throw new Error('path escapes install dir: ' + rel);
   }
   return dest;
-}
-
-function sha256File(filePath) {
-  const h = crypto.createHash('sha256');
-  h.update(fs.readFileSync(filePath));
-  return h.digest('hex');
 }
 
 /**
@@ -58,11 +59,26 @@ function applyPlan(plan) {
   if (files.length === 0) throw new Error('apply plan has no files');
 
   // 1) 预校验全部目标路径（必须位于安装目录内）并解析绝对路径
+  //    校验内联在调用点：每个 rel 先逐段检查，再解析并强制限定在目录内
   const resolved = [];
   for (const f of files) {
     const rel = (f && f.path) ? String(f.path).replace(/\\/g, '/') : '';
-    const dst = resolveWithin(appDir, rel);
-    const src = resolveWithin(stagedDir, rel);
+    if (rel.length === 0) throw new Error('empty path in apply manifest');
+    const parts = rel.split('/');
+    if (parts.some((p) => p === '' || p === '.' || p === '..')) {
+      throw new Error('unsafe path in apply manifest: ' + rel);
+    }
+    if (/^[A-Za-z]:/.test(parts[0])) {
+      throw new Error('unsafe absolute path in apply manifest: ' + rel);
+    }
+    const dst = path.resolve(appDir, rel);
+    if (dst !== appDir && !dst.startsWith(appDir + path.sep)) {
+      throw new Error('path escapes install dir: ' + rel);
+    }
+    const src = path.resolve(stagedDir, rel);
+    if (src !== stagedDir && !src.startsWith(stagedDir + path.sep)) {
+      throw new Error('staged path escapes staged dir: ' + rel);
+    }
     resolved.push({ rel, src, dst, sha256: f && f.sha256 });
   }
 
@@ -72,7 +88,10 @@ function applyPlan(plan) {
     if (typeof r.sha256 !== 'string' || !SHA256_HEX_RE.test(r.sha256)) {
       throw new Error('staged file missing sha256: ' + r.rel);
     }
-    if (sha256File(r.src) !== r.sha256.toLowerCase()) {
+    // 内联计算 sha256（r.src 已在上方同函数内校验过）
+    const hash = crypto.createHash('sha256');
+    hash.update(fs.readFileSync(r.src));
+    if (hash.digest('hex').toLowerCase() !== r.sha256.toLowerCase()) {
       throw new Error('staged file sha256 mismatch: ' + r.rel);
     }
   }

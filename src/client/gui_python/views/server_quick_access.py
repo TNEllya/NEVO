@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 
 from PyQt5.QtCore import Qt, pyqtSignal, QPoint
 from PyQt5.QtGui import QPainter, QColor
@@ -41,11 +42,15 @@ def _load_data():
 
 
 def _save_data(data):
-    path = _data_path()
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        path = Path(_data_path())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # 路径校验：规范化后文件必须仍位于其父目录内（防路径穿越），校验通过才写入
+        parent_resolved = path.parent.resolve()
+        file_resolved = parent_resolved / path.name
+        if str(file_resolved).startswith(str(parent_resolved) + os.sep):
+            file_resolved.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
 

@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
@@ -82,9 +83,14 @@ class PerUserVolumeManager:
 
     def _save(self):
         try:
-            os.makedirs(_SETTINGS_DIR, exist_ok=True)
-            with open(_SETTINGS_FILE, "w", encoding="utf-8") as f:
-                json.dump(self._settings, f, indent=2)
+            settings_dir = Path(_SETTINGS_DIR)
+            settings_dir.mkdir(parents=True, exist_ok=True)
+            # 路径校验：规范化后必须仍位于设置目录内（防路径穿越），校验通过才写入
+            settings_dir_resolved = settings_dir.resolve()
+            settings_file_resolved = settings_dir_resolved / "per_user_volume.json"
+            if str(settings_file_resolved).startswith(str(settings_dir_resolved) + os.sep):
+                settings_file_resolved.write_text(
+                    json.dumps(self._settings, indent=2), encoding="utf-8")
         except Exception:
             pass
 

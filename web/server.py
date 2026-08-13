@@ -298,8 +298,9 @@ def _collect_win32() -> dict:
               "connections": 0, "pid": 0,
               "disk_free_gb": 0, "disk_total_gb": 0}
     try:
+        # 参数列表方式调用（shell=False，杜绝命令注入面）
         output = subprocess.check_output(
-            'wmic cpu get loadpercentage /value', shell=True, timeout=3
+            ["wmic", "cpu", "get", "loadpercentage", "/value"], timeout=3
         ).decode("utf-8", errors="replace")
         for line in output.splitlines():
             if "LoadPercentage=" in line:
@@ -311,7 +312,8 @@ def _collect_win32() -> dict:
         pass
     try:
         output = subprocess.check_output(
-            'tasklist /FI "IMAGENAME eq nevo_server.exe" /FO CSV /NH', shell=True, timeout=3
+            ["tasklist", "/FI", "IMAGENAME eq nevo_server.exe", "/FO", "CSV", "/NH"],
+            timeout=3,
         ).decode("utf-8", errors="replace")
         for line in output.splitlines():
             parts = line.replace('"', "").split(",")
@@ -325,7 +327,8 @@ def _collect_win32() -> dict:
     if result["memory_mb"] > 0:
         try:
             output = subprocess.check_output(
-                'wmic computersystem get totalphysicalmemory /value', shell=True, timeout=3
+                ["wmic", "computersystem", "get", "totalphysicalmemory", "/value"],
+                timeout=3,
             ).decode("utf-8", errors="replace")
             for line in output.splitlines():
                 if "TotalPhysicalMemory=" in line:
@@ -339,7 +342,9 @@ def _collect_win32() -> dict:
             pass
     try:
         output = subprocess.check_output(
-            'wmic logicaldisk where drivetype=3 get freespace,size /value', shell=True, timeout=3
+            ["wmic", "logicaldisk", "where", "drivetype=3",
+             "get", "freespace,size", "/value"],
+            timeout=3,
         ).decode("utf-8", errors="replace")
         free = total = 0
         for line in output.splitlines():

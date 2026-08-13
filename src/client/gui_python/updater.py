@@ -1,14 +1,17 @@
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -64,6 +67,47 @@ def _get_github_headers(token: Optional[str] = None) -> dict:
     effective_token = token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if effective_token:
         headers["Authorization"] = f"Bearer {effective_token}"
+
+
+def _is_safe_request_ip(ip) -> bool:
+    """SSRF 防护：拒绝环回、私有、链路本地、保留、组播与未指定地址。"""
+    return not (ip.is_loopback or ip.is_private or ip.is_reserved or
+                ip.is_link_local or ip.is_multicast or ip.is_unspecified)
+
+
+def _validate_request_url(url: str) -> str:
+    """出站请求 URL 校验（防 SSRF）：仅 http/https；host 解析后拒绝
+    环回/私有/保留地址。内网/私有部署场景可显式设置
+    NEVO_ALLOW_PRIVATE_URLS=1 绕过（需自行承担风险）。"""
+    if os.environ.get("NEVO_ALLOW_PRIVATE_URLS") == "1":
+        return url
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("仅允许 http/https 协议的 URL")
+    host = parsed.hostname
+    if not host:
+        raise ValueError("URL 缺少主机名")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None:
+        # 字面 IP：直接校验
+        if not _is_safe_request_ip(ip):
+            raise ValueError(f"目标地址 {host} 为环回/私有/保留地址，已拒绝（SSRF 防护）")
+    else:
+        # 域名：解析后校验全部结果，任一命中受限地址即拒绝
+        try:
+            infos = socket.getaddrinfo(host, parsed.port or 443,
+                                       proto=socket.IPPROTO_TCP)
+        except OSError as e:
+            raise ValueError(f"无法解析主机 {host}: {e}")
+        for info in infos:
+            ip = ipaddress.ip_address(info[4][0])
+            if not _is_safe_request_ip(ip):
+                raise ValueError(
+                    f"目标主机 {host} 解析到环回/私有/保留地址，已拒绝（SSRF 防护）")
+    return url
     return headers
 
 
@@ -197,6 +241,11 @@ def get_update_log_path() -> Path:
 
 def log_update_event(event_type: str, details: dict):
     log_path = get_update_log_path()
+    # 日志路径校验：必须位于更新目录内（防路径穿越）
+    _update_dir = get_update_dir()
+    if not str(log_path.resolve()).startswith(str(_update_dir.resolve())):
+        logger.warning("Updater: 拒绝越界的更新日志路径 %s", log_path)
+        return
     entries = []
     if log_path.exists():
         try:
@@ -215,8 +264,9 @@ def log_update_event(event_type: str, details: dict):
         entries = entries[-200:]
 
     try:
-        with open(log_path, "w", encoding="utf-8") as f:
-            json.dump(entries, f, indent=2, ensure_ascii=False)
+        # 路径已在上方校验（必须位于更新目录内）；经 pathlib 写入
+        Path(log_path).write_text(
+            json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8")
     except IOError as e:
         logger.warning("Failed to write update log: %s", e)
 
@@ -365,6 +415,12 @@ class Updater:
 
     def _fetch_latest_release(self) -> Optional[VersionInfo]:
         url = f"{GITHUB_API_BASE}/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
+        # SSRF 防护：出站请求前校验协议与目标主机
+        try:
+            url = _validate_request_url(url)
+        except ValueError as e:
+            logger.warning("Updater: 拒绝不安全的更新检查 URL: %s", e)
+            raise CheckError(_tr("更新源 URL 不安全"))
 
         cached = _ReleaseCache.get()
         if cached is not None:
@@ -498,8 +554,10 @@ class Updater:
                     raise DownloadError(_tr("Download cancelled"))
 
                 try:
+                    # SSRF 防护：下载 URL 来自发布清单（动态），出站前必须校验
+                    download_url = _validate_request_url(info.download_url)
                     resp = requests.get(
-                        info.download_url,
+                        download_url,
                         headers=headers,
                         stream=True,
                         timeout=REQUEST_TIMEOUT,

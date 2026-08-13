@@ -10,6 +10,7 @@ from typing import Optional, Callable
 
 import sys
 import os
+from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # 配置日志记录器
@@ -18,23 +19,13 @@ logger = logging.getLogger("nevo_client")
 # ★ 启动标记 — 如果这行没出现在日志里，说明运行的代码不是这个文件
 print(f"[BOOTSTRAP] nevo_client.py loaded from: {__file__}")
 
-# ---- 调试日志（写入文件，便于打包后排查） ----
-import sys as _sys, os as _os
-if getattr(_sys, "frozen", False):
-    _DEBUG_LOG_PATH = _os.path.join(_os.path.dirname(_sys.executable), "nevo_debug.log")
-else:
-    _DEBUG_LOG_PATH = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "nevo_debug.log")
-
 def _dlog(msg: str):
-    from datetime import datetime as _dt
-    ts = _dt.now().strftime("%H:%M:%S.%f")[:-3]
-    line = f"[{ts}] {msg}"
-    print(line)
-    try:
-        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception:
-        pass
+    """调试日志（DEBUG 级别）。
+
+    不写独立文件（消除打包目录写权限问题与不必要的路径面），
+    统一走 logging，由 logging_setup 的文件/控制台 handler 输出。
+    """
+    logger.debug("%s", msg)
 
 CLIENT_BUILD_VERSION = "2026.07.04-fix-v3"
 _dlog(f"=== nevo_client.py loaded (build {CLIENT_BUILD_VERSION}) from {__file__} ===")
@@ -1074,12 +1065,16 @@ class NevoClient:
                 self.on_file_error(fid, "File too large")
             return
         ext = os.path.splitext(assembler.filename or "")[1]
-        if not ext or len(ext) > 16:
+        if not ext or len(ext) > 16 or not all(c.isalnum() or c in "._-" for c in ext):
             ext = ".bin"
-        path = os.path.join(get_file_cache_dir(), f"{fid}{ext}")
+        cache_dir = get_file_cache_dir()
+        path = os.path.join(cache_dir, f"{fid}{ext}")
         try:
-            with open(path, "wb") as fh:
-                fh.write(data)
+            # 路径校验：规范化后必须仍位于缓存目录内（防路径穿越），校验通过才写入
+            cache_dir_resolved = os.path.realpath(cache_dir)
+            path_resolved = os.path.realpath(path)
+            if path_resolved.startswith(cache_dir_resolved + os.sep):
+                Path(path_resolved).write_bytes(data)
         except OSError as e:
             _dlog(f"[FILE_TX] write {fid} failed: {e!r}")
             if self.on_file_error:
