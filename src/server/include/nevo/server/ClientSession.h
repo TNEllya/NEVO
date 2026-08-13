@@ -121,6 +121,16 @@ public:
                      ControlMessageType type,
                      uint32_t request_id = 0);
 
+    /**
+     * @brief 通过本会话的 TCP 连接下发语音帧（TCP_VOICE_FRAME_TYPE）
+     *
+     * 外网/NAT 场景（frp 内网穿透）UDP 回程不可靠，
+     * 中继把语音帧经接收者的 TCP 控制连接下发。
+     *
+     * @param payload 已用接收者密钥加密的语音帧（2B 头长 + protobuf 头 + 密文）
+     */
+    void sendVoiceFrameTcp(const std::vector<uint8_t>& payload);
+
     // ============================================================
     // UDP 端点管理
     // ============================================================

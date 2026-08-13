@@ -101,6 +101,10 @@ class VideoCallState(IntEnum):
 TCP_HEADER_SIZE = 12
 TCP_MAX_PAYLOAD_SIZE = 1024 * 1024
 
+# TCP 语音帧类型（与服务端 TcpVoiceTunnel::TCP_VOICE_FRAME_TYPE 一致）
+# 外网/NAT 场景（frp 内网穿透）UDP 回程不可靠，媒体帧经 TCP 控制连接传输
+TCP_VOICE_FRAME_TYPE = 0xFF
+
 # ============================================================
 # 文件传输数据通道常量
 # ============================================================
@@ -229,6 +233,9 @@ class NevoClient:
         self.on_chat_message: Optional[Callable[[int, str, int, str, int], None]] = None
         self.on_server_message: Optional[Callable[[str], None]] = None
         self.on_error: Optional[Callable[[int, str], None]] = None
+        # TCP 语音帧到达（外网/NAT 场景媒体走 TCP 控制连接）：
+        # payload = 2B 头长 + protobuf 头 + 加密数据（与 UDP 语音包载荷一致）
+        self.on_tcp_voice_frame: Optional[Callable[[bytes], None]] = None
         self.on_admin_auth_result: Optional[Callable[[bool, str], None]] = None
         self.on_admin_action_result: Optional[Callable[[bool, str], None]] = None
         self.on_file_upload_response: Optional[Callable[[int, bool, str], None]] = None
@@ -683,6 +690,24 @@ class NevoClient:
             # 因此必须使用 SPEAKING_STATE(36) 上报。
             msg = SpeakingState(speaking=speaking)
             self._send_message(WireMessageType.SPEAKING_STATE, msg)
+        except Exception:
+            pass
+
+    def send_voice_frame_tcp(self, payload: bytes):
+        """通过 TCP 控制连接发送语音帧（TCP_VOICE_FRAME_TYPE）。
+
+        外网/NAT 场景（frp 内网穿透）UDP 回程不可靠，
+        媒体帧随登录同一条 TCP 连接传输，回程天然可靠。
+        payload = 2B 头长 + protobuf 头 + 加密数据（与 UDP 语音包载荷一致）。
+        """
+        if not self._sock or not self._connected:
+            return
+        if len(payload) > TCP_MAX_PAYLOAD_SIZE:
+            return
+        try:
+            header = struct.pack(">III", len(payload), TCP_VOICE_FRAME_TYPE, 0)
+            with self._send_lock:
+                self._sock.sendall(header + payload)
         except Exception:
             pass
 
@@ -1388,6 +1413,14 @@ class NevoClient:
             while self._connected and self._sock:
                 try:
                     msg_type, payload = self._read_frame()
+                    # TCP 语音帧（0xFF）：媒体走 TCP 控制连接（外网/NAT 场景）
+                    if msg_type == TCP_VOICE_FRAME_TYPE:
+                        if self.on_tcp_voice_frame:
+                            try:
+                                self.on_tcp_voice_frame(payload)
+                            except Exception as e:
+                                logger.debug("on_tcp_voice_frame error: %s", e)
+                        continue
                     self._handle_message(msg_type, payload)
                 except ConnectionError:
                     break

@@ -106,34 +106,43 @@ void VideoRelay::handleVideoPacket(const uint8_t* data, uint32_t size,
 
     // ---- 发送者身份解析（fail-closed）：身份以映射表为准，不信任包头 ----
     bool sender_resolved = false;
+    bool need_crypto_auth = false;
     UserId sender_id;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto mapped = findUserByEndpointLocked(sender);
         if (!mapped) {
-            NEVO_LOG_WARN("video_relay", "RX pkt: endpoint {}:{} not mapped, dropping (fail-closed)",
-                          sender.address().to_string(), sender.port());
-            ++packets_dropped_;
-            return;
-        }
-        sender_id = *mapped;
-        if (header_sender_id && header_sender_id != sender_id) {
-            NEVO_LOG_WARN("video_relay", "RX pkt: header sender_id={} != mapped user={}, dropping",
-                          header_sender_id.value, sender_id.value);
-            ++packets_dropped_;
-            return;
-        }
-        if (!header_sender_id) {
-            // 包头无 sender_id，用映射身份回填（供接收方识别）
-            sender_resolved = true;
-            header.set_sender_id(sender_id.value);
+            // 未知端点：若包头携带 sender_id，走"解密认证自动注册"
+            // （NAT/frp 穿透场景端点会变化）——能使用该用户会话密钥解密
+            // = 持有密钥 = 身份可信，认证通过后才建立端点映射。
+            if (!header_sender_id) {
+                NEVO_LOG_WARN("video_relay", "RX pkt: endpoint {}:{} not mapped and no header sender_id, dropping",
+                              sender.address().to_string(), sender.port());
+                ++packets_dropped_;
+                return;
+            }
+            need_crypto_auth = true;
+            sender_id = header_sender_id;
+        } else {
+            sender_id = *mapped;
+            if (header_sender_id && header_sender_id != sender_id) {
+                NEVO_LOG_WARN("video_relay", "RX pkt: header sender_id={} != mapped user={}, dropping",
+                              header_sender_id.value, sender_id.value);
+                ++packets_dropped_;
+                return;
+            }
+            if (!header_sender_id) {
+                // 包头无 sender_id，用映射身份回填（供接收方识别）
+                sender_resolved = true;
+                header.set_sender_id(sender_id.value);
+            }
         }
     }
 
-    // --- 单次加锁：更新映射 + 收集 peers ---
+    // --- 更新映射 + 收集 peers（认证路径延迟到解密成功后执行） ---
     ChannelId sender_channel;
     std::vector<boost::asio::ip::udp::endpoint> peers;
-    {
+    if (!need_crypto_auth) {
         std::lock_guard<std::mutex> lock(mutex_);
 
         std::string sender_key = endpointKey(sender);
@@ -199,7 +208,7 @@ void VideoRelay::handleVideoPacket(const uint8_t* data, uint32_t size,
     NEVO_LOG_INFO("video_relay", "PEERS for user_id={} channel={}: count={}, client_map_size={}",
                   sender_id.value, sender_channel.value, peers.size(), client_map_.size());
 
-    if (peers.empty()) {
+    if (!need_crypto_auth && peers.empty()) {
         NEVO_LOG_INFO("video_relay", "No peers to forward to (empty peer list)");
         return;
     }
@@ -250,6 +259,64 @@ void VideoRelay::handleVideoPacket(const uint8_t* data, uint32_t size,
             ++packets_dropped_;
             NEVO_LOG_WARN("video_relay", "Failed to decrypt video from user_id={} (decrypt_aad_size={}, ct_len={})",
                           sender_id.value, decrypt_aad_size, ct_len);
+            return;
+        }
+    }
+
+    // --- 未知端点 + 解密认证通过：建立端点映射 + 成员校验 + 收集 peers ---
+    if (need_crypto_auth) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 端点已被其他用户占用则拒绝（防端点劫持）
+        auto existing = findUserByEndpointLocked(sender);
+        if (existing && *existing != sender_id) {
+            NEVO_LOG_WARN("video_relay", "RX pkt: endpoint {}:{} claimed by user={}, dropping",
+                          sender.address().to_string(), sender.port(), existing->value);
+            ++packets_dropped_;
+            return;
+        }
+
+        sender_channel = packet_channel;
+        if (!sender_channel) {
+            ++packets_dropped_;
+            return;
+        }
+
+        // ---- 频道成员校验（防跨频道视频注入） ----
+        if (channel_mgr_) {
+            Channel* channel = channel_mgr_->getChannel(sender_channel);
+            if (!channel || !channel->hasUser(sender_id)) {
+                NEVO_LOG_WARN("video_relay", "RX pkt: user={} is not a member of channel={}, dropping",
+                              sender_id.value, sender_channel.value);
+                ++packets_dropped_;
+                return;
+            }
+        }
+
+        std::string auth_sender_key = endpointKey(sender);
+        auto& user_mappings = client_map_[sender_id];
+        auto mit = user_mappings.find(auth_sender_key);
+        if (mit != user_mappings.end()) {
+            mit->second.channel_id = sender_channel;
+        } else {
+            // 解密认证成功 = 持有该用户会话密钥，允许绑定端点
+            VideoClientMapping mapping;
+            mapping.user_id = sender_id;
+            mapping.channel_id = sender_channel;
+            mapping.endpoint = sender;
+            user_mappings[auth_sender_key] = mapping;
+            endpoint_to_user_[auth_sender_key] = sender_id;
+            NEVO_LOG_INFO("video_relay",
+                          "UDP endpoint auto-registered via crypto auth: user={} -> {}:{} (channel={})",
+                          sender_id.value,
+                          sender.address().to_string(), sender.port(),
+                          sender_channel.value);
+        }
+
+        peers = getChannelPeersLocked(sender_id, sender_channel, auth_sender_key);
+
+        if (peers.empty()) {
+            NEVO_LOG_INFO("video_relay", "No peers to forward to (empty peer list)");
             return;
         }
     }

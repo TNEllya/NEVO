@@ -167,6 +167,18 @@ Result<void> ServerCore::initialize(const std::string& db_path) {
             return this->getClientSessionKey(user_id);
         });
 
+    // TCP 语音下发：接收者有活跃 TCP 会话时，中继优先走 TCP 控制连接
+    // （外网/NAT/frp 场景 UDP 回程不可靠，TCP 回程与登录同链路可靠）
+    audio_relay_->setTcpSenderCallback(
+        [this](UserId user_id, const std::vector<uint8_t>& payload) -> bool {
+            auto session = getClientSession(user_id);
+            if (session && session->isAuthenticated()) {
+                session->sendVoiceFrameTcp(payload);
+                return true;
+            }
+            return false;
+        });
+
     // Generate server session key for voice encryption
 #ifdef NEVO_HAS_SODIUM
     randombytes_buf(server_session_key_.data(), CRYPTO_KEY_SIZE);
@@ -575,6 +587,7 @@ void ServerCore::onClientConnected(std::shared_ptr<ClientSession> session) {
 void ServerCore::onClientDisconnected(std::shared_ptr<ClientSession> session) {
     UserId uid;
     SessionId sid;
+    bool user_has_other_sessions = false;
 
     {
         std::lock_guard<std::mutex> lock(sessions_mutex_);
@@ -583,7 +596,7 @@ void ServerCore::onClientDisconnected(std::shared_ptr<ClientSession> session) {
         sid = session->sessionId();
 
         // 判断该用户是否还有其他活动会话（同账号多设备场景）
-        bool user_has_other_sessions = false;
+        user_has_other_sessions = false;
         if (uid) {
             for (const auto& [other_sid, other_session] : sessions_) {
                 if (other_sid == sid) continue;
@@ -628,6 +641,14 @@ void ServerCore::onClientDisconnected(std::shared_ptr<ClientSession> session) {
 
         NEVO_LOG_INFO("server", "Client disconnected: user={} session={} (total clients: {})",
                       uid.value, sid.value, sessions_.size());
+    }
+
+    // 频道成员清理（锁外执行，避免锁顺序问题）：
+    // 仅当该用户已无其他活跃会话时移除频道成员——
+    // 同账号断线重连场景下，旧会话断开不得把新会话的用户移出频道
+    // （否则语音/视频中继的频道成员校验会拒绝其媒体包）。
+    if (uid && !user_has_other_sessions && channel_mgr_) {
+        channel_mgr_->removeUserFromChannel(uid);
     }
 
     // Trigger UI callbacks outside the lock

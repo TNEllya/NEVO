@@ -717,6 +717,12 @@ class MediaBridge:
         # 设置加密会话密钥
         if self._crypto and session_key:
             self._crypto.set_session_key(bytes(session_key))
+        # 注册 TCP 语音帧回调（外网/NAT 场景媒体走 TCP 控制连接）
+        if self._client is not None:
+            try:
+                self._client.on_tcp_voice_frame = self._on_tcp_voice_frame
+            except Exception:
+                pass
         # 复用登录前预创建的语音套接字；未预创建时（旧调用路径）再创建
         if not self._voice_sock:
             self._voice_sock = self._create_dualstack_udp(256 * 1024)
@@ -801,17 +807,30 @@ class MediaBridge:
     # ---- 发送（浏览器 → 后端 UDP）----
 
     def send_voice_frame(self, encoded_data):
-        """将编码后的 Opus 数据包装为 VoicePacketHeader + 加密 + UDP 发送。"""
-        if not self._voice_sock or not self._server_voice_addr or not self._crypto:
+        """将编码后的 Opus 数据包装为 VoicePacketHeader + 加密，经 TCP 发送。
+
+        外网/NAT 场景（frp 内网穿透）UDP 回程不可靠，媒体帧优先走 TCP
+        控制连接（与登录同链路，回程可靠）；同时保留 UDP 发送作为
+        内网直连兜底（服务端中继会按接收者情况选择 TCP 或 UDP 下发）。
+        """
+        if not self._crypto:
             return
         try:
+            # 频道 ID 兜底：channel_list 回调与 MediaBridge 创建存在时序竞态，
+            # 若本桥频道未同步则取客户端当前频道（登录后自动进入默认频道）
+            channel_id = self._channel_id
+            if channel_id == 0 and self._client is not None:
+                try:
+                    channel_id = self._client.current_channel_id
+                except Exception:
+                    channel_id = 0
             header = voice_pb2.VoicePacketHeader()
             header.sequence_number = self._voice_seq
             header.sender_id = self._user_id
-            header.channel_id = self._channel_id
+            header.channel_id = channel_id
             header.timestamp = int(time.time() * 1000) & 0xFFFFFFFF
             header.last_frame = False
-            header.tcp_tunnel = False
+            header.tcp_tunnel = True
             self._voice_seq += 1
             header_bytes = header.SerializeToString()
             # encrypt 返回 nonce + ciphertext + tag
@@ -820,8 +839,13 @@ class MediaBridge:
                 return
             header_len_prefix = struct.pack('<H', len(header_bytes))
             packet = header_len_prefix + header_bytes + encrypted
-            self._voice_sock.sendto(
-                packet, self._resolve_sendto(self._voice_sock, self._server_voice_addr))
+            # TCP 发送（外网/NAT 可靠路径）
+            if self._client is not None:
+                self._client.send_voice_frame_tcp(packet)
+            # UDP 兜底（内网直连场景）
+            if self._voice_sock and self._server_voice_addr:
+                self._voice_sock.sendto(
+                    packet, self._resolve_sendto(self._voice_sock, self._server_voice_addr))
         except Exception:
             pass
 
@@ -880,10 +904,17 @@ class MediaBridge:
         if not self._voice_sock or not self._server_voice_addr or not self._crypto:
             return
         try:
+            # 频道 ID 兜底（与 send_voice_frame 一致，避免时序竞态导致 channel=0）
+            channel_id = self._channel_id
+            if channel_id == 0 and self._client is not None:
+                try:
+                    channel_id = self._client.current_channel_id
+                except Exception:
+                    channel_id = 0
             header = voice_pb2.VoicePacketHeader()
             header.sequence_number = self._voice_seq
             header.sender_id = self._user_id
-            header.channel_id = self._channel_id
+            header.channel_id = channel_id
             header.timestamp = int(time.time() * 1000) & 0xFFFFFFFF
             header.last_frame = True
             header.tcp_tunnel = False
@@ -913,6 +944,37 @@ class MediaBridge:
             time.sleep(0.5)
 
     # ---- 接收（后端 UDP → 浏览器 WS）----
+
+    def _on_tcp_voice_frame(self, payload: bytes):
+        """接收 TCP 语音帧（服务端中继经 TCP 控制连接下发），解密并转发浏览器。
+
+        外网/NAT 场景（frp 内网穿透）UDP 回程不可靠，媒体帧随 TCP 控制
+        连接到达，解析逻辑与 UDP 语音包一致（2B 头长 + protobuf 头 + 密文）。
+        """
+        if not self._alive or not self._crypto:
+            return
+        try:
+            if len(payload) < 2:
+                return
+            header_size = struct.unpack_from('<H', payload, 0)[0]
+            if header_size == 0 or 2 + header_size > len(payload):
+                return
+            header = voice_pb2.VoicePacketHeader()
+            header.ParseFromString(payload[2:2 + header_size])
+            if header.sender_id == 0:
+                return
+            payload_body = payload[2 + header_size:]
+            header_aad = payload[2:2 + header_size]
+            plaintext = self._crypto.decrypt(payload_body, header_aad=header_aad)
+            if plaintext is None:
+                return
+            # 通过 WS 事件发送给浏览器
+            self._send_media_event("voice_frame", {
+                "sender_id": header.sender_id,
+                "data": base64.b64encode(plaintext).decode('ascii'),
+            })
+        except Exception:
+            pass
 
     def _voice_recv_loop(self):
         """接收 UDP 语音包，解密，通过 WS 发回浏览器。"""

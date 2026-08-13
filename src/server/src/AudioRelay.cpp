@@ -95,6 +95,7 @@ void AudioRelay::relayVoicePacket(const uint8_t* data, uint32_t size,
     std::vector<boost::asio::ip::udp::endpoint> peers;
     std::shared_ptr<VoiceCrypto> sender_crypto;
     std::unordered_map<UserId, std::shared_ptr<VoiceCrypto>> receiver_crypto_map;
+    bool need_crypto_auth = false;  // UDP 未知端点：需解密认证通过后才建立映射
     {
         std::lock_guard<std::mutex> lock(mutex_);
 
@@ -107,82 +108,99 @@ void AudioRelay::relayVoicePacket(const uint8_t* data, uint32_t size,
             sender_id = findUserByEndpointLocked(sender_endpoint);
         }
         if (!sender_id) {
-            NEVO_LOG_WARN("server", "Voice packet rejected: unknown sender {}:{}",
-                          sender_endpoint.address().to_string(), sender_endpoint.port());
-            ++packets_dropped_;
-            return;
-        }
-
-        // 包头声明的 sender_id 必须与实际身份一致（防伪造）
-        if (header_sender_id && header_sender_id != sender_id) {
-            NEVO_LOG_WARN("server", "Voice packet rejected: header sender_id={} != authenticated user={}",
-                          header_sender_id.value, sender_id.value);
-            ++packets_dropped_;
-            return;
-        }
-
-        // ---- 2. 频道成员校验（防跨频道语音注入） ----
-        if (channel_mgr_) {
-            Channel* channel = channel_mgr_->getChannel(channel_id);
-            if (!channel || !channel->hasUser(sender_id)) {
-                NEVO_LOG_WARN("server", "Voice packet rejected: user={} is not a member of channel={}",
-                              sender_id.value, channel_id.value);
+            // UDP 未知端点：不立即拒绝。若包头声明了 sender_id，
+            // 进入"解密认证"路径——能使用该用户会话密钥解密 = 持有密钥 = 身份可信；
+            // 认证通过后才建立端点映射（NAT/内网穿透场景下端点会变化，如 frp 转发）。
+            need_crypto_auth = true;
+            sender_id = header_sender_id;
+            if (!sender_id) {
+                NEVO_LOG_WARN("server", "Voice packet rejected: unknown sender {}:{} (no header id)",
+                              sender_endpoint.address().to_string(), sender_endpoint.port());
                 ++packets_dropped_;
                 return;
             }
-        }
-
-        // ---- 3. 更新/创建映射 ----
-        std::string sender_key = endpointKey(sender_endpoint);
-        auto& user_mappings = client_map_[sender_id];
-        auto mit = user_mappings.find(sender_key);
-        if (mit != user_mappings.end()) {
-            mit->second.current_channel = channel_id;
-        } else if (known_sender_id) {
-            // 仅 TCP 隧道（已认证身份）允许自动创建映射
-            ClientUdpMapping mapping;
-            mapping.user_id = sender_id;
-            mapping.udp_endpoint = sender_endpoint;
-            mapping.current_channel = channel_id;
-            user_mappings[sender_key] = mapping;
-            endpoint_to_user_[sender_key] = sender_id;
-            NEVO_LOG_INFO("server", "TCP tunnel mapping auto-created for user={} (channel={})",
-                          sender_id.value, channel_id.value);
-        } else if (!channel_mgr_) {
-            // 无频道管理器（兼容/测试模式）：无法做权威成员校验，允许映射自建
-            ClientUdpMapping mapping;
-            mapping.user_id = sender_id;
-            mapping.udp_endpoint = sender_endpoint;
-            mapping.current_channel = channel_id;
-            user_mappings[sender_key] = mapping;
-            endpoint_to_user_[sender_key] = sender_id;
+            sender_crypto = getOrCreateCryptoLocked(sender_id);
+            if (!sender_crypto) {
+                NEVO_LOG_WARN("server", "Voice packet rejected: unknown sender {}:{} (no crypto context for user={})",
+                              sender_endpoint.address().to_string(), sender_endpoint.port(),
+                              sender_id.value);
+                ++packets_dropped_;
+                return;
+            }
         } else {
-            // UDP 路径 + 有频道管理器：未知端点一律拒绝
-            NEVO_LOG_WARN("server", "Voice packet rejected: endpoint {}:{} not mapped for user={}",
-                          sender_endpoint.address().to_string(), sender_endpoint.port(),
-                          sender_id.value);
-            ++packets_dropped_;
-            return;
-        }
+            // 包头声明的 sender_id 必须与实际身份一致（防伪造）
+            if (header_sender_id && header_sender_id != sender_id) {
+                NEVO_LOG_WARN("server", "Voice packet rejected: header sender_id={} != authenticated user={}",
+                              header_sender_id.value, sender_id.value);
+                ++packets_dropped_;
+                return;
+            }
 
-        // ---- 4. 收集同频道 peers 与 crypto 上下文 ----
-        peers = getChannelPeersLocked(sender_id, channel_id, sender_key);
+            // ---- 2. 频道成员校验（防跨频道语音注入） ----
+            if (channel_mgr_) {
+                Channel* channel = channel_mgr_->getChannel(channel_id);
+                if (!channel || !channel->hasUser(sender_id)) {
+                    NEVO_LOG_WARN("server", "Voice packet rejected: user={} is not a member of channel={}",
+                                  sender_id.value, channel_id.value);
+                    ++packets_dropped_;
+                    return;
+                }
+            }
 
-        sender_crypto = getOrCreateCryptoLocked(sender_id);
+            // ---- 3. 更新/创建映射 ----
+            std::string sender_key = endpointKey(sender_endpoint);
+            auto& user_mappings = client_map_[sender_id];
+            auto mit = user_mappings.find(sender_key);
+            if (mit != user_mappings.end()) {
+                mit->second.current_channel = channel_id;
+            } else if (known_sender_id) {
+                // 仅 TCP 隧道（已认证身份）允许自动创建映射
+                ClientUdpMapping mapping;
+                mapping.user_id = sender_id;
+                mapping.udp_endpoint = sender_endpoint;
+                mapping.current_channel = channel_id;
+                user_mappings[sender_key] = mapping;
+                endpoint_to_user_[sender_key] = sender_id;
+                NEVO_LOG_INFO("server", "TCP tunnel mapping auto-created for user={} (channel={})",
+                              sender_id.value, channel_id.value);
+            } else if (!channel_mgr_) {
+                // 无频道管理器（兼容/测试模式）：无法做权威成员校验，允许映射自建
+                ClientUdpMapping mapping;
+                mapping.user_id = sender_id;
+                mapping.udp_endpoint = sender_endpoint;
+                mapping.current_channel = channel_id;
+                user_mappings[sender_key] = mapping;
+                endpoint_to_user_[sender_key] = sender_id;
+            } else {
+                // UDP 路径 + 有频道管理器：未知端点一律拒绝
+                NEVO_LOG_WARN("server", "Voice packet rejected: endpoint {}:{} not mapped for user={}",
+                              sender_endpoint.address().to_string(), sender_endpoint.port(),
+                              sender_id.value);
+                ++packets_dropped_;
+                return;
+            }
 
-        for (const auto& peer_endpoint : peers) {
-            UserId receiver_id = findUserByEndpointLocked(peer_endpoint);
-            if (!receiver_id) continue;
-            if (receiver_id == sender_id) continue;
-            auto crypto = getOrCreateCryptoLocked(receiver_id);
-            if (crypto) {
-                receiver_crypto_map[receiver_id] = crypto;
+            // ---- 4. 收集同频道 peers 与 crypto 上下文 ----
+            peers = getChannelPeersLocked(sender_id, channel_id, sender_key);
+
+            sender_crypto = getOrCreateCryptoLocked(sender_id);
+
+            for (const auto& peer_endpoint : peers) {
+                UserId receiver_id = findUserByEndpointLocked(peer_endpoint);
+                if (!receiver_id) continue;
+                if (receiver_id == sender_id) continue;
+                auto crypto = getOrCreateCryptoLocked(receiver_id);
+                if (crypto) {
+                    receiver_crypto_map[receiver_id] = crypto;
+                }
             }
         }
     }
 
-    if (peers.empty()) {
-        // 频道内没有其他用户，无需转发
+    if (peers.empty() && !need_crypto_auth) {
+        // 频道内没有其他用户，无需转发。
+        // 注意：need_crypto_auth（未知端点解密认证）路径的 peers 在解密认证
+        // 通过后才收集，此处不能提前返回，否则外网/NAT 语音包全部被丢弃。
         static thread_local uint32_t empty_peers_log_counter = 0;
         if ((empty_peers_log_counter++ % 50) == 0) {
             NEVO_LOG_INFO("server", "Voice: no peers for user={} channel={} (client_map_size={})",
@@ -234,6 +252,64 @@ void AudioRelay::relayVoicePacket(const uint8_t* data, uint32_t size,
     }
     const std::vector<uint8_t>& plaintext = *decrypted;
 
+    // ---- 5.1 未知端点 + 解密认证通过：建立端点映射 + 成员校验 + 收集 peers ----
+    if (need_crypto_auth) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 端点已被其他用户占用则拒绝（防端点劫持）
+        auto existing = findUserByEndpointLocked(sender_endpoint);
+        if (existing && existing != sender_id) {
+            NEVO_LOG_WARN("server", "Voice packet rejected: endpoint {}:{} claimed by user={}",
+                          sender_endpoint.address().to_string(), sender_endpoint.port(),
+                          existing.value);
+            ++packets_dropped_;
+            return;
+        }
+
+        // ---- 频道成员校验（防跨频道语音注入） ----
+        if (channel_mgr_) {
+            Channel* channel = channel_mgr_->getChannel(channel_id);
+            if (!channel || !channel->hasUser(sender_id)) {
+                NEVO_LOG_WARN("server", "Voice packet rejected: user={} is not a member of channel={}",
+                              sender_id.value, channel_id.value);
+                ++packets_dropped_;
+                return;
+            }
+        }
+
+        std::string sender_key = endpointKey(sender_endpoint);
+        auto& user_mappings = client_map_[sender_id];
+        auto mit = user_mappings.find(sender_key);
+        if (mit != user_mappings.end()) {
+            mit->second.current_channel = channel_id;
+        } else {
+            // 解密认证成功 = 持有该用户会话密钥，允许绑定端点
+            ClientUdpMapping mapping;
+            mapping.user_id = sender_id;
+            mapping.udp_endpoint = sender_endpoint;
+            mapping.current_channel = channel_id;
+            user_mappings[sender_key] = mapping;
+            endpoint_to_user_[sender_key] = sender_id;
+            NEVO_LOG_INFO("server",
+                          "UDP endpoint auto-registered via crypto auth: user={} -> {}:{} (channel={})",
+                          sender_id.value,
+                          sender_endpoint.address().to_string(), sender_endpoint.port(),
+                          channel_id.value);
+        }
+
+        // ---- 收集同频道 peers 与 crypto 上下文 ----
+        peers = getChannelPeersLocked(sender_id, channel_id, sender_key);
+        for (const auto& peer_endpoint : peers) {
+            UserId receiver_id = findUserByEndpointLocked(peer_endpoint);
+            if (!receiver_id) continue;
+            if (receiver_id == sender_id) continue;
+            auto crypto = getOrCreateCryptoLocked(receiver_id);
+            if (crypto) {
+                receiver_crypto_map[receiver_id] = crypto;
+            }
+        }
+    }
+
     // ---- 6. 转发给同频道其他用户（用接收者密钥重新加密） ----
     for (const auto& peer_endpoint : peers) {
         UserId receiver_id = findUserByEndpoint(peer_endpoint);
@@ -259,6 +335,22 @@ void AudioRelay::relayVoicePacket(const uint8_t* data, uint32_t size,
         packet_to_send.reserve(header_size + reencrypted.size());
         packet_to_send.insert(packet_to_send.end(), data, data + header_size);
         packet_to_send.insert(packet_to_send.end(), reencrypted.begin(), reencrypted.end());
+
+        // 优先通过接收者的 TCP 控制连接下发（外网/NAT/frp 场景 UDP 回程不可靠，
+        // TCP 回程与登录同链路，已验证可靠）；回调返回 false 时回退 UDP。
+        if (tcp_sender_callback_) {
+            bool sent = false;
+            try {
+                sent = tcp_sender_callback_(receiver_id, packet_to_send);
+            } catch (const std::exception& e) {
+                NEVO_LOG_WARN("server", "TCP voice send callback exception for user_id={}: {}",
+                              receiver_id.value, e.what());
+            }
+            if (sent) {
+                ++packets_relayed_;
+                continue;
+            }
+        }
 
         // 构建数据副本用于异步发送
         auto data_copy = std::make_shared<std::vector<uint8_t>>(std::move(packet_to_send));
@@ -405,6 +497,11 @@ void AudioRelay::setSessionKeyQuery(SessionKeyQuery query) {
     session_key_query_ = std::move(query);
 }
 
+void AudioRelay::setTcpSenderCallback(VoiceTcpSender sender) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    tcp_sender_callback_ = std::move(sender);
+}
+
 void AudioRelay::rotateClientKey(UserId user_id, const uint8_t* key) {
     if (!key) {
         return;
@@ -468,18 +565,28 @@ std::vector<boost::asio::ip::udp::endpoint> AudioRelay::getChannelPeersLocked(
     if (channel_mgr_) {
         Channel* channel = channel_mgr_->getChannel(channel_id);
         if (!channel) {
+            NEVO_LOG_WARN("server", "getChannelPeers: channel {} not found (sender={})",
+                          channel_id.value, sender_id.value);
             return peers;
         }
 
         const auto& users = channel->users();
+        NEVO_LOG_DEBUG("server", "getChannelPeers: channel={} users={} sender={} sender_key={}",
+                       channel_id.value, users.size(), sender_id.value, sender_endpoint_key);
         for (UserId uid : users) {
             auto it = client_map_.find(uid);
             if (it == client_map_.end()) {
+                NEVO_LOG_DEBUG("server", "getChannelPeers: uid={} NOT in client_map (size={})",
+                               uid.value, client_map_.size());
                 continue;
             }
+            NEVO_LOG_DEBUG("server", "getChannelPeers: uid={} in client_map with {} endpoints",
+                           uid.value, it->second.size());
             // 遍历该用户的所有端点（支持同一账号多设备），排除发送者自身端点
             for (const auto& [ep_key, mapping] : it->second) {
                 if (ep_key == sender_endpoint_key) continue; // 不转发给发送者自身端点
+                NEVO_LOG_DEBUG("server", "getChannelPeers: adding peer {} for uid={}",
+                               ep_key, uid.value);
                 peers.push_back(mapping.udp_endpoint);
             }
         }

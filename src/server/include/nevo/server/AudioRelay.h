@@ -213,6 +213,19 @@ public:
 
     void rotateClientKey(UserId user_id, const uint8_t* key);
 
+    /**
+     * @brief 设置 TCP 语音下发回调
+     *
+     * 外网/NAT 场景（frp 等内网穿透）下 UDP 回程不可靠，
+     * 中继优先通过接收者的 TCP 控制连接下发语音帧
+     * （帧类型 TCP_VOICE_FRAME_TYPE，由 ServerCore 实现）。
+     *
+     * @param sender 回调：传入接收者 UserId 与已加密的语音帧载荷，
+     *               返回 true 表示已通过 TCP 下发（无需 UDP 兜底）
+     */
+    using VoiceTcpSender = std::function<bool(UserId, const std::vector<uint8_t>&)>;
+    void setTcpSenderCallback(VoiceTcpSender sender);
+
 private:
     // ============================================================
     // 内部方法
@@ -302,6 +315,9 @@ private:
 
     /// 会话密钥查询回调（从 ServerCore 获取每客户端密钥）
     SessionKeyQuery session_key_query_;
+
+    /// TCP 语音下发回调（接收者有活跃 TCP 会话时优先走 TCP，回程可靠）
+    VoiceTcpSender tcp_sender_callback_;
 
     /// 每客户端 VoiceCrypto 实例（用于加密时的 nonce 管理）
     /// 使用 shared_ptr：中继在锁外持有引用，防止用户断线时对象被并发销毁（use-after-free）

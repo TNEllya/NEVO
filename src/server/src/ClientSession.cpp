@@ -171,10 +171,9 @@ void ClientSession::disconnect() {
     NEVO_LOG_INFO("server", "Disconnecting session (session_id={}, user={})",
                   session_id_.value, user_.username());
 
-    // 从频道中移除用户
-    if (authenticated_ && channel_mgr_) {
-        channel_mgr_->removeUserFromChannel(user_.id());
-    }
+    // 频道成员清理移至 ServerCore::onClientDisconnected：
+    // 同账号多会话时，旧会话断开不得移除频道成员（否则断线重连后
+    // 新会话的用户会被移出频道，语音/视频中继随之失效）。
 
     // 关闭 TCP 连接
     if (tcp_conn_) {
@@ -217,6 +216,35 @@ void ClientSession::sendControl(const control::ControlMessage& message,
                 static_cast<uint32_t>(type), request_id);
             if (ec) {
                 NEVO_LOG_ERROR("server", "Failed to send control message: {}", ec.message());
+            }
+        },
+        boost::asio::detached);
+}
+
+// ============================================================
+// TCP 语音下发（外网/NAT 场景：UDP 回程不可靠，媒体走 TCP 控制连接）
+// ============================================================
+
+void ClientSession::sendVoiceFrameTcp(const std::vector<uint8_t>& payload) {
+    if (!tcp_conn_ || !tcp_conn_->isConnected()) {
+        return;
+    }
+    if (!authenticated_ || !user_.id()) {
+        return;
+    }
+
+    auto& io_ctx = static_cast<boost::asio::io_context&>(
+        tcp_conn_->socket().get_executor().context());
+
+    auto self = shared_from_this();
+    boost::asio::co_spawn(io_ctx,
+        [self, payload]() -> boost::asio::awaitable<void> {
+            auto ec = co_await self->tcp_conn_->asyncSend(
+                payload.data(), static_cast<uint32_t>(payload.size()),
+                TCP_VOICE_FRAME_TYPE, 0);
+            if (ec) {
+                NEVO_LOG_TRACE("server", "TCP voice send failed for user {}: {}",
+                               self->user_.id().value, ec.message());
             }
         },
         boost::asio::detached);
