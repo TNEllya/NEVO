@@ -15,7 +15,7 @@
 
 #include "nevo/server/ui/ServerMainWindow.h"
 #include "nevo/server/ServerConfig.h"
-#include "nevo/ui/ThemeManager.h"
+#include "nevo/server/ui/ThemeManager.h"
 #include "nevo/core/common/Logger.h"
 
 #include <boost/asio.hpp>

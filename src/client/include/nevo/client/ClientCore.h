@@ -51,6 +51,7 @@
 #include "nevo/core/model/User.h"
 #include "nevo/core/model/Channel.h"
 #include "nevo/client/NetworkManager.h"
+#include "nevo/client/VideoCallManager.h"
 
 namespace nevo {
 
@@ -378,6 +379,9 @@ public:
     /// 获取 AudioOutput 引用
     AudioOutput& audioOutput();
 
+    /// 获取 VideoCallManager 引用
+    VideoCallManager& videoCallManager();
+
     // ============================================================
     // 事件回调
     // ============================================================
@@ -657,6 +661,7 @@ private:
     std::unique_ptr<AudioEngine> audio_engine_;
     std::unique_ptr<AudioInput> audio_input_;
     std::unique_ptr<AudioOutput> audio_output_;
+    std::unique_ptr<VideoCallManager> video_call_manager_;
 
     // --- 音频引擎状态追踪 ---
     bool audio_engine_started_for_monitor_{false};  // 标记引擎是否仅因监听测试而启动

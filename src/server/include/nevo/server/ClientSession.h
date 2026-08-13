@@ -33,10 +33,12 @@
 
 #include <boost/asio.hpp>
 
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
 #include <atomic>
+#include <unordered_map>
 
 // Protobuf 生成代码的前向声明
 namespace nevo::control { class ControlMessage; }
@@ -196,6 +198,8 @@ public:
      */
     void updateUserChannel(ChannelId channel_id);
 
+    ChannelId getChannelId() const { return user_.currentChannel(); }
+
 private:
     // ============================================================
     // 消息处理
@@ -349,7 +353,12 @@ private:
 
     void handleFileListRequest(const control::ControlMessage& msg, uint32_t request_id);
     void handleFileUploadRequest(const control::ControlMessage& msg, uint32_t request_id);
+    void handleFileUploadChunkRequest(const control::ControlMessage& msg, uint32_t request_id);
+    void handleFileDownloadRequest(const control::ControlMessage& msg, uint32_t request_id);
     void handleFileDeleteRequest(const control::ControlMessage& msg, uint32_t request_id);
+
+    void handleScreenShareStart(const control::ControlMessage& msg, uint32_t request_id);
+    void handleScreenShareStop(const control::ControlMessage& msg, uint32_t request_id);
 
     // ============================================================
     // 成员变量
@@ -387,6 +396,22 @@ private:
 
     /// 全局会话计数器（用于生成唯一 SessionId）
     static std::atomic<uint64_t> session_counter_;
+
+    // ============================================================
+    // 文件分片上传组装状态（会话级）
+    // ============================================================
+
+    /// 单个文件的分片组装状态
+    struct FileUploadAssembly {
+        std::string file_path;          ///< 目标文件路径（来自 DB 文件记录）
+        uint32_t total_chunks = 0;      ///< 总分片数（首片声明）
+        uint32_t received_chunks = 0;   ///< 已收到的分片数
+        uint64_t bytes_written = 0;     ///< 已写入字节数
+        std::shared_ptr<std::ofstream> stream;  ///< 输出流
+    };
+
+    /// file_id -> 组装状态（用户断线时随会话析构，未完成的文件被清理）
+    std::unordered_map<uint64_t, FileUploadAssembly> file_assemblies_;
 };
 
 } // namespace nevo

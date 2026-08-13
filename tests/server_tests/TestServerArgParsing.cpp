@@ -13,6 +13,7 @@
  */
 
 #include <gtest/gtest.h>
+#include <cctype>
 #include <string>
 #include <sstream>
 #include <iostream>
@@ -23,7 +24,18 @@ namespace {
 template <typename T>
 bool parseIntSafe(const std::string& str, T& out, const std::string& name) {
     try {
-        int value = std::stoi(str);
+        // 拒绝前导空格
+        if (!str.empty() && std::isspace(static_cast<unsigned char>(str[0]))) {
+            std::cerr << "Invalid " << name << ": '" << str << "' (leading whitespace)" << std::endl;
+            return false;
+        }
+        size_t pos = 0;
+        int value = std::stoi(str, &pos);
+        // 确保整个字符串被消费（拒绝尾部垃圾）
+        if (pos != str.size()) {
+            std::cerr << "Invalid " << name << ": '" << str << "' (trailing characters)" << std::endl;
+            return false;
+        }
         out = static_cast<T>(value);
         return true;
     } catch (const std::invalid_argument&) {
@@ -54,7 +66,6 @@ TEST(ArgParsingTest, ValidZeroPort) {
 }
 
 TEST(ArgParsingTest, ValidNegativeToUnsigned) {
-    uint16_t port = 100;
     int val = -5;
     EXPECT_TRUE(parseIntSafe("-5", val, "test"));
     EXPECT_EQ(val, -5);

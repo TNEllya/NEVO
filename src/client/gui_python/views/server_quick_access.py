@@ -93,7 +93,7 @@ class _NavStyleItem(QFrame):
         username = self.entry.get("username", "")
         if username:
             user_label = QLabel(username)
-            user_label.setStyleSheet("color: #8e9297; font-size: 11px;")
+            user_label.setStyleSheet(f"color: {pal['text_muted']}; font-size: 11px;")
             layout.addWidget(user_label)
 
     def enterEvent(self, event):

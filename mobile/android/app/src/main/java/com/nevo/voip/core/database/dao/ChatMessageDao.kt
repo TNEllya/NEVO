@@ -11,10 +11,10 @@ import kotlinx.coroutines.flow.Flow
 interface ChatMessageDao {
 
     @Query("SELECT * FROM chat_messages WHERE channelId = :channelId ORDER BY timestamp ASC LIMIT :limit")
-    fun getMessagesByChannel(channelId: Int, limit: Int = 500): Flow<List<ChatMessageEntity>>
+    fun getMessagesByChannel(channelId: Long, limit: Int = 500): Flow<List<ChatMessageEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertMessage(msg: ChatMessageEntity)
+    suspend fun insertMessage(msg: ChatMessageEntity): Long
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessages(msgs: List<ChatMessageEntity>)

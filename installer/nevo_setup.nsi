@@ -1,5 +1,7 @@
-; NEVO Installer Script
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿; NEVO Installer Script
 ; Built with NSIS 3.x
+
+Unicode true
 
 !include "MUI2.nsh"
 !include "x64.nsh"
@@ -7,12 +9,12 @@
 
 ; --- Application Info ---
 !define APP_NAME "NEVO"
-!define APP_VERSION "1.0.0"
+!define APP_VERSION "0.1.0"
 !define APP_PUBLISHER "NEVO"
 !define APP_EXE "NEVO.exe"
 
 Name "${APP_NAME}"
-OutFile "C:\Users\yzd20\Desktop\NEVO\dist\NEVO-Setup.exe"
+OutFile "C:\Users\yzd20\Desktop\Project\NEVO\out\NEVO-Setup-0.1.0.exe"
 InstallDir "$PROGRAMFILES64\${APP_NAME}"
 InstallDirRegKey HKLM "Software\${APP_NAME}" "InstallDir"
 RequestExecutionLevel admin
@@ -44,7 +46,7 @@ Section "${APP_NAME}" SecMain
   SectionIn RO
 
   SetOutPath "$INSTDIR"
-  File "C:\Users\yzd20\Desktop\NEVO\src\client\gui_python\dist\${APP_EXE}"
+  File "C:\Users\yzd20\Desktop\Project\NEVO\src\client\gui_python\dist\${APP_EXE}"
 
   ; Start Menu Shortcut
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
@@ -88,4 +90,3 @@ Section "Uninstall"
 
   SetAutoClose true
 SectionEnd
-

@@ -56,7 +56,8 @@ nevo_server.db
 Dockerfile
 docker-compose.yml
 .dockerignore
-docker-entrypoint.sh
+# docker-entrypoint.sh is required by the runtime stage
+# docker-entrypoint.sh
 
 # Mobile
 mobile/

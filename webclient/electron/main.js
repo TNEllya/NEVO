@@ -172,10 +172,12 @@ async function createWindow() {
     },
   });
 
-  // 启动时清除 Electron 缓存，避免旧版本 JS/CSS 被复用
+  // 启动时清除 Electron 缓存，避免旧版本 JS/CSS 被复用。
+  // 注意：不清理 localstorage —— 其中保存用户设置（主题/服务器收藏/音量/自动检测开关），
+  // 清理会导致每次重启后用户设置丢失（T-06 修复）。
   try {
     await session.defaultSession.clearCache();
-    await session.defaultSession.clearStorageData({ storages: ['appcache', 'cookies', 'filesystem', 'indexdb', 'localstorage', 'shadercache', 'websql', 'serviceworkers'] });
+    await session.defaultSession.clearStorageData({ storages: ['appcache', 'cookies', 'filesystem', 'indexdb', 'shadercache', 'websql', 'serviceworkers'] });
     console.log('[NEVO] Renderer cache cleared');
   } catch (e) {
     console.error('[NEVO] Failed to clear cache:', e);

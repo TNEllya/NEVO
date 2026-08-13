@@ -35,6 +35,7 @@ SslWrapper::SslWrapper(boost::asio::io_context& io_ctx, Options options)
     : ssl_ctx_(boost::asio::ssl::context::tls_client)
     , options_(std::move(options))
 {
+    (void)io_ctx; // 保留参数以供后续扩展
     initSslContext();
     NEVO_LOG_DEBUG("network", "SslWrapper constructed (verify={})",
                    options_.verify_mode == VerifyMode::FullVerify ? "full" : "skip");

@@ -8,6 +8,9 @@
 #include <vector>
 #include <thread>
 #include <atomic>
+#include <array>
+#include <string>
+#include <unordered_set>
 
 #include "nevo/network/VoiceCrypto.h"
 
@@ -316,6 +319,46 @@ TEST(VoiceCryptoTest, PlaintextSizeCalculation) {
     EXPECT_EQ(VoiceCrypto::plaintextSize(POLY1305_TAG_SIZE), 0u);
     EXPECT_EQ(VoiceCrypto::plaintextSize(POLY1305_TAG_SIZE + 100), 100u);
     EXPECT_EQ(VoiceCrypto::plaintextSize(10), 0u); // Less than tag size
+}
+
+// 安全回归测试：同一把会话密钥被多个实例共享时（同账号多设备、
+// 服务端中继），nonce 必须跨实例唯一——每实例随机 nonce 前缀保证
+// 不会出现 XChaCha20 密钥流重用。
+TEST(VoiceCryptoTest, CrossInstanceNonceUniquenessWithSharedKey) {
+    uint8_t shared_key[CRYPTO_KEY_SIZE];
+    for (size_t i = 0; i < CRYPTO_KEY_SIZE; ++i) {
+        shared_key[i] = static_cast<uint8_t>(i * 7 + 1);
+    }
+
+    constexpr int kInstances = 4;
+    constexpr int kPacketsPerInstance = 250;
+
+    VoiceCrypto instances[kInstances];
+    std::unordered_set<std::string> seen_nonces;
+
+    for (auto& crypto : instances) {
+        crypto.setSessionKey(shared_key);
+    }
+
+    std::vector<uint8_t> plaintext(64, 0x42);
+
+    for (int i = 0; i < kInstances; ++i) {
+        for (int p = 0; p < kPacketsPerInstance; ++p) {
+            auto encrypted = instances[i].encrypt(plaintext.data(), plaintext.size(), nullptr, 0);
+            ASSERT_EQ(encrypted.size(), VoiceCrypto::encryptedSize(plaintext.size()));
+            std::string nonce_hex;
+            nonce_hex.reserve(XCHACHA_NONCE_SIZE * 2);
+            static const char* hex = "0123456789abcdef";
+            for (size_t b = 0; b < XCHACHA_NONCE_SIZE; ++b) {
+                nonce_hex += hex[encrypted[b] >> 4];
+                nonce_hex += hex[encrypted[b] & 0x0F];
+            }
+            ASSERT_TRUE(seen_nonces.insert(nonce_hex).second)
+                << "Nonce reuse across instances detected (key stream reuse risk)";
+        }
+    }
+
+    EXPECT_EQ(seen_nonces.size(), static_cast<size_t>(kInstances * kPacketsPerInstance));
 }
 
 } // namespace

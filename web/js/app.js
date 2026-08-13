@@ -41,15 +41,42 @@
   // ============================================================
   // API
   // ============================================================
+
+  // 管理认证令牌（sessionStorage 存储，页面关闭即失效）
+  let adminToken = sessionStorage.getItem("nevo_admin_token") || null;
+  function setAdminToken(t) { adminToken = t || null; if (t) sessionStorage.setItem("nevo_admin_token", t); else sessionStorage.removeItem("nevo_admin_token"); }
+
   async function api(endpoint, method = "GET", body = null) {
-    const opts = { method, headers: { "Content-Type": "application/json" } };
+    const headers = { "Content-Type": "application/json" };
+    if (adminToken) headers["Authorization"] = "Bearer " + adminToken;
+    const opts = { method, headers };
     if (body) opts.body = JSON.stringify(body);
     try {
       const res = await fetch(endpoint, opts);
-      return await res.json();
+      const data = await res.json();
+      // 敏感操作需要管理认证：弹窗登录后自动重试一次
+      if (res.status === 401 && method === "POST" && endpoint !== "/api/login") {
+        const okLogin = await loginAdmin();
+        if (okLogin) return await api(endpoint, method, body);
+      }
+      return data;
     } catch {
       return { status: "error", data: { message: "Network error" } };
     }
+  }
+
+  // 管理面登录：向 /api/login 换取认证令牌
+  async function loginAdmin() {
+    const password = prompt("请输入 NEVO 服务器管理员密码：");
+    if (password === null || password === "") return false;
+    const r = await api("/api/login", "POST", { password: password });
+    if (r.status === "ok" && r.data && r.data.auth_token) {
+      setAdminToken(r.data.auth_token);
+      toast("管理认证成功", "success");
+      return true;
+    }
+    toast(r.data?.message || "管理认证失败", "error");
+    return false;
   }
 
   async function fetchStatus() {
@@ -626,8 +653,12 @@
     var cpu = m.cpu_percent ?? -1;
     var memPct = m.memory_percent ?? 0;
     var memMB = m.memory_mb ?? 0;
-    var diskUsed = m.disk_total_gb > 0 ? m.disk_total_gb - m.disk_free_gb : 0;
-    var diskPct = m.disk_total_gb > 0 ? (diskUsed / m.disk_total_gb * 100) : 0;
+    var memTotalGB = m.memory_total_gb ?? 0;
+    var memTotalMB = memTotalGB > 0 ? memTotalGB * 1024 : (memMB > 0 ? Math.max(memMB, 100) : 100);
+    var memUnit = "MB" + (memTotalGB > 0 ? " / " + memTotalGB + " GB" : "") + (memPct > 0 ? " (" + memPct + "%)" : "");
+    var diskUsedRaw = m.disk_total_gb > 0 ? m.disk_total_gb - m.disk_free_gb : 0;
+    var diskUsed = diskUsedRaw > 0 ? diskUsedRaw.toFixed(2) : "0.00";
+    var diskPct = m.disk_total_gb > 0 ? (diskUsedRaw / m.disk_total_gb * 100) : 0;
 
     function gauge(id, label, value, max, unit, color) {
       var pct = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
@@ -638,7 +669,7 @@
       <div class="section-title">系统资源</div>\
       <div class="stat-grid" role="region" aria-label="系统资源">\
         <div class="card">' + gauge("gauge-cpu", "CPU 使用率", cpu, 100, "%", cpu > 80 ? "var(--red)" : cpu > 50 ? "var(--amber)" : "var(--green)") + '</div>\
-        <div class="card">' + gauge("gauge-mem", "内存 (进程)", memMB, memMB > 0 ? Math.max(memMB, (m.disk_total_gb || 1) * 50) : 100, "MB" + (memPct > 0 ? " (" + memPct + "%)" : ""), memPct > 80 ? "var(--red)" : memPct > 50 ? "var(--amber)" : "var(--blue)") + '</div>\
+        <div class="card">' + gauge("gauge-mem", "内存 (进程)", memMB, memTotalMB, memUnit, memPct > 80 ? "var(--red)" : memPct > 50 ? "var(--amber)" : "var(--blue)") + '</div>\
         <div class="card">' + gauge("gauge-disk", "磁盘已用", diskUsed, m.disk_total_gb || 1, "GB / " + (m.disk_total_gb || '—') + " GB", diskPct > 90 ? "var(--red)" : diskPct > 70 ? "var(--amber)" : "var(--blue)") + '</div>\
         <div class="card"><div style="text-align:center"><div class="stat-label">网络连接数</div><div class="stat-value" id="metric-conns">' + (m.connections >= 0 ? m.connections : '—') + '</div></div></div>\
       </div>\
@@ -668,11 +699,14 @@
     updateGauge("gauge-cpu", cpu, 100, cpu > 80 ? "var(--red)" : cpu > 50 ? "var(--amber)" : "var(--green)");
     var memMB = m.memory_mb ?? 0;
     var memPct = m.memory_percent ?? 0;
-    var memMax = memMB > 0 ? Math.max(memMB, 500) : 100;
+    var memTotalGB = m.memory_total_gb ?? 0;
+    var memTotalMB = memTotalGB > 0 ? memTotalGB * 1024 : (memMB > 0 ? Math.max(memMB, 100) : 100);
     var memColor = memPct > 80 ? "var(--red)" : memPct > 50 ? "var(--amber)" : "var(--blue)";
-    updateGauge("gauge-mem", memMB, memMax, memColor, memMB > 0 ? "MB" + (memPct > 0 ? " (" + memPct + "%)" : "") : "—");
-    var diskUsed = m.disk_total_gb > 0 ? m.disk_total_gb - m.disk_free_gb : 0;
-    var diskPct = m.disk_total_gb > 0 ? (diskUsed / m.disk_total_gb * 100) : 0;
+    var memUnit = memMB > 0 ? "MB" + (memTotalGB > 0 ? " / " + memTotalGB + " GB" : "") + (memPct > 0 ? " (" + memPct + "%)" : "") : "—";
+    updateGauge("gauge-mem", memMB, memTotalMB, memColor, memUnit);
+    var diskUsedRaw = m.disk_total_gb > 0 ? m.disk_total_gb - m.disk_free_gb : 0;
+    var diskUsed = diskUsedRaw > 0 ? diskUsedRaw.toFixed(2) : "0.00";
+    var diskPct = m.disk_total_gb > 0 ? (diskUsedRaw / m.disk_total_gb * 100) : 0;
     var diskMax = m.disk_total_gb || 1;
     updateGauge("gauge-disk", diskUsed, diskMax, diskPct > 90 ? "var(--red)" : diskPct > 70 ? "var(--amber)" : "var(--blue)", "GB / " + (m.disk_total_gb || '—') + " GB");
     setText("metric-conns", m.connections >= 0 ? String(m.connections) : "—");
@@ -949,7 +983,11 @@
       var pwd = document.getElementById("cfg-admin-pwd").value;
       if (pwd) body.admin_password = pwd;
       var r = await api("/api/config", "POST", body);
-      if (r.status === "ok") { toast("配置已保存", "success"); document.getElementById("cfg-admin-pwd").value = ""; await fetchAll(); }
+      if (r.status === "ok") {
+        // 修改管理员密码后令牌会轮换，同步更新本地令牌
+        if (r.data && r.data.auth_token) setAdminToken(r.data.auth_token);
+        toast("配置已保存", "success"); document.getElementById("cfg-admin-pwd").value = ""; await fetchAll();
+      }
       else {
         var err = document.getElementById("config-error");
         if (err) { err.textContent = r.data?.message || "保存失败"; err.classList.add("visible"); }

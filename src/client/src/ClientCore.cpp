@@ -53,6 +53,7 @@ ClientCore::ClientCore(boost::asio::io_context& io_ctx)
     , audio_engine_(std::make_unique<AudioEngine>())
     , audio_input_(std::make_unique<AudioInput>())
     , audio_output_(std::make_unique<AudioOutput>())
+    , video_call_manager_(std::make_unique<VideoCallManager>(io_ctx, *network_mgr_))
     , ping_timer_(io_ctx)
 {
     // Initialize ma_context early so device enumeration works before connecting
@@ -70,6 +71,12 @@ ClientCore::ClientCore(boost::asio::io_context& io_ctx)
     network_mgr_->onDisconnected = [this]() {
         handleDisconnected();
     };
+
+    network_mgr_->onVideoPacket =
+        [this](const uint8_t* data, uint32_t size,
+               const boost::asio::ip::udp::endpoint& sender) {
+            video_call_manager_->onVideoPacketReceived(data, size, sender);
+        };
 
     NEVO_LOG_INFO("client", "ClientCore created");
 }
@@ -326,6 +333,13 @@ void ClientCore::disconnect()
     // 2. 关闭音频子系统
     // ------------------------------------------------------------------
     shutdownAudioSubsystem();
+
+    // ------------------------------------------------------------------
+    // 2.5 清理视频通话状态
+    // ------------------------------------------------------------------
+    if (video_call_manager_) {
+        video_call_manager_->onDisconnected();
+    }
 
     // ------------------------------------------------------------------
     // 3. 关闭网络连接
@@ -590,6 +604,11 @@ AudioOutput& ClientCore::audioOutput()
     return *audio_output_;
 }
 
+VideoCallManager& ClientCore::videoCallManager()
+{
+    return *video_call_manager_;
+}
+
 // ============================================================
 // 内部方法
 // ============================================================
@@ -743,6 +762,25 @@ void ClientCore::handleControlMessage(const control::ControlMessage& message,
             break;
         }
 
+        // ------------------------------------------------------------------
+        // 视频通话控制消息
+        // ------------------------------------------------------------------
+        case ControlMessageType::VideoCallRequest:
+            video_call_manager_->handleVideoCallRequest(message);
+            break;
+
+        case ControlMessageType::VideoCallResponse:
+            video_call_manager_->handleVideoCallResponse(message);
+            break;
+
+        case ControlMessageType::VideoCallHangup:
+            video_call_manager_->handleVideoCallHangup(message);
+            break;
+
+        case ControlMessageType::VideoCallProfileUpdate:
+            video_call_manager_->handleVideoProfileUpdate(message);
+            break;
+
         default:
             NEVO_LOG_DEBUG("client", "Unhandled control message type={}",
                           controlMessageTypeToString(type));
@@ -759,6 +797,11 @@ void ClientCore::handleDisconnected()
 
     // 清理音频子系统
     shutdownAudioSubsystem();
+
+    // 清理视频通话状态
+    if (video_call_manager_) {
+        video_call_manager_->onDisconnected();
+    }
 
     // 清理用户列表
     {
@@ -868,6 +911,19 @@ Result<void> ClientCore::handleLoginResponse(const control::ControlMessage& mess
                 network_mgr_->setVoiceServerUdpPort(
                     static_cast<uint16_t>(resp.server_udp_port()));
             }
+
+            // 配置服务器视频 UDP 端口（优先使用服务器返回的专用视频端口）
+            if (resp.server_video_udp_port() > 0) {
+                network_mgr_->setVideoServerUdpPort(
+                    static_cast<uint16_t>(resp.server_video_udp_port()));
+            } else if (resp.server_udp_port() > 0) {
+                // 兼容旧服务端：回退到语音端口
+                network_mgr_->setVideoServerUdpPort(
+                    static_cast<uint16_t>(resp.server_udp_port()));
+            }
+
+            // 同步本地用户 ID 到视频通话管理器
+            video_call_manager_->setLocalUserId(local_user_id_);
 
             NEVO_LOG_INFO("client", "Login successful: user_id={}",
                          local_user_id_.value);

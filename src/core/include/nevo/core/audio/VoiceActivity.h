@@ -57,6 +57,9 @@ public:
     /// 查询当前是否处于"正在说话"状态
     bool isSpeaking() const;
 
+    /// 查询当前 hangover 计数（主要用于测试）
+    uint32_t hangoverCounter() const;
+
 private:
     /// 计算 PCM 帧的 RMS 能量
     static float computeRmsEnergy(const float* pcm_data, uint32_t frame_size);

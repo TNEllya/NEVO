@@ -1,8 +1,12 @@
 package com.nevo.voip.feature.channel.ui
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
+import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nevo.voip.core.datastore.NevoPreferences
@@ -14,7 +18,7 @@ import com.nevo.voip.feature.voice.data.VoiceEngine
 import com.nevo.voip.service.NevoAudioService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -48,14 +52,12 @@ class ChannelViewModel @Inject constructor(
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
+    companion object {
+        private const val TAG = "ChannelViewModel"
+    }
+
     private val _uiState = MutableStateFlow(ChannelUiState())
     val uiState: StateFlow<ChannelUiState> = _uiState.asStateFlow()
-
-    private val _isMuted = MutableStateFlow(false)
-    val isMuted: StateFlow<Boolean> = _isMuted.asStateFlow()
-
-    private val _isDeafened = MutableStateFlow(false)
-    val isDeafened: StateFlow<Boolean> = _isDeafened.asStateFlow()
 
     private val preferences = NevoPreferences(context)
 
@@ -104,9 +106,6 @@ class ChannelViewModel @Inject constructor(
                 }
             }
         }
-        viewModelScope.launch {
-            connectionRepository.userSpeaking.collect { _ -> }
-        }
     }
 
     fun joinChannel(channelId: Long) {
@@ -131,8 +130,9 @@ class ChannelViewModel @Inject constructor(
 
     fun leaveChannel() {
         viewModelScope.launch {
+            val channelId = _uiState.value.currentChannelId
             stopVoiceEngine()
-            channelRepository.leaveChannel().onSuccess {
+            channelRepository.leaveChannel(channelId).onSuccess {
                 _uiState.update { state ->
                     state.copy(
                         currentChannelId = 0,
@@ -182,48 +182,89 @@ class ChannelViewModel @Inject constructor(
     }
 
     fun toggleMute() {
-        val newMuted = !_isMuted.value
-        _isMuted.value = newMuted
+        val newMuted = !_uiState.value.isMuted
         _uiState.update { it.copy(isMuted = newMuted) }
         voiceEngine.setMuted(newMuted)
     }
 
     fun toggleDeafen() {
-        val newDeafened = !_isDeafened.value
-        _isDeafened.value = newDeafened
+        val newDeafened = !_uiState.value.isDeafened
         _uiState.update { it.copy(isDeafened = newDeafened) }
         voiceEngine.setDeafened(newDeafened)
     }
 
     private fun startVoiceEngine() {
         viewModelScope.launch {
-            val host = preferences.lastConnectedHost.first()
-            val port = preferences.lastConnectedPort.first()
-            if (host.isNotBlank() && port > 0) {
-                voiceEngine.setServerInfo(host, port)
+            runCatching {
+                val host = preferences.lastConnectedHost.firstOrNull() ?: ""
+                val udpPort = connectionRepository.getCurrentServerUdpPort()
+                val sessionKey = connectionRepository.getCurrentSessionKey()
+
+                if (sessionKey.size != 32) {
+                    Log.w(TAG, "Voice engine not started: invalid session key length=${sessionKey.size}")
+                    return@runCatching
+                }
+                if (host.isBlank() || udpPort <= 0) {
+                    Log.w(TAG, "Voice engine not started: host blank or invalid udpPort=$udpPort")
+                    return@runCatching
+                }
+                if (ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.RECORD_AUDIO
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    Log.w(TAG, "Voice engine not started: RECORD_AUDIO permission not granted")
+                    return@runCatching
+                }
+
+                voiceEngine.setSessionKey(sessionKey)
+                voiceEngine.setServerInfo(host, udpPort)
+
+                val micResult = voiceEngine.startMicrophone()
+                if (micResult.isFailure) {
+                    Log.w(TAG, "Voice microphone start failed", micResult.exceptionOrNull())
+                    voiceEngine.stopAll()
+                    return@runCatching
+                }
+
+                val speakerResult = voiceEngine.startSpeaker(udpPort)
+                if (speakerResult.isFailure) {
+                    Log.w(TAG, "Voice speaker start failed", speakerResult.exceptionOrNull())
+                    voiceEngine.stopAll()
+                    return@runCatching
+                }
+
+                startAudioService()
+            }.onFailure { error ->
+                Log.e(TAG, "Voice engine start failed", error)
+                voiceEngine.stopAll()
+                stopAudioService()
             }
-            startAudioService()
-            voiceEngine.startMicrophone()
-            voiceEngine.startSpeaker(port)
         }
     }
 
     private fun stopVoiceEngine() {
-        voiceEngine.stopAll()
+        runCatching { voiceEngine.stopAll() }
+            .onFailure { Log.w(TAG, "Voice engine stop failed", it) }
         stopAudioService()
     }
 
     private fun startAudioService() {
-        val intent = Intent(context, NevoAudioService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent)
-        } else {
-            context.startService(intent)
+        runCatching {
+            val intent = Intent(context, NevoAudioService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }.onFailure {
+            Log.w(TAG, "Audio foreground service start failed", it)
         }
     }
 
     private fun stopAudioService() {
-        context.stopService(Intent(context, NevoAudioService::class.java))
+        runCatching { context.stopService(Intent(context, NevoAudioService::class.java)) }
+            .onFailure { Log.w(TAG, "Audio foreground service stop failed", it) }
     }
 
     private fun flattenChannels(

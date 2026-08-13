@@ -43,6 +43,8 @@ public:
                           const boost::asio::ip::udp::endpoint& ep,
                           ChannelId channel_id);
     void removeClientMapping(UserId user_id);
+    void removeClientMapping(UserId user_id,
+                             const boost::asio::ip::udp::endpoint& ep);
     void updateClientChannel(UserId user_id, ChannelId channel_id);
 
     uint64_t packetsRelayed() const { return packets_relayed_.load(); }
@@ -52,20 +54,26 @@ public:
 private:
     std::optional<UserId> findUserByEndpoint(
         const boost::asio::ip::udp::endpoint& ep) const;
+    std::optional<UserId> findUserByEndpointLocked(
+        const boost::asio::ip::udp::endpoint& ep) const;
     std::vector<boost::asio::ip::udp::endpoint> getChannelPeersLocked(
-        UserId sender_id, ChannelId channel_id) const;
-    VoiceCrypto* getOrCreateCryptoForUserLocked(UserId user_id);
+        UserId sender_id, ChannelId channel_id,
+        const std::string& sender_endpoint_key) const;
+    std::shared_ptr<VoiceCrypto> getOrCreateCryptoForUserLocked(UserId user_id);
     void _dumpClientMap();
 
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::shared_ptr<ChannelManager> channel_mgr_;
     std::shared_ptr<UdpSocket> udp_socket_;
     boost::asio::io_context* io_ctx_ = nullptr;
     VideoSessionKeyQuery session_key_query_;
 
-    std::unordered_map<UserId, VideoClientMapping> client_map_;
+    // 用户 ID -> (端点键 -> 视频映射)（支持同一账号多设备并存）
+    std::unordered_map<UserId,
+        std::unordered_map<std::string, VideoClientMapping>> client_map_;
     std::unordered_map<std::string, UserId> endpoint_to_user_;
-    std::unordered_map<UserId, std::unique_ptr<VoiceCrypto>> client_cryptos_;
+    // 使用 shared_ptr：转发路径在锁外持有引用，防止用户断线时对象被并发销毁
+    std::unordered_map<UserId, std::shared_ptr<VoiceCrypto>> client_cryptos_;
 
     std::atomic<uint64_t> packets_received_{0};
     std::atomic<uint64_t> packets_relayed_{0};

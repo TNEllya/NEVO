@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>连接服务器 — NEVO</title>
+    <style id="theme-vars">
+/* NEVO GUI Design System — Amber Gold Theme */
+/* Brand: NEVO VoIP — Secure Voice Communication */
+
+:root {
+  /* === Color System === */
+  --color-primary: #F5B731;
+  --color-primary-hover: #E0A528;
+  --color-primary-dim: rgba(245, 183, 49, 0.12);
+  --color-primary-subtle: rgba(245, 183, 49, 0.06);
+
+  --color-bg-base: #0F0D0A;
+  --color-bg-secondary: #16140F;
+  --color-bg-tertiary: #1D1A13;
+  --color-bg-elevated: #242017;
+  --color-bg-hover: #2B2619;
+  --color-bg-active: #332D1F;
+  --color-bg-overlay: rgba(0, 0, 0, 0.65);
+
+  --color-border: #2B2619;
+  --color-border-light: #3D3625;
+  --color-border-focus: #F5B731;
+
+  --color-text-primary: #F0ECE4;
+  --color-text-secondary: #A89E8A;
+  --color-text-muted: #756B58;
+  --color-text-inverse: #0F0D0A;
+  --color-text-link: #F5B731;
+
+  --color-surface-card: #16140F;
+  --color-surface-sunken: #12100B;
+
+  /* State colors */
+  --state-success: #34D399;
+  --state-success-dim: rgba(52, 211, 153, 0.12);
+  --state-warning: #FBBF24;
+  --state-warning-dim: rgba(251, 191, 36, 0.12);
+  --state-error: #F87171;
+  --state-error-dim: rgba(248, 113, 113, 0.12);
+  --state-info: #60A5FA;
+  --state-info-dim: rgba(96, 165, 250, 0.12);
+
+  /* === Typography === */
+  --font-sans: 'Inter', 'MiSans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', monospace;
+
+  --text-xs: 0.6875rem;    /* 11px */
+  --text-sm: 0.8125rem;    /* 13px */
+  --text-base: 0.875rem;   /* 14px */
+  --text-lg: 1rem;         /* 16px */
+  --text-xl: 1.125rem;     /* 18px */
+  --text-2xl: 1.375rem;    /* 22px */
+  --text-3xl: 1.75rem;     /* 28px */
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+
+  --tracking-tight: -0.02em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.04em;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* === Radius === */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* === Spacing === */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* === Surface & Depth === */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-elevated: 0 4px 12px rgba(0, 0, 0, 0.04);
+  --shadow-modal: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-floating: 0 4px 16px rgba(0, 0, 0, 0.5);
+
+  /* === Transitions === */
+  --transition-fast: 0.12s ease;
+  --transition-normal: 0.2s ease;
+  --transition-slow: 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* === Utility Classes === */
+.heading-xl {
+  font-family: var(--font-sans);
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-text-primary);
+}
+
+.heading-lg {
+  font-family: var(--font-sans);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-text-primary);
+}
+
+.heading-md {
+  font-family: var(--font-sans);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  color: var(--color-text-primary);
+}
+
+.heading-sm {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-normal);
+  color: var(--color-text-primary);
+}
+
+.body-md {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-normal);
+  color: var(--color-text-secondary);
+}
+
+.caption {
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-normal);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-primary: var(--color-primary);
+    --color-border: var(--color-border);
+  }
+  @layer base {
+    body { background: var(--color-bg-base); color: var(--color-text-primary); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+    <main class="min-h-screen flex items-center justify-center px-4 py-8 relative overflow-hidden">
+      <!-- Emerald radial glow background -->
+      <div class="absolute inset-0 pointer-events-none" style="background: radial-gradient(ellipse 600px 500px at 50% 40%, rgba(45,212,168,0.07) 0%, transparent 70%);"></div>
+
+      <!-- Card -->
+      <div class="relative w-full" style="max-width: 420px;">
+        <div class="rounded-xl p-8 sm:p-10" style="background: var(--color-bg-secondary); border: 1px solid var(--color-border); box-shadow: var(--shadow-elevated);">
+
+          <!-- Logo -->
+          <div class="flex justify-center mb-6">
+            <div class="flex items-center justify-center rounded-lg" style="width: 48px; height: 48px; background: var(--color-primary-dim); border: 1px solid var(--color-border-light);">
+              <span class="heading-xl" style="color: var(--color-primary); font-size: 28px; line-height: 1;">N</span>
+            </div>
+          </div>
+
+          <!-- Title -->
+          <h1 class="heading-xl text-center mb-2" style="text-wrap: balance; word-break: keep-all; overflow-wrap: break-word;">连接到服务器</h1>
+
+          <!-- Subtitle -->
+          <p class="body-md text-center mb-8" style="max-width: 320px; margin-left: auto; margin-right: auto; color: var(--color-text-muted); font-size: var(--text-sm);">输入服务器地址和你的用户名开始安全通话</p>
+
+          <!-- Form -->
+          <form class="space-y-5" onsubmit="return false;">
+
+            <!-- Server Address + Port -->
+            <div>
+              <label class="block mb-1.5" style="font-family: var(--font-sans); font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--color-text-secondary);">服务器地址</label>
+              <div class="flex gap-2">
+                <input
+                  type="text"
+                  id="server-address"
+                  placeholder="127.0.0.1"
+                  class="flex-1 min-w-0 rounded-md px-3 py-2.5 outline-none truncate"
+                  style="
+                    background: var(--color-bg-base);
+                    border: 1px solid var(--color-border);
+                    color: var(--color-text-primary);
+                    font-family: var(--font-mono);
+                    font-size: var(--text-sm);
+                    transition: border-color var(--transition-fast);
+                  "
+                  onfocus="this.style.borderColor='var(--color-border-focus)'; this.style.boxShadow='0 0 0 3px var(--color-primary-dim)'"
+                  onblur="this.style.borderColor='var(--color-border)'; this.style.boxShadow='none'"
+                />
+                <input
+                  type="text"
+                  id="server-port"
+                  placeholder="24430"
+                  class="rounded-md px-3 py-2.5 outline-none truncate"
+                  style="
+                    width: 88px;
+                    flex-shrink: 0;
+                    background: var(--color-bg-base);
+                    border: 1px solid var(--color-border);
+                    color: var(--color-text-primary);
+                    font-family: var(--font-mono);
+                    font-size: var(--text-sm);
+                    transition: border-color var(--transition-fast);
+                  "
+                  onfocus="this.style.borderColor='var(--color-border-focus)'; this.style.boxShadow='0 0 0 3px var(--color-primary-dim)'"
+                  onblur="this.style.borderColor='var(--color-border)'; this.style.boxShadow='none'"
+                />
+              </div>
+            </div>
+
+            <!-- Username -->
+            <div>
+              <label class="block mb-1.5" style="font-family: var(--font-sans); font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--color-text-secondary);">用户名</label>
+              <input
+                type="text"
+                id="username"
+                placeholder="输入你的用户名"
+                class="w-full rounded-md px-3 py-2.5 outline-none truncate"
+                style="
+                  background: var(--color-bg-base);
+                  border: 1px solid var(--color-border);
+                  color: var(--color-text-primary);
+                  font-family: var(--font-sans);
+                  font-size: var(--text-sm);
+                  transition: border-color var(--transition-fast);
+                "
+                onfocus="this.style.borderColor='var(--color-border-focus)'; this.style.boxShadow='0 0 0 3px var(--color-primary-dim)'"
+                onblur="this.style.borderColor='var(--color-border)'; this.style.boxShadow='none'"
+              />
+            </div>
+
+            <!-- Password (optional) -->
+            <div>
+              <div class="flex items-center gap-2 mb-1.5">
+                <label style="font-family: var(--font-sans); font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--color-text-secondary);">密码</label>
+                <span style="font-size: var(--text-xs); color: var(--color-text-muted);">可选</span>
+              </div>
+              <input
+                type="password"
+                id="password"
+                placeholder="服务器密码"
+                class="w-full rounded-md px-3 py-2.5 outline-none truncate"
+                style="
+                  background: var(--color-bg-base);
+                  border: 1px solid var(--color-border);
+                  color: var(--color-text-primary);
+                  font-family: var(--font-sans);
+                  font-size: var(--text-sm);
+                  transition: border-color var(--transition-fast);
+                "
+                onfocus="this.style.borderColor='var(--color-border-focus)'; this.style.boxShadow='0 0 0 3px var(--color-primary-dim)'"
+                onblur="this.style.borderColor='var(--color-border)'; this.style.boxShadow='none'"
+              />
+            </div>
+
+            <!-- Connect CTA -->
+            <button
+              type="submit"
+              id="btn-connect"
+              class="w-full rounded-md py-3 font-semibold cursor-pointer"
+              style="
+                background: var(--color-primary);
+                color: var(--color-text-inverse);
+                font-family: var(--font-sans);
+                font-size: var(--text-base);
+                font-weight: var(--weight-semibold);
+                border: none;
+                transition: background var(--transition-fast), transform var(--transition-fast);
+              "
+              onmouseenter="this.style.background='var(--color-primary-hover)'"
+              onmouseleave="this.style.background='var(--color-primary)'"
+              onmousedown="this.style.transform='scale(0.98)'"
+              onmouseup="this.style.transform='scale(1)'"
+            >连接</button>
+          </form>
+
+          <!-- Bottom links -->
+          <div class="flex items-center justify-center gap-4 mt-6 pt-5" style="border-top: 1px solid var(--color-border);">
+            <a href="#" class="hover:underline" style="font-size: var(--text-sm); color: var(--color-text-muted); transition: color var(--transition-fast);" onmouseenter="this.style.color='var(--color-text-secondary)'" onmouseleave="this.style.color='var(--color-text-muted)'">高级设置</a>
+            <span style="color: var(--color-border-light);">|</span>
+            <a href="#" class="hover:underline" style="font-size: var(--text-sm); color: var(--color-text-muted); transition: color var(--transition-fast);" onmouseenter="this.style.color='var(--color-text-secondary)'" onmouseleave="this.style.color='var(--color-text-muted)'">使用帮助</a>
+          </div>
+
+        </div>
+
+        <!-- Version -->
+        <p class="text-center mt-5" style="font-size: var(--text-xs); color: var(--color-text-muted); font-family: var(--font-mono);">NEVO v0.1.0</p>
+      </div>
+    </main>
+    <script>lucide.createIcons();</script>
+</body>
+</html>

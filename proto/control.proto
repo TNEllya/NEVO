@@ -65,6 +65,8 @@ enum MessageType {
     MSG_FILE_LIST_RESPONSE = 41;
     MSG_FILE_UPLOAD_REQUEST = 42;
     MSG_FILE_UPLOAD_RESPONSE = 43;
+    MSG_FILE_UPLOAD_CHUNK_REQUEST = 44;
+    MSG_FILE_UPLOAD_CHUNK_ACK = 45;
     MSG_FILE_DOWNLOAD_REQUEST = 46;
     MSG_FILE_DOWNLOAD_RESPONSE = 47;
     MSG_FILE_DELETE_REQUEST = 49;
@@ -78,6 +80,12 @@ enum MessageType {
     // 服主绑定
     MSG_BIND_OWNER_REQUEST = 70;
     MSG_BIND_OWNER_RESPONSE = 71;
+
+    // 视频通话
+    MSG_VIDEO_CALL_REQUEST = 80;
+    MSG_VIDEO_CALL_RESPONSE = 81;
+    MSG_VIDEO_CALL_HANGUP = 82;
+    MSG_VIDEO_CALL_PROFILE_UPDATE = 83;
 }
 
 // ============================================================
@@ -326,6 +334,40 @@ message FileUploadResponse {
     uint64 file_id = 3;                 // 新创建的文件记录 ID
 }
 
+/// 客户端 → 服务端：文件上传分片（真实字节流，分片大小由客户端决定，建议 ≤16KB）
+message FileUploadChunkRequest {
+    uint64 file_id = 1;                 // FileUploadResponse 下发的文件记录 ID
+    uint32 chunk_index = 2;             // 分片序号（0-based）
+    uint32 total_chunks = 3;            // 总分片数
+    bytes data = 4;                     // 分片数据
+}
+
+/// 服务端 → 客户端：上传分片确认
+message FileUploadChunkAck {
+    nevo.common.ResultCode result = 1;  // 操作结果
+    string message = 2;                 // 附带消息
+    uint64 file_id = 3;                 // 文件记录 ID
+    uint32 chunk_index = 4;             // 已确认的分片序号
+}
+
+/// 客户端 → 服务端：文件下载请求（请求服务端按分片下发文件数据）
+message FileDownloadRequest {
+    uint64 file_id = 1;                 // 文件记录 ID
+    string filename = 2;                // 文件名（可选，用于校验）
+}
+
+/// 服务端 → 客户端：文件下载响应（每个响应携带一个分片）
+message FileDownloadResponse {
+    nevo.common.ResultCode result = 1;  // 操作结果
+    string message = 2;                 // 附带消息
+    uint64 file_id = 3;                 // 文件记录 ID
+    string filename = 4;                // 文件名
+    uint64 file_size = 5;               // 文件总大小（字节）
+    uint32 chunk_index = 6;             // 分片序号（0-based）
+    uint32 total_chunks = 7;            // 总分片数
+    bytes data = 8;                     // 分片数据
+}
+
 /// 客户端 → 服务端：删除文件请求
 message FileDeleteRequest {
     uint64 file_id = 1;                 // 文件记录 ID
@@ -365,6 +407,49 @@ message ScreenShareState {
     uint32 width = 5;
     uint32 height = 6;
     bool has_audio = 7;
+}
+
+// ============================================================
+// 视频通话
+// ============================================================
+
+message VideoCodecCapability {
+    uint32 codec = 1;            // VideoCodec 枚举值
+    uint32 max_width = 2;
+    uint32 max_height = 3;
+    uint32 max_fps = 4;
+    bool hardware_accelerated = 5;
+}
+
+message VideoProfile {
+    uint32 codec = 1;
+    uint32 width = 2;
+    uint32 height = 3;
+    uint32 fps = 4;
+    uint32 target_bitrate_kbps = 5;
+}
+
+message VideoCallRequest {
+    uint64 target_user_id = 1;
+    uint64 call_id = 2;
+    repeated VideoCodecCapability capabilities = 3;
+}
+
+message VideoCallResponse {
+    uint64 call_id = 1;
+    bool accepted = 2;
+    string reason = 3;
+    VideoProfile profile = 4;
+}
+
+message VideoCallHangup {
+    uint64 call_id = 1;
+    uint32 reason = 2;           // VideoCallEndReason 枚举值
+}
+
+message VideoProfileUpdate {
+    uint64 call_id = 1;
+    VideoProfile profile = 2;
 }
 
 // ============================================================
@@ -411,6 +496,10 @@ message ControlMessage {
         FileListResponse file_list_response = 41;
         FileUploadRequest file_upload_request = 42;
         FileUploadResponse file_upload_response = 43;
+        FileUploadChunkRequest file_upload_chunk_request = 44;
+        FileUploadChunkAck file_upload_chunk_ack = 45;
+        FileDownloadRequest file_download_request = 46;
+        FileDownloadResponse file_download_response = 47;
         FileDeleteRequest file_delete_request = 49;
         FileDeleteResponse file_delete_response = 50;
         ScreenShareStartRequest screen_share_start = 60;
@@ -418,5 +507,9 @@ message ControlMessage {
         ScreenShareState screen_share_state = 62;
         BindOwnerRequest bind_owner_request = 70;
         BindOwnerResponse bind_owner_response = 71;
+        VideoCallRequest video_call_request = 80;
+        VideoCallResponse video_call_response = 81;
+        VideoCallHangup video_call_hangup = 82;
+        VideoProfileUpdate video_profile_update = 83;
     }
 }

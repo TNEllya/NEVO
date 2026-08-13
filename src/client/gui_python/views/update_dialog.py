@@ -5,8 +5,13 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import QFont
 
-from updater import Updater, UpdateState, CheckError, DownloadError, VerifyError
+from updater import Updater, UpdateState, CheckError, DownloadError, VerifyError, InstallError
 from theme_manager import ThemeManager
+import i18n
+
+
+def _tr(text: str) -> str:
+    return i18n._translate(text)
 
 
 class UpdateCheckThread(QThread):
@@ -50,6 +55,25 @@ class UpdateDownloadThread(QThread):
         self.progress.emit(percent, speed, downloaded, total)
 
 
+class UpdateInstallThread(QThread):
+    finished = pyqtSignal()
+    error = pyqtSignal(str)
+
+    def __init__(self, updater: Updater, downloaded_file, parent=None):
+        super().__init__(parent)
+        self._updater = updater
+        self._downloaded_file = downloaded_file
+
+    def run(self):
+        try:
+            self._updater.install_update(self._downloaded_file)
+            self.finished.emit()
+        except InstallError as e:
+            self.error.emit(str(e))
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 class UpdateDialog(QDialog):
     update_accepted = pyqtSignal()
     update_declined = pyqtSignal()
@@ -66,7 +90,7 @@ class UpdateDialog(QDialog):
         tm.theme_changed.connect(self._on_theme_changed)
 
     def _setup_ui(self):
-        self.setWindowTitle(self.tr("NEVO - Update"))
+        self.setWindowTitle(_tr("NEVO - Update"))
         self.setMinimumSize(500, 420)
         self.setMaximumSize(620, 560)
 
@@ -74,7 +98,7 @@ class UpdateDialog(QDialog):
         layout.setSpacing(12)
         layout.setContentsMargins(24, 20, 24, 20)
 
-        self._title_label = QLabel(self.tr("Checking for updates..."))
+        self._title_label = QLabel(_tr("Checking for updates..."))
         self._title_label.setFont(QFont("Segoe UI", 14, QFont.Bold))
         layout.addWidget(self._title_label)
 
@@ -110,30 +134,30 @@ class UpdateDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        self._check_btn = QPushButton(self.tr("Check for Updates"))
+        self._check_btn = QPushButton(_tr("Check for Updates"))
         self._check_btn.setFont(QFont("Segoe UI", 9))
         self._check_btn.clicked.connect(self._on_check_clicked)
         btn_layout.addWidget(self._check_btn)
 
-        self._download_btn = QPushButton(self.tr("Download Update"))
+        self._download_btn = QPushButton(_tr("Download Update"))
         self._download_btn.setFont(QFont("Segoe UI", 9))
         self._download_btn.clicked.connect(self._on_download_clicked)
         self._download_btn.setVisible(False)
         btn_layout.addWidget(self._download_btn)
 
-        self._install_btn = QPushButton(self.tr("Install & Restart"))
+        self._install_btn = QPushButton(_tr("Install & Restart"))
         self._install_btn.setFont(QFont("Segoe UI", 9))
         self._install_btn.clicked.connect(self._on_install_clicked)
         self._install_btn.setVisible(False)
         btn_layout.addWidget(self._install_btn)
 
-        self._cancel_btn = QPushButton(self.tr("Cancel"))
+        self._cancel_btn = QPushButton(_tr("Cancel"))
         self._cancel_btn.setFont(QFont("Segoe UI", 9))
         self._cancel_btn.clicked.connect(self._on_cancel_clicked)
         self._cancel_btn.setVisible(False)
         btn_layout.addWidget(self._cancel_btn)
 
-        self._close_btn = QPushButton(self.tr("Close"))
+        self._close_btn = QPushButton(_tr("Close"))
         self._close_btn.setFont(QFont("Segoe UI", 9))
         self._close_btn.clicked.connect(self.close)
         btn_layout.addWidget(self._close_btn)
@@ -217,9 +241,9 @@ class UpdateDialog(QDialog):
         self._apply_theme()
 
     def _set_state_idle(self):
-        self._title_label.setText(self.tr("No updates available"))
+        self._title_label.setText(_tr("No updates available"))
         self._version_label.setText(
-            self.tr("Current version: %s") % self._updater.current_version)
+            _tr("Current version: %s") % self._updater.current_version)
         self._progress_bar.setVisible(False)
         self._changelog_text.setVisible(False)
         self._status_label.setText("")
@@ -230,11 +254,11 @@ class UpdateDialog(QDialog):
         self._close_btn.setVisible(True)
 
     def _set_state_checking(self):
-        self._title_label.setText(self.tr("Checking for updates..."))
+        self._title_label.setText(_tr("Checking for updates..."))
         self._version_label.setText("")
         self._progress_bar.setVisible(False)
         self._changelog_text.setVisible(False)
-        self._status_label.setText(self.tr("Connecting to GitHub..."))
+        self._status_label.setText(_tr("Connecting to GitHub..."))
         self._check_btn.setEnabled(False)
         self._download_btn.setVisible(False)
         self._install_btn.setVisible(False)
@@ -245,9 +269,9 @@ class UpdateDialog(QDialog):
         info = self._updater.latest_info
         if not info:
             return
-        self._title_label.setText(self.tr("Update available!"))
+        self._title_label.setText(_tr("Update available!"))
         self._version_label.setText(
-            self.tr("Current: v%s  →  Latest: v%s") % (
+            _tr("Current: v%s  →  Latest: v%s") % (
                 self._updater.current_version, info.version))
         if info.changelog:
             self._changelog_text.setVisible(True)
@@ -260,7 +284,7 @@ class UpdateDialog(QDialog):
         self._close_btn.setVisible(True)
 
     def _set_state_downloading(self):
-        self._title_label.setText(self.tr("Downloading update..."))
+        self._title_label.setText(_tr("Downloading update..."))
         self._progress_bar.setVisible(True)
         self._progress_bar.setValue(0)
         self._check_btn.setVisible(False)
@@ -270,10 +294,10 @@ class UpdateDialog(QDialog):
         self._close_btn.setEnabled(False)
 
     def _set_state_ready(self):
-        self._title_label.setText(self.tr("Update ready to install"))
+        self._title_label.setText(_tr("Update ready to install"))
         self._progress_bar.setValue(100)
         self._status_label.setText(
-            self.tr("Download complete. Click 'Install & Restart' to apply."))
+            _tr("Download complete. Click 'Install & Restart' to apply."))
         self._check_btn.setVisible(False)
         self._download_btn.setVisible(False)
         self._install_btn.setVisible(True)
@@ -281,8 +305,8 @@ class UpdateDialog(QDialog):
         self._close_btn.setEnabled(True)
 
     def _set_state_error(self, message: str):
-        self._title_label.setText(self.tr("Update failed"))
-        self._version_label.setText(self.tr("Error: %s") % message)
+        self._title_label.setText(_tr("Update failed"))
+        self._version_label.setText(_tr("Error: %s") % message)
         self._progress_bar.setVisible(False)
         self._changelog_text.setVisible(False)
         self._status_label.setText("")
@@ -321,17 +345,17 @@ class UpdateDialog(QDialog):
     def _on_download_progress(self, percent, speed, downloaded, total):
         self._progress_bar.setValue(int(percent))
         if speed > 1024 * 1024:
-            speed_str = self.tr("%.1f MB/s") % (speed / (1024 * 1024))
+            speed_str = _tr("%.1f MB/s") % (speed / (1024 * 1024))
         elif speed > 1024:
-            speed_str = self.tr("%.1f KB/s") % (speed / 1024)
+            speed_str = _tr("%.1f KB/s") % (speed / 1024)
         else:
-            speed_str = self.tr("%.0f B/s") % speed
+            speed_str = _tr("%.0f B/s") % speed
 
         if total > 0:
             dl_mb = downloaded / (1024 * 1024)
             total_mb = total / (1024 * 1024)
             self._status_label.setText(
-                self.tr("%.1f / %.1f MB  |  %s") % (dl_mb, total_mb, speed_str))
+                _tr("%.1f / %.1f MB  |  %s") % (dl_mb, total_mb, speed_str))
         else:
             self._status_label.setText(speed_str)
 
@@ -343,11 +367,23 @@ class UpdateDialog(QDialog):
         self._set_state_error(error_msg)
 
     def _on_install_clicked(self):
-        if self._downloaded_file:
-            try:
-                self._updater.install_update(self._downloaded_file)
-            except Exception as e:
-                self._set_state_error(str(e))
+        if not self._downloaded_file:
+            return
+        self._install_btn.setEnabled(False)
+        self._status_label.setText(_tr("Installing update..."))
+        self._install_thread = UpdateInstallThread(
+            self._updater, self._downloaded_file, self)
+        self._install_thread.finished.connect(self._on_install_finished)
+        self._install_thread.error.connect(self._on_install_error)
+        self._install_thread.start()
+
+    def _on_install_finished(self):
+        # install_update 内部已调用 _restart_application，进程将退出
+        self._status_label.setText(_tr("Restarting application..."))
+
+    def _on_install_error(self, error_msg: str):
+        self._install_btn.setEnabled(True)
+        self._set_state_error(error_msg)
 
     def _on_cancel_clicked(self):
         self._updater.cancel_download()

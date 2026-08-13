@@ -1,0 +1,46 @@
+{
+  "project": {
+    "operation": "create",
+    "deviceType": "desktop",
+    "designRead": "VoIP desktop client / power users / calm dark utilitarian / medium density / avoid neon tech aesthetics",
+    "designDials": { "layoutVariance": 2, "motionIntensity": 2, "visualDensity": 4 },
+    "styleDefinitionBrief": "VoIP chat app, dark surface system with teal-green primary, Inter font, compact sidebar + content area, voice-activity indicators as signature element",
+    "sharedProjectShellContract": {
+      "colorSystem": "dark bg-base #1A1B1E with teal primary #2DD4A8, surface layering via border not shadow",
+      "typographySystem": "Inter for display and body, 14px base, tight headings",
+      "shapeSystem": "radius-sm 4px / radius-md 8px / radius-lg 12px, no soft/round shapes",
+      "surfaceAndDepth": "border-first static surfaces, shadow only for floating layers",
+      "spacingSystem": "4/8/12/16/24/32/48 scale, compact density"
+    },
+    "generationTree": {
+      "root": {
+        "nodeId": "gen-project-shell",
+        "kind": "project-shell",
+        "output": "partials/project-shell.html",
+        "sharedRegions": ["app-frame", "sidebar", "top-bar", "root-background", "brand-css-usage"],
+        "children": [
+          { "nodeId": "gen-page-main-interface", "kind": "page-leaf", "output": "pages/main-interface.html", "pageIds": ["page-main-interface"] },
+          { "nodeId": "gen-page-video-call", "kind": "page-leaf", "output": "pages/video-call.html", "pageIds": ["page-video-call"] },
+          { "nodeId": "gen-page-settings", "kind": "page-leaf", "output": "pages/settings.html", "pageIds": ["page-settings"] }
+        ]
+      }
+    }
+  },
+  "designSource": { "operatingMode": "free-explore", "styleConstraints": { "radiusMax": 16, "staticShadowAlphaMax": 0.05 } },
+  "pages": [
+    { "nodeId": "page-main-interface", "title": "主界面 - 语音频道", "htmlSrc": "pages/main-interface.html", "pageIndex": 1, "visualNorthStar": "Three-column desktop layout: server sidebar, channel tree, main content with voice users and chat", "continuityAnchors": ["dark-surface-system", "teal-primary-accent", "inter-font-stack", "compact-radius", "border-depth-model"] },
+    { "nodeId": "page-video-call", "title": "视频通话", "htmlSrc": "pages/video-call.html", "pageIndex": 2, "visualNorthStar": "Full-bleed video with floating self-view, minimal control overlay at bottom", "continuityAnchors": ["dark-surface-system", "teal-primary-accent", "inter-font-stack", "compact-radius", "border-depth-model"] },
+    { "nodeId": "page-settings", "title": "设置", "htmlSrc": "pages/settings.html", "pageIndex": 3, "visualNorthStar": "Clean settings panel with grouped sections, dropdown selectors, clear hierarchy", "continuityAnchors": ["dark-surface-system", "teal-primary-accent", "inter-font-stack", "compact-radius", "border-depth-model"] }
+  ],
+  "assets": [],
+  "wiringPlan": [
+    { "sourcePageId": "page-main-interface", "domId": "nav-video-call", "targetPageId": "page-video-call" },
+    { "sourcePageId": "page-main-interface", "domId": "nav-settings", "targetPageId": "page-settings" },
+    { "sourcePageId": "page-video-call", "domId": "back-to-main", "targetPageId": "page-main-interface", "hideEdge": true },
+    { "sourcePageId": "page-settings", "domId": "back-to-main", "targetPageId": "page-main-interface", "hideEdge": true }
+  ],
+  "hiddenInteractionPlan": [
+    { "sourcePageId": "page-video-call", "domId": "back-to-main", "targetPageId": "page-main-interface", "reason": "return" },
+    { "sourcePageId": "page-settings", "domId": "back-to-main", "targetPageId": "page-main-interface", "reason": "return" }
+  ]
+}

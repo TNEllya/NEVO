@@ -6,6 +6,8 @@
 #include "nevo/core/audio/OpusEncoder.h"
 #include "nevo/core/common/Logger.h"
 
+#include <cmath>
+
 #ifdef NEVO_HAS_OPUS
 #include <opus/opus.h>
 #endif
@@ -111,9 +113,17 @@ Result<uint32_t> OpusEncoderWrapper::encode(const float* pcm_input,
 #ifdef OPUS_GET_VOICE_ACTIVITY_REQUEST
     opus_encoder_ctl(encoder_.get(), OPUS_GET_VOICE_ACTIVITY(&vad_flag));
 #else
-    // Fallback: use DTX state as VAD indicator
-    opus_encoder_ctl(encoder_.get(), OPUS_GET_IN_DTX(&vad_flag));
-    vad_flag = !vad_flag;  // Invert: in_dtx=1 means silence, VAD=0
+    // Fallback: 当 Opus 未提供 VAD API 时，使用帧能量作为语音活动指示器。
+    // 纯静音帧能量接近 0，有声帧能量显著大于 0。
+    if (pcm_input && config_.frame_size > 0) {
+        double sum = 0.0;
+        for (uint32_t i = 0; i < config_.frame_size; ++i) {
+            const double sample = static_cast<double>(pcm_input[i]);
+            sum += sample * sample;
+        }
+        const float energy = static_cast<float>(std::sqrt(sum / config_.frame_size));
+        vad_flag = (energy > 0.001f) ? 1 : 0;
+    }
 #endif
     last_vad_result_ = (vad_flag != 0);
 

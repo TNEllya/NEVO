@@ -166,10 +166,6 @@ private:
                           uint32_t& out_message_type,
                           uint32_t& out_request_id);
 
-    /// 编码帧头到缓冲区
-    static std::array<uint8_t, TCP_HEADER_SIZE>
-    encodeFrameHeader(uint32_t payload_length, uint32_t message_type, uint32_t request_id);
-
     /// 触发断开连接回调
     void notifyDisconnected();
 
@@ -178,6 +174,10 @@ private:
     // ============================================================
 
 public:
+    /// 编码帧头到缓冲区（公开以便单元测试复用）
+    static std::array<uint8_t, TCP_HEADER_SIZE>
+    encodeFrameHeader(uint32_t payload_length, uint32_t message_type, uint32_t request_id);
+
 
     /**
      * @brief 获取底层 socket 引用（用于服务端 accept）

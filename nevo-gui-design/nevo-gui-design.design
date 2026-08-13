@@ -1,0 +1,85 @@
+{
+  "data": [
+    {
+      "id": "page-connect",
+      "type": "page",
+      "title": "连接服务器",
+      "version": 1,
+      "createdAt": 1783609432,
+      "canvasData": {
+        "x": 0,
+        "y": 0,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/connect.html"
+      }
+    },
+    {
+      "id": "page-main-voice",
+      "type": "page",
+      "title": "主界面 — 语音频道",
+      "version": 1,
+      "createdAt": 1783609432,
+      "canvasData": {
+        "x": 620,
+        "y": 0,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/main-voice.html"
+      }
+    },
+    {
+      "id": "page-video-call",
+      "type": "page",
+      "title": "视频通话",
+      "version": 1,
+      "createdAt": 1783609432,
+      "canvasData": {
+        "x": 1240,
+        "y": 0,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/video-call.html"
+      }
+    },
+    {
+      "id": "page-server-dashboard",
+      "type": "page",
+      "title": "服务端 — 仪表盘",
+      "version": 1,
+      "createdAt": 1783609432,
+      "canvasData": {
+        "x": 1860,
+        "y": 0,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/server-dashboard.html"
+      }
+    },
+    {
+      "id": "page-server-sessions",
+      "type": "page",
+      "title": "服务端 — 会话管理",
+      "version": 1,
+      "createdAt": 1783609432,
+      "canvasData": {
+        "x": 2480,
+        "y": 0,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/server-sessions.html"
+      }
+    }
+  ],
+  "config": {
+    "autoLayout": true,
+    "deviceType": "desktop",
+    "projectName": "NEVO 现代化 GUI 前端",
+    "showEdge": true
+  }
+}

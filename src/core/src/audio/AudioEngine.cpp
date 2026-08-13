@@ -892,7 +892,7 @@ void AudioEngine::processMixCycle() {
 
     // 遍历所有远端用户，从 JitterBuffer 提取数据
     {
-        std::lock_guard<std::mutex> lock(decoders_mutex_);
+        std::lock_guard<std::mutex> decoder_lock(decoders_mutex_);
         for (auto& [user_id, decoder] : decoders_) {
             if (!decoder) continue;
 

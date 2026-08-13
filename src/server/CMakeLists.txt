@@ -1,8 +1,10 @@
 # src/server/CMakeLists.txt
 # NEVO 服务端可执行文件
 
-add_executable(nevo_server
-    src/main.cpp
+# ============================================================
+# nevo_server_lib — 服务端核心静态库（供可执行文件和测试链接）
+# ============================================================
+add_library(nevo_server_lib STATIC
     src/ServerCore.cpp
     src/ClientSession.cpp
     src/ChannelManager.cpp
@@ -13,7 +15,7 @@ add_executable(nevo_server
     src/ServerConfig.cpp
 )
 
-target_include_directories(nevo_server PRIVATE
+target_include_directories(nevo_server_lib PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 
@@ -44,7 +46,23 @@ else()
     endif()
 endif()
 
-target_link_libraries(nevo_server PRIVATE ${NEVO_SERVER_LINK_LIBS})
+target_link_libraries(nevo_server_lib PUBLIC ${NEVO_SERVER_LINK_LIBS})
+
+nevo_set_compiler_warnings(nevo_server_lib)
+nevo_platform_setup(nevo_server_lib)
+# 服务端代码存在大量历史警告，暂不将警告视为错误
+if(MSVC)
+    target_compile_options(nevo_server_lib PRIVATE /WX-)
+endif()
+
+# ============================================================
+# nevo_server — 服务端可执行文件
+# ============================================================
+add_executable(nevo_server
+    src/main.cpp
+)
+
+target_link_libraries(nevo_server PRIVATE nevo_server_lib)
 
 nevo_set_compiler_warnings(nevo_server)
 nevo_platform_setup(nevo_server)
@@ -77,22 +95,14 @@ add_executable(nevo_server_gui WIN32
     ui/src/ServerMainWindow.cpp
     ui/src/ServerConfigPanel.cpp
     ui/src/ChannelPanel.cpp
-    src/ServerCore.cpp
-    src/ClientSession.cpp
-    src/ChannelManager.cpp
-    src/AudioRelay.cpp
-    src/VideoRelay.cpp
-    src/ControlServer.cpp
-    src/Database.cpp
-    src/ServerConfig.cpp
-    ../ui/src/ThemeManager.cpp
-    ../ui/include/nevo/ui/ThemeManager.h
+    ui/src/ThemeManager.cpp
     ui/include/nevo/server/ui/SessionTableModel.h
     ui/include/nevo/server/ui/ServerStatusBar.h
     ui/include/nevo/server/ui/ServerLogView.h
     ui/include/nevo/server/ui/ServerMainWindow.h
     ui/include/nevo/server/ui/ServerConfigPanel.h
     ui/include/nevo/server/ui/ChannelPanel.h
+    ui/include/nevo/server/ui/ThemeManager.h
 )
 
     set_target_properties(nevo_server_gui PROPERTIES
@@ -115,16 +125,13 @@ add_executable(nevo_server_gui WIN32
     endif()
 
     target_include_directories(nevo_server_gui PRIVATE
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/ui/include>
-        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/ui/include>
     )
 
     target_link_libraries(nevo_server_gui PRIVATE
-        ${NEVO_SERVER_LINK_LIBS}
+        nevo_server_lib
         Qt6::Core
         Qt6::Widgets
-        nevo_core
     )
 
     nevo_set_compiler_warnings(nevo_server_gui)

@@ -1,0 +1,459 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>浼氳瘽绠＄悊</title>
+    <style id="theme-vars">
+/* NEVO GUI Design System — Amber Gold Theme */
+/* Brand: NEVO VoIP — Secure Voice Communication */
+
+:root {
+  /* === Color System === */
+  --color-primary: #F5B731;
+  --color-primary-hover: #E0A528;
+  --color-primary-dim: rgba(245, 183, 49, 0.12);
+  --color-primary-subtle: rgba(245, 183, 49, 0.06);
+
+  --color-bg-base: #0F0D0A;
+  --color-bg-secondary: #16140F;
+  --color-bg-tertiary: #1D1A13;
+  --color-bg-elevated: #242017;
+  --color-bg-hover: #2B2619;
+  --color-bg-active: #332D1F;
+  --color-bg-overlay: rgba(0, 0, 0, 0.65);
+
+  --color-border: #2B2619;
+  --color-border-light: #3D3625;
+  --color-border-focus: #F5B731;
+
+  --color-text-primary: #F0ECE4;
+  --color-text-secondary: #A89E8A;
+  --color-text-muted: #756B58;
+  --color-text-inverse: #0F0D0A;
+  --color-text-link: #F5B731;
+
+  --color-surface-card: #16140F;
+  --color-surface-sunken: #12100B;
+
+  /* State colors */
+  --state-success: #34D399;
+  --state-success-dim: rgba(52, 211, 153, 0.12);
+  --state-warning: #FBBF24;
+  --state-warning-dim: rgba(251, 191, 36, 0.12);
+  --state-error: #F87171;
+  --state-error-dim: rgba(248, 113, 113, 0.12);
+  --state-info: #60A5FA;
+  --state-info-dim: rgba(96, 165, 250, 0.12);
+
+  /* === Typography === */
+  --font-sans: 'Inter', 'MiSans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', monospace;
+
+  --text-xs: 0.6875rem;    /* 11px */
+  --text-sm: 0.8125rem;    /* 13px */
+  --text-base: 0.875rem;   /* 14px */
+  --text-lg: 1rem;         /* 16px */
+  --text-xl: 1.125rem;     /* 18px */
+  --text-2xl: 1.375rem;    /* 22px */
+  --text-3xl: 1.75rem;     /* 28px */
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+
+  --tracking-tight: -0.02em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.04em;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* === Radius === */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* === Spacing === */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* === Surface & Depth === */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-elevated: 0 4px 12px rgba(0, 0, 0, 0.04);
+  --shadow-modal: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-floating: 0 4px 16px rgba(0, 0, 0, 0.5);
+
+  /* === Transitions === */
+  --transition-fast: 0.12s ease;
+  --transition-normal: 0.2s ease;
+  --transition-slow: 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* === Utility Classes === */
+.heading-xl {
+  font-family: var(--font-sans);
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-text-primary);
+}
+
+.heading-lg {
+  font-family: var(--font-sans);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-text-primary);
+}
+
+.heading-md {
+  font-family: var(--font-sans);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  color: var(--color-text-primary);
+}
+
+.heading-sm {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-normal);
+  color: var(--color-text-primary);
+}
+
+.body-md {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-normal);
+  color: var(--color-text-secondary);
+}
+
+.caption {
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-normal);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-primary: var(--color-primary);
+    --color-border: var(--color-border);
+  }
+  @layer base {
+    body { background: var(--color-bg-base); color: var(--color-text-primary); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+    <div class="flex min-h-screen">
+      <!-- Sidebar -->
+      <aside class="w-[220px] shrink-0 border-r flex flex-col" style="border-color: var(--color-border); background: var(--color-bg-secondary);">
+        <!-- Sidebar Header -->
+        <div class="px-4 py-4 border-b" style="border-color: var(--color-border);">
+          <div class="flex items-center gap-2">
+            <div class="w-7 h-7 rounded-md flex items-center justify-center" style="background: var(--color-primary-dim);">
+              <i data-lucide="radio" class="w-4 h-4" style="color: var(--color-primary);"></i>
+            </div>
+            <span class="heading-sm truncate" style="color: var(--color-text-primary);">NEVO Server</span>
+          </div>
+        </div>
+
+        <!-- Nav Items -->
+        <nav class="flex-1 py-2 px-2">
+          <a href="#" id="nav-dashboard" class="flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm truncate transition-colors duration-150" style="color: var(--color-text-secondary);" onmouseover="this.style.background='var(--color-bg-hover)'" onmouseout="this.style.background='transparent'">
+            <i data-lucide="layout-dashboard" class="w-4 h-4 shrink-0"></i>
+            <span class="truncate">浠〃鐩?/span>
+          </a>
+          <a href="#" class="flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm truncate" style="background: var(--color-bg-tertiary); color: var(--color-primary);">
+            <i data-lucide="users" class="w-4 h-4 shrink-0"></i>
+            <span class="truncate font-medium">浼氳瘽绠＄悊</span>
+          </a>
+          <a href="#" class="flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm truncate transition-colors duration-150" style="color: var(--color-text-secondary);" onmouseover="this.style.background='var(--color-bg-hover)'" onmouseout="this.style.background='transparent'">
+            <i data-lucide="git-branch" class="w-4 h-4 shrink-0"></i>
+            <span class="truncate">棰戦亾绠＄悊</span>
+          </a>
+          <a href="#" class="flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm truncate transition-colors duration-150" style="color: var(--color-text-secondary);" onmouseover="this.style.background='var(--color-bg-hover)'" onmouseout="this.style.background='transparent'">
+            <i data-lucide="scroll-text" class="w-4 h-4 shrink-0"></i>
+            <span class="truncate">鎿嶄綔鏃ュ織</span>
+          </a>
+          <a href="#" class="flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm truncate transition-colors duration-150" style="color: var(--color-text-secondary);" onmouseover="this.style.background='var(--color-bg-hover)'" onmouseout="this.style.background='transparent'">
+            <i data-lucide="shield-check" class="w-4 h-4 shrink-0"></i>
+            <span class="truncate">鏉冮檺璁剧疆</span>
+          </a>
+          <a href="#" class="flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm truncate transition-colors duration-150" style="color: var(--color-text-secondary);" onmouseover="this.style.background='var(--color-bg-hover)'" onmouseout="this.style.background='transparent'">
+            <i data-lucide="settings" class="w-4 h-4 shrink-0"></i>
+            <span class="truncate">鏈嶅姟鍣ㄩ厤缃?/span>
+          </a>
+        </nav>
+
+        <!-- Sidebar Footer -->
+        <div class="px-4 py-3 border-t" style="border-color: var(--color-border);">
+          <div class="flex items-center gap-2">
+            <div class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold" style="background: var(--color-primary); color: var(--color-text-inverse);">A</div>
+            <span class="text-sm truncate" style="color: var(--color-text-secondary);">admin</span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Main Content Area -->
+      <main class="flex-1 flex flex-col min-w-0">
+        <!-- Topbar -->
+        <header class="h-12 shrink-0 flex items-center justify-between px-6 border-b" style="border-color: var(--color-border); background: var(--color-bg-secondary);">
+          <h1 class="heading-md truncate" style="font-size: var(--text-lg);">浼氳瘽绠＄悊</h1>
+          <button class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-sm transition-colors duration-150" style="color: var(--color-text-secondary); border: 1px solid var(--color-border);" onmouseover="this.style.background='var(--color-bg-hover)'" onmouseout="this.style.background='transparent'">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+            <span>鍒锋柊</span>
+          </button>
+        </header>
+
+        <!-- Content -->
+        <div class="flex-1 overflow-y-auto p-6">
+          <!-- Batch Action Bar -->
+          <div class="flex items-center justify-between px-4 py-2.5 rounded-md mb-4" style="background: var(--color-bg-tertiary); border: 1px solid var(--color-border);">
+            <span class="text-sm" style="color: var(--color-text-secondary);">宸查€?<strong style="color: var(--color-text-primary);">2</strong> / 8 涓細璇?/span>
+            <div class="flex items-center gap-2">
+              <button class="px-2.5 py-1.5 rounded-md text-xs transition-colors duration-150 whitespace-nowrap" style="color: var(--color-text-secondary); border: 1px solid var(--color-border);" onmouseover="this.style.background='var(--color-bg-hover)'" onmouseout="this.style.background='transparent'">鍏ㄩ€?/button>
+              <button class="px-2.5 py-1.5 rounded-md text-xs transition-colors duration-150 whitespace-nowrap" style="color: var(--state-error); background: var(--state-error-dim); border: 1px solid rgba(248,113,113,0.2);" onmouseover="this.style.background='rgba(248,113,113,0.2)'" onmouseout="this.style.background='var(--state-error-dim)'">鎵归噺韪㈠嚭</button>
+              <button class="px-2.5 py-1.5 rounded-md text-xs transition-colors duration-150 whitespace-nowrap" style="color: var(--color-text-secondary); border: 1px solid var(--color-border);" onmouseover="this.style.background='var(--color-bg-hover)'" onmouseout="this.style.background='transparent'">鍙栨秷閫夋嫨</button>
+            </div>
+          </div>
+
+          <!-- Session Table -->
+          <div class="rounded-md overflow-hidden" style="border: 1px solid var(--color-border);">
+            <table class="w-full table-fixed">
+              <thead>
+                <tr style="background: var(--color-bg-tertiary);">
+                  <th class="w-10 px-3 py-2.5 text-left">
+                    <input type="checkbox" checked class="w-3.5 h-3.5 rounded cursor-pointer" style="accent-color: var(--color-primary);">
+                  </th>
+                  <th class="px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wider" style="color: var(--color-text-muted);">鐢ㄦ埛鍚?/th>
+                  <th class="px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wider" style="color: var(--color-text-muted);">IP 鍦板潃</th>
+                  <th class="px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wider" style="color: var(--color-text-muted);">棰戦亾</th>
+                  <th class="px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wider" style="color: var(--color-text-muted);">鐘舵€?/th>
+                  <th class="w-20 px-3 py-2.5 text-right text-xs font-medium uppercase tracking-wider" style="color: var(--color-text-muted);">鎿嶄綔</th>
+                </tr>
+              </thead>
+              <tbody>
+                <!-- Row 1: alice 鈥?checked -->
+                <tr class="transition-colors duration-100" style="border-top: 1px solid var(--color-border);" onmouseover="this.style.background='var(--color-bg-hover)'" onmouseout="this.style.background='transparent'">
+                  <td class="px-3 py-2.5">
+                    <input type="checkbox" checked class="w-3.5 h-3.5 rounded cursor-pointer" style="accent-color: var(--color-primary);">
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="mono text-sm truncate block" style="color: var(--color-primary);">alice</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="mono text-sm truncate block" style="color: var(--color-text-secondary);">192.168.1.5</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="text-sm truncate block" style="color: var(--color-text-secondary);">甯歌</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap" style="background: var(--state-success-dim); color: var(--state-success);">鍦ㄧ嚎</span>
+                  </td>
+                  <td class="px-3 py-2.5 text-right">
+                    <button class="px-2 py-1 rounded text-xs whitespace-nowrap transition-colors duration-150" style="color: var(--state-error); background: var(--state-error-dim);" onmouseover="this.style.background='rgba(248,113,113,0.2)'" onmouseout="this.style.background='var(--state-error-dim)'">韪㈠嚭</button>
+                  </td>
+                </tr>
+                <!-- Row 2: bob 鈥?checked -->
+                <tr class="transition-colors duration-100" style="border-top: 1px solid var(--color-border);" onmouseover="this.style.background='var(--color-bg-hover)'" onmouseout="this.style.background='transparent'">
+                  <td class="px-3 py-2.5">
+                    <input type="checkbox" checked class="w-3.5 h-3.5 rounded cursor-pointer" style="accent-color: var(--color-primary);">
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="mono text-sm truncate block" style="color: var(--color-primary);">bob</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="mono text-sm truncate block" style="color: var(--color-text-secondary);">192.168.1.12</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="text-sm truncate block" style="color: var(--color-text-secondary);">浼氳</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap" style="background: var(--state-success-dim); color: var(--state-success);">鍦ㄧ嚎</span>
+                  </td>
+                  <td class="px-3 py-2.5 text-right">
+                    <button class="px-2 py-1 rounded text-xs whitespace-nowrap transition-colors duration-150" style="color: var(--state-error); background: var(--state-error-dim);" onmouseover="this.style.background='rgba(248,113,113,0.2)'" onmouseout="this.style.background='var(--state-error-dim)'">韪㈠嚭</button>
+                  </td>
+                </tr>
+                <!-- Row 3: charlie -->
+                <tr class="transition-colors duration-100" style="border-top: 1px solid var(--color-border);" onmouseover="this.style.background='var(--color-bg-hover)'" onmouseout="this.style.background='transparent'">
+                  <td class="px-3 py-2.5">
+                    <input type="checkbox" class="w-3.5 h-3.5 rounded cursor-pointer" style="accent-color: var(--color-primary);">
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="mono text-sm truncate block" style="color: var(--color-primary);">charlie</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="mono text-sm truncate block" style="color: var(--color-text-secondary);">10.0.0.3</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="text-sm truncate block" style="color: var(--color-text-secondary);">鎶€鏈敮鎸?/span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap" style="background: var(--state-warning-dim); color: var(--state-warning);">璁よ瘉涓?/span>
+                  </td>
+                  <td class="px-3 py-2.5 text-right">
+                    <button class="px-2 py-1 rounded text-xs whitespace-nowrap transition-colors duration-150" style="color: var(--state-error); background: var(--state-error-dim);" onmouseover="this.style.background='rgba(248,113,113,0.2)'" onmouseout="this.style.background='var(--state-error-dim)'">韪㈠嚭</button>
+                  </td>
+                </tr>
+                <!-- Row 4: david -->
+                <tr class="transition-colors duration-100" style="border-top: 1px solid var(--color-border);" onmouseover="this.style.background='var(--color-bg-hover)'" onmouseout="this.style.background='transparent'">
+                  <td class="px-3 py-2.5">
+                    <input type="checkbox" class="w-3.5 h-3.5 rounded cursor-pointer" style="accent-color: var(--color-primary);">
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="mono text-sm truncate block" style="color: var(--color-primary);">david</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="mono text-sm truncate block" style="color: var(--color-text-secondary);">192.168.1.7</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="text-sm truncate block" style="color: var(--color-text-secondary);">闂茶亰</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap" style="background: var(--state-success-dim); color: var(--state-success);">鍦ㄧ嚎</span>
+                  </td>
+                  <td class="px-3 py-2.5 text-right">
+                    <button class="px-2 py-1 rounded text-xs whitespace-nowrap transition-colors duration-150" style="color: var(--state-error); background: var(--state-error-dim);" onmouseover="this.style.background='rgba(248,113,113,0.2)'" onmouseout="this.style.background='var(--state-error-dim)'">韪㈠嚭</button>
+                  </td>
+                </tr>
+                <!-- Row 5: eve -->
+                <tr class="transition-colors duration-100" style="border-top: 1px solid var(--color-border);" onmouseover="this.style.background='var(--color-bg-hover)'" onmouseout="this.style.background='transparent'">
+                  <td class="px-3 py-2.5">
+                    <input type="checkbox" class="w-3.5 h-3.5 rounded cursor-pointer" style="accent-color: var(--color-primary);">
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="mono text-sm truncate block" style="color: var(--color-primary);">eve</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="mono text-sm truncate block" style="color: var(--color-text-secondary);">172.16.0.5</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="text-sm truncate block" style="color: var(--color-text-secondary);">甯歌</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap" style="background: var(--state-success-dim); color: var(--state-success);">鍦ㄧ嚎</span>
+                  </td>
+                  <td class="px-3 py-2.5 text-right">
+                    <button class="px-2 py-1 rounded text-xs whitespace-nowrap transition-colors duration-150" style="color: var(--state-error); background: var(--state-error-dim);" onmouseover="this.style.background='rgba(248,113,113,0.2)'" onmouseout="this.style.background='var(--state-error-dim)'">韪㈠嚭</button>
+                  </td>
+                </tr>
+                <!-- Row 6: frank -->
+                <tr class="transition-colors duration-100" style="border-top: 1px solid var(--color-border);" onmouseover="this.style.background='var(--color-bg-hover)'" onmouseout="this.style.background='transparent'">
+                  <td class="px-3 py-2.5">
+                    <input type="checkbox" class="w-3.5 h-3.5 rounded cursor-pointer" style="accent-color: var(--color-primary);">
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="mono text-sm truncate block" style="color: var(--color-primary);">frank</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="mono text-sm truncate block" style="color: var(--color-text-secondary);">192.168.1.22</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="text-sm truncate block" style="color: var(--color-text-secondary);">浼氳</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap" style="background: var(--state-success-dim); color: var(--state-success);">鍦ㄧ嚎</span>
+                  </td>
+                  <td class="px-3 py-2.5 text-right">
+                    <button class="px-2 py-1 rounded text-xs whitespace-nowrap transition-colors duration-150" style="color: var(--state-error); background: var(--state-error-dim);" onmouseover="this.style.background='rgba(248,113,113,0.2)'" onmouseout="this.style.background='var(--state-error-dim)'">韪㈠嚭</button>
+                  </td>
+                </tr>
+                <!-- Row 7: grace -->
+                <tr class="transition-colors duration-100" style="border-top: 1px solid var(--color-border);" onmouseover="this.style.background='var(--color-bg-hover)'" onmouseout="this.style.background='transparent'">
+                  <td class="px-3 py-2.5">
+                    <input type="checkbox" class="w-3.5 h-3.5 rounded cursor-pointer" style="accent-color: var(--color-primary);">
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="mono text-sm truncate block" style="color: var(--color-primary);">grace</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="mono text-sm truncate block" style="color: var(--color-text-secondary);">10.0.0.8</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="text-sm truncate block" style="color: var(--color-text-secondary);">鎶€鏈敮鎸?/span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap" style="background: var(--state-success-dim); color: var(--state-success);">鍦ㄧ嚎</span>
+                  </td>
+                  <td class="px-3 py-2.5 text-right">
+                    <button class="px-2 py-1 rounded text-xs whitespace-nowrap transition-colors duration-150" style="color: var(--state-error); background: var(--state-error-dim);" onmouseover="this.style.background='rgba(248,113,113,0.2)'" onmouseout="this.style.background='var(--state-error-dim)'">韪㈠嚭</button>
+                  </td>
+                </tr>
+                <!-- Row 8: henry -->
+                <tr class="transition-colors duration-100" style="border-top: 1px solid var(--color-border);" onmouseover="this.style.background='var(--color-bg-hover)'" onmouseout="this.style.background='transparent'">
+                  <td class="px-3 py-2.5">
+                    <input type="checkbox" class="w-3.5 h-3.5 rounded cursor-pointer" style="accent-color: var(--color-primary);">
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="mono text-sm truncate block" style="color: var(--color-primary);">henry</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="mono text-sm truncate block" style="color: var(--color-text-secondary);">192.168.1.30</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="text-sm truncate block" style="color: var(--color-text-secondary);">闂茶亰</span>
+                  </td>
+                  <td class="px-3 py-2.5">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap" style="background: var(--state-success-dim); color: var(--state-success);">鍦ㄧ嚎</span>
+                  </td>
+                  <td class="px-3 py-2.5 text-right">
+                    <button class="px-2 py-1 rounded text-xs whitespace-nowrap transition-colors duration-150" style="color: var(--state-error); background: var(--state-error-dim);" onmouseover="this.style.background='rgba(248,113,113,0.2)'" onmouseout="this.style.background='var(--state-error-dim)'">韪㈠嚭</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </main>
+    </div>
+    <script>lucide.createIcons();</script>
+</body>
+</html>
+

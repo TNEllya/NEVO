@@ -143,6 +143,7 @@ std::vector<uint8_t> encodeOpusFrame(nevo::OpusEncoderWrapper& encoder,
                                   static_cast<uint32_t>(output.size()));
     if (!result.ok() || result.value() == 0) return {};
     output.resize(static_cast<size_t>(result.value()));
+    (void)frame_size; // 帧大小由 OpusEncoderWrapper 配置决定
     return output;
 }
 
@@ -1224,6 +1225,39 @@ TEST_CASE(TcpTunnelReassembly) {
 // Test 14: 双向语音通信模拟
 // ============================================================
 
+TEST_CASE(KeyRotationRequiresReceiverCryptoRotation) {
+    uint8_t old_key[nevo::CRYPTO_KEY_SIZE];
+    uint8_t new_key[nevo::CRYPTO_KEY_SIZE];
+    fillKey(old_key, 31);
+    fillKey(new_key, 32);
+
+    nevo::VoiceCrypto relay_receiver_crypto;
+    nevo::VoiceCrypto client_receiver_crypto;
+    relay_receiver_crypto.setSessionKey(old_key);
+    client_receiver_crypto.setSessionKey(old_key);
+
+    relay_receiver_crypto.rotateKey(new_key);
+    client_receiver_crypto.rotateKey(new_key);
+
+    const uint8_t plaintext[] = {0x10, 0x20, 0x30, 0x40};
+    const uint8_t aad[] = {0x01, 0x02, 0x03};
+    auto encrypted = relay_receiver_crypto.encrypt(
+        plaintext, sizeof(plaintext), aad, sizeof(aad));
+    ASSERT_GT(encrypted.size(), nevo::XCHACHA_NONCE_SIZE + nevo::POLY1305_TAG_SIZE);
+
+    auto decrypted = client_receiver_crypto.decrypt(
+        encrypted.data() + nevo::XCHACHA_NONCE_SIZE,
+        encrypted.size() - nevo::XCHACHA_NONCE_SIZE,
+        encrypted.data(),
+        nevo::XCHACHA_NONCE_SIZE,
+        aad,
+        sizeof(aad));
+
+    ASSERT_TRUE(decrypted.has_value());
+    ASSERT_EQ(decrypted->size(), sizeof(plaintext));
+    ASSERT_TRUE(std::equal(decrypted->begin(), decrypted->end(), std::begin(plaintext)));
+}
+
 TEST_CASE(BidirectionalVoiceCommunication) {
     boost::asio::io_context io_ctx;
 
@@ -1381,6 +1415,51 @@ TEST_CASE(BidirectionalVoiceCommunication) {
 
     std::cout << "  [INFO] Bidirectional: A->B decrypt=" << b_decrypt
               << ", B->A decrypt=" << a_decrypt << std::endl;
+}
+
+TEST_CASE(UdpSocketSendsVideoSizedPayloadWithoutTruncation) {
+    boost::asio::io_context io_ctx;
+
+    auto sender = std::make_shared<nevo::UdpSocket>(io_ctx);
+    auto receiver = std::make_shared<nevo::UdpSocket>(io_ctx);
+    ASSERT_FALSE(sender->bind(0));
+    ASSERT_FALSE(receiver->bind(0));
+
+    std::atomic<uint32_t> received_size{0};
+    receiver->onPacket = [&](const uint8_t*, uint32_t size, const auto&) {
+        received_size.store(size);
+    };
+
+    boost::asio::co_spawn(io_ctx,
+        [receiver]() -> boost::asio::awaitable<void> {
+            co_await receiver->asyncReceiveFrom();
+        }, boost::asio::detached);
+
+    std::thread io_thread([&io_ctx]() { io_ctx.run(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    std::vector<uint8_t> payload(8192, 0x5A);
+    auto receiver_ep = boost::asio::ip::udp::endpoint(
+        boost::asio::ip::make_address("127.0.0.1"), receiver->localPort());
+
+    boost::asio::co_spawn(io_ctx,
+        [sender, payload, receiver_ep]() -> boost::asio::awaitable<void> {
+            co_await sender->asyncSendTo(
+                payload.data(), static_cast<uint32_t>(payload.size()), receiver_ep);
+        }, boost::asio::detached);
+
+    int waited = 0;
+    while (received_size.load() == 0 && waited < 2000) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        waited += 50;
+    }
+
+    ASSERT_EQ(received_size.load(), 8192u);
+
+    sender->close();
+    receiver->close();
+    io_ctx.stop();
+    if (io_thread.joinable()) io_thread.join();
 }
 
 // ============================================================

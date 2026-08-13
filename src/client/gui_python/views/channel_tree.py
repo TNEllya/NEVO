@@ -36,7 +36,7 @@ def _log_popup(msg: str):
 
 
 _USER_COLORS = [
-    "#5865F2", "#EB459E", "#57F287", "#FEE75C",
+    "#2DD4A8", "#EB459E", "#57F287", "#FEE75C",
     "#ED4245", "#9B59B6", "#3498DB", "#1ABC9C",
     "#E67E22", "#95A5A6",
 ]
@@ -81,6 +81,7 @@ class _UserItem(QFrame):
     user_context_menu = pyqtSignal(int, str)
     volume_requested = pyqtSignal(int, str)
     local_mute_requested = pyqtSignal(int, bool)
+    video_call_requested = pyqtSignal(int, str)
 
     def __init__(self, user: dict, local_user_id: int = 0, is_admin: bool = False,
                  avatar_pixmap=None, parent=None):
@@ -160,7 +161,7 @@ class _UserItem(QFrame):
         tm = ThemeManager.instance()
         pal = tm.palette()
         if self._speaking:
-            p.setBrush(QColor(255, 193, 7))
+            p.setBrush(QColor(pal["voice_active"]))
         else:
             p.setBrush(QColor(pal["text_muted"]))
         p.setPen(Qt.NoPen)
@@ -204,12 +205,19 @@ class _UserItem(QFrame):
             )
         menu.addAction(mute_action)
 
+        video_call_action = Action(FluentIcon.VIDEO, self.tr("Video Call"))
+        video_call_action.triggered.connect(
+            lambda: self.video_call_requested.emit(self._user.get("id", 0), self._username)
+        )
+        menu.addAction(video_call_action)
+
         menu.exec_(self.mapToGlobal(pos))
 
 
 class _ChannelUsersPanel(QFrame):
     volume_requested = pyqtSignal(int, str)
     local_mute_requested = pyqtSignal(int, bool)
+    video_call_requested = pyqtSignal(int, str)
 
     def __init__(self, users: list[dict] = None, local_user_id: int = 0,
                  is_admin: bool = False, local_avatar=None, parent=None):
@@ -234,6 +242,7 @@ class _ChannelUsersPanel(QFrame):
                              avatar_pixmap=av, parent=self)
             item.volume_requested.connect(self.volume_requested.emit)
             item.local_mute_requested.connect(self.local_mute_requested.emit)
+            item.video_call_requested.connect(self.video_call_requested.emit)
             self._user_items[u.get("id", 0)] = item
             layout.addWidget(item)
         if not users:
@@ -258,6 +267,7 @@ class _ChannelCard(QFrame):
     delete_requested = pyqtSignal(int)
     volume_requested = pyqtSignal(int, str)
     local_mute_requested = pyqtSignal(int, bool)
+    video_call_requested = pyqtSignal(int, str)
 
     def __init__(self, channel: dict, is_current: bool = False, show_users: bool = False,
                  users: list[dict] = None, local_avatar=None, local_user_id: int = 0,
@@ -310,7 +320,7 @@ class _ChannelCard(QFrame):
         else:
             icon_lbl.setText("\u2588")
             icon_lbl.setStyleSheet(
-                f"background-color: #5865f2; border-radius: 4px;"
+                f"background-color: {pal['primary']}; border-radius: 4px;"
                 f"color: {pal['bg_card_solid']}; font-size: 11px; font-weight: bold;"
             )
         row.addWidget(icon_lbl)
@@ -342,6 +352,7 @@ class _ChannelCard(QFrame):
                 parent=self)
             self._users_panel.volume_requested.connect(self.volume_requested.emit)
             self._users_panel.local_mute_requested.connect(self.local_mute_requested.emit)
+            self._users_panel.video_call_requested.connect(self.video_call_requested.emit)
             outer.addWidget(self._users_panel)
 
         self._inner_card = card
@@ -430,6 +441,7 @@ class ChannelTreeView(QFrame):
     delete_channel_requested = pyqtSignal(int)
     volume_requested = pyqtSignal(int, str)
     local_mute_requested = pyqtSignal(int, bool)
+    video_call_requested = pyqtSignal(int, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -522,6 +534,7 @@ class ChannelTreeView(QFrame):
             card.delete_requested.connect(self._forward_delete)
             card.volume_requested.connect(self.volume_requested.emit)
             card.local_mute_requested.connect(self.local_mute_requested.emit)
+            card.video_call_requested.connect(self.video_call_requested.emit)
             self._layout.insertWidget(self._layout.count() - 1, card)
             self._channel_cards.append(card)
 
@@ -540,9 +553,10 @@ class ChannelTreeView(QFrame):
                 sub_card.clicked.connect(self._on_channel_clicked)
                 sub_card.rename_requested.connect(self.rename_channel_requested.emit)
                 sub_card.add_subchannel_requested.connect(self.add_subchannel_requested.emit)
-                sub_card.delete_requested.connect(self.delete_channel_requested.emit)
+                sub_card.delete_requested.connect(self.delete_requested.emit)
                 sub_card.volume_requested.connect(self.volume_requested.emit)
                 sub_card.local_mute_requested.connect(self.local_mute_requested.emit)
+                sub_card.video_call_requested.connect(self.video_call_requested.emit)
                 self._layout.insertWidget(self._layout.count() - 1, sub_card)
                 self._channel_cards.append(sub_card)
 

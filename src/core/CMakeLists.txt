@@ -19,6 +19,8 @@ add_library(nevo_core
     src/audio/AudioMixer.cpp
     src/audio/Resampler.cpp
     src/audio/AudioEngine.cpp
+    # video
+    src/video/VideoTypes.cpp
     # protobuf generated
     ${CMAKE_SOURCE_DIR}/proto/generated/common.pb.cc
     ${CMAKE_SOURCE_DIR}/proto/generated/control.pb.cc
@@ -48,8 +50,9 @@ list(APPEND NEVO_CORE_LINK_LIBS miniaudio)
 # spdlog is always available (FetchContent)
 list(APPEND NEVO_CORE_LINK_LIBS spdlog::spdlog)
 
-if(NEVO_HAS_BOOST AND NEVO_HAS_BOOST_LOCKFREE)
-    list(APPEND NEVO_CORE_LINK_LIBS Boost::lockfree)
+if(NEVO_HAS_BOOST)
+    # lockfree 为 header-only 组件，无需链接库，使用 Boost::headers 传递 include 路径
+    list(APPEND NEVO_CORE_LINK_LIBS Boost::headers)
 endif()
 
 if(NEVO_HAS_PROTOBUF)

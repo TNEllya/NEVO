@@ -33,6 +33,42 @@ jobs:
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
       - name: Build
         run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -C Release
+
+  build-windows-client-zip:
+    runs-on: windows-latest
+    needs: build-windows
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyqt5 qfluentwidgets sounddevice numpy scipy noisereduce av requests pynput protobuf mss opuslib pynacl cryptography pyinstaller
+
+      - name: Build client executable
+        working-directory: src/client/gui_python
+        run: |
+          python -m PyInstaller nevo_client.spec --distpath dist --workpath build --clean --noconfirm
+
+      - name: Package client ZIP
+        shell: powershell
+        run: |
+          .\installer\package_client_zip.ps1 -Version "${{ github.ref_name }}"
+
+      - name: Upload ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NEVO-Portable-${{ github.ref_name }}-win64
+          path: out/NEVO-Portable-${{ github.ref_name }}-win64.zip
+          if-no-files-found: error
 
   lint:
     runs-on: ubuntu-22.04
@@ -41,4 +77,4 @@ jobs:
       - name: Check formatting
         run: |
           pip install clang-format
-          find src -name '*.h' -o -name '*.cpp' | xargs clang-format --dry-run --Werror || true
+          find src -name '*.h' -o -name '*.cpp' | xargs clang-format --dry-run --Werror

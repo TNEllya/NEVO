@@ -19,6 +19,23 @@
 #include <boost/asio/as_tuple.hpp>
 
 namespace nevo {
+namespace {
+
+boost::asio::ip::udp::endpoint normalizeSendEndpoint(
+    const boost::asio::ip::udp::socket& socket,
+    const boost::asio::ip::udp::endpoint& endpoint)
+{
+    boost::system::error_code ec;
+    auto local = socket.local_endpoint(ec);
+    if (!ec && local.address().is_v6() && endpoint.address().is_v4()) {
+        auto mapped = boost::asio::ip::make_address_v6(
+            boost::asio::ip::v4_mapped, endpoint.address().to_v4());
+        return boost::asio::ip::udp::endpoint(mapped, endpoint.port());
+    }
+    return endpoint;
+}
+
+}
 
 // ============================================================
 // 构造 / 析构
@@ -182,31 +199,24 @@ UdpSocket::asyncSendTo(const uint8_t* data, uint32_t size,
         co_return boost::asio::error::not_connected;
     }
 
-    // 检查数据大小是否超过 MTU 安全值
-    if (size > UDP_MAX_PACKET_SIZE) {
-        NEVO_LOG_WARN("network",
-                       "UDP packet size {} exceeds max payload {}, truncating",
-                       size, UDP_MAX_PACKET_SIZE);
-        size = UDP_MAX_PACKET_SIZE; // 截断到安全值
-    }
-
+    auto target_endpoint = normalizeSendEndpoint(socket_, endpoint);
     auto [ec, bytes_sent] = co_await socket_.async_send_to(
         boost::asio::buffer(data, size),
-        endpoint,
+        target_endpoint,
         boost::asio::as_tuple(boost::asio::use_awaitable));
 
     if (ec) {
         NEVO_LOG_ERROR("network",
                        "UDP send to {}:{} failed: {}",
-                       endpoint.address().to_string(),
-                       endpoint.port(),
+                       target_endpoint.address().to_string(),
+                       target_endpoint.port(),
                        ec.message());
     } else {
         NEVO_LOG_TRACE("network",
                        "UDP sent {} bytes to {}:{}",
                        bytes_sent,
-                       endpoint.address().to_string(),
-                       endpoint.port());
+                       target_endpoint.address().to_string(),
+                       target_endpoint.port());
         NEVO_LOG_DEBUG("network", "UDP sent {} bytes", bytes_sent);
     }
 

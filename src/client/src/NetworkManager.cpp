@@ -18,6 +18,7 @@
 
 // Protobuf 头文件
 #include "control.pb.h"
+#include "video.pb.h"
 #include "voice.pb.h"
 
 #include <boost/asio/use_awaitable.hpp>
@@ -70,6 +71,24 @@ void NetworkManager::setVoiceServerUdpPort(uint16_t udp_port)
                   remote_ep.address().to_string(), udp_port);
 }
 
+void NetworkManager::setVideoServerUdpPort(uint16_t udp_port)
+{
+    if (udp_port == 0 || !tcp_conn_) {
+        return;
+    }
+    boost::system::error_code ec;
+    auto remote_ep = tcp_conn_->socket().remote_endpoint(ec);
+    if (ec) {
+        NEVO_LOG_WARN("network", "Cannot get TCP remote endpoint for video_server_endpoint: {}",
+                      ec.message());
+        return;
+    }
+    config_.video_server_endpoint = boost::asio::ip::udp::endpoint(
+        remote_ep.address(), udp_port);
+    NEVO_LOG_INFO("network", "Video server endpoint set to {}:{}",
+                  remote_ep.address().to_string(), udp_port);
+}
+
 boost::asio::awaitable<void> NetworkManager::sendUdpRegistrationPacket()
 {
     if (!udp_socket_ || config_.voice_server_endpoint == boost::asio::ip::udp::endpoint{}) {
@@ -82,9 +101,10 @@ boost::asio::awaitable<void> NetworkManager::sendUdpRegistrationPacket()
     header.set_sender_id(local_user_id_.value);
     header.set_channel_id(current_channel_id_.value);
     header.set_timestamp(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
-            .count());
+        static_cast<uint32_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                .count()));
     header.set_tcp_tunnel(false);
 
     const size_t header_size = header.ByteSizeLong();
@@ -727,6 +747,93 @@ boost::asio::awaitable<Result<void>> NetworkManager::sendVoicePacket(
     co_return Err<void>(ResultCode::ConnectionFailed, "Voice send failed after retries");
 }
 
+boost::asio::awaitable<Result<void>> NetworkManager::sendVideoPacket(
+    const uint8_t* data,
+    uint32_t size,
+    video::VideoCallId call_id,
+    video::VideoFrameType frame_type,
+    uint64_t timestamp_us,
+    uint32_t fragment_index,
+    uint32_t fragment_total,
+    uint32_t width,
+    uint32_t height,
+    uint32_t fps)
+{
+    // ------------------------------------------------------------------
+    // 1. 构建视频包头（用作 AAD 和接收端解析）
+    // ------------------------------------------------------------------
+    video::VideoPacketHeader header;
+    header.set_sequence_number(video_sequence_.fetch_add(1, std::memory_order_relaxed));
+    header.set_sender_id(local_user_id_.value);
+    header.set_channel_id(current_channel_id_.value);
+    header.set_timestamp(static_cast<uint32_t>(timestamp_us / 1000));
+    header.set_frame_type(static_cast<uint32_t>(frame_type));
+    header.set_fragment_index(fragment_index);
+    header.set_fragment_total(fragment_total);
+    header.set_width(width);
+    header.set_height(height);
+    header.set_fps(fps);
+    header.set_tcp_tunnel(false);
+    header.set_call_id(call_id);
+
+    // 序列化包头
+    const size_t header_size = header.ByteSizeLong();
+    std::vector<uint8_t> header_buf(header_size);
+    if (!header.SerializeToArray(header_buf.data(), static_cast<int>(header_size))) {
+        NEVO_LOG_ERROR("network", "Failed to serialize video packet header");
+        co_return Err<void>(ResultCode::Unknown, "Video header serialization failed");
+    }
+
+    // ------------------------------------------------------------------
+    // 2. 加密视频数据（使用包头作为 AAD）
+    // ------------------------------------------------------------------
+    std::vector<uint8_t> encrypted = voice_crypto_.encrypt(
+        data, size,
+        header_buf.data(), header_buf.size());
+
+    // ------------------------------------------------------------------
+    // 3. 组装完整视频包：[2-byte prefix][header][encrypted_payload]
+    // ------------------------------------------------------------------
+    uint16_t header_len = static_cast<uint16_t>(header_size);
+    std::vector<uint8_t> full_packet;
+    full_packet.reserve(2 + header_buf.size() + encrypted.size());
+    full_packet.insert(full_packet.end(),
+                       reinterpret_cast<const uint8_t*>(&header_len),
+                       reinterpret_cast<const uint8_t*>(&header_len) + 2);
+    full_packet.insert(full_packet.end(), header_buf.begin(), header_buf.end());
+    full_packet.insert(full_packet.end(), encrypted.begin(), encrypted.end());
+
+    // ------------------------------------------------------------------
+    // 4. 选择目标端点：优先 video_server_endpoint，未设置则回退到 voice_server_endpoint
+    // ------------------------------------------------------------------
+    auto target = config_.video_server_endpoint;
+    if (target == boost::asio::ip::udp::endpoint{}) {
+        target = config_.voice_server_endpoint;
+    }
+
+    if (target == boost::asio::ip::udp::endpoint{}) {
+        NEVO_LOG_WARN("network", "No video server endpoint configured, dropping video packet");
+        co_return Err<void>(ResultCode::ConnectionFailed, "No video server endpoint");
+    }
+
+    // ------------------------------------------------------------------
+    // 5. 通过 UDP 发送（视频目前仅支持 UDP，TCP 隧道回留给后续扩展）
+    // ------------------------------------------------------------------
+    if (!udp_socket_ || !udp_socket_->isOpen()) {
+        NEVO_LOG_ERROR("network", "UDP socket not available for video send");
+        co_return Err<void>(ResultCode::ConnectionFailed, "UDP socket not available");
+    }
+
+    auto ec = co_await udp_socket_->asyncSendTo(full_packet, target);
+    if (ec) {
+        NEVO_LOG_WARN("network", "UDP video send failed: {}", ec.message());
+        co_return Err<void>(ResultCode::ConnectionFailed,
+                           "UDP video send failed: " + ec.message());
+    }
+
+    co_return Ok();
+}
+
 // ============================================================
 // 密钥管理
 // ============================================================
@@ -869,6 +976,18 @@ void NetworkManager::handleUdpPacket(
     }
 
     // ------------------------------------------------------------------
+    // 区分语音包与视频包
+    // ------------------------------------------------------------------
+    // 若配置了独立的视频端口，且数据来自该端口，则作为视频包处理
+    bool is_video_port = (config_.video_server_endpoint != boost::asio::ip::udp::endpoint{} &&
+                          sender.port() == config_.video_server_endpoint.port());
+
+    if (is_video_port) {
+        handleVideoPacket(data, size, sender);
+        return;
+    }
+
+    // ------------------------------------------------------------------
     // 解析为语音包
     // ------------------------------------------------------------------
     // 尝试解码 UDP 语音包头
@@ -894,6 +1013,15 @@ void NetworkManager::handleUdpPacket(
             data, size,
             nullptr, 0,
             UserId(0));
+    }
+}
+
+void NetworkManager::handleVideoPacket(const uint8_t* data, uint32_t size,
+                                        const boost::asio::ip::udp::endpoint& sender)
+{
+    // 视频包保持原始 UDP 数据，由 VideoCallManager 负责解析、解密和重组
+    if (onVideoPacket) {
+        onVideoPacket(data, size, sender);
     }
 }
 

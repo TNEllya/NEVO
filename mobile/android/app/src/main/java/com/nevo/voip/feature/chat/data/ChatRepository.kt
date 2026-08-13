@@ -1,5 +1,6 @@
 package com.nevo.voip.feature.chat.data
 
+import android.util.Log
 import com.nevo.voip.core.database.dao.ChatMessageDao
 import com.nevo.voip.core.database.entity.ChatMessageEntity
 import com.nevo.voip.core.model.ChatBroadcast
@@ -21,20 +22,26 @@ class ChatRepository @Inject constructor(
     private val tcpConnectionManager: TcpConnectionManager,
     private val connectionRepository: ConnectionRepository
 ) {
+    companion object {
+        private const val TAG = "ChatRepo"
+    }
+
     val chatBroadcasts: SharedFlow<ChatBroadcast> = connectionRepository.chatMessages
 
     suspend fun sendMessage(channelId: Long, text: String): Result<Unit> = withContext(Dispatchers.IO) {
         val request = ChatSendRequest(channelId = channelId, text = text)
-        val payload = ProtocolSerializer.serializeChatSendRequest(request)
+        Log.d(TAG, "sendMessage: channelId=$channelId, textLen=${text.length}")
+        val payload = ProtocolSerializer.serializeControlMessage(MessageType.CHAT_SEND_REQUEST, request)
+        Log.d(TAG, "sendMessage: serialized ${payload.size} bytes")
         tcpConnectionManager.sendMessage(MessageType.CHAT_SEND_REQUEST.id, payload)
     }
 
     fun getMessages(channelId: Long): Flow<List<ChatMessageEntity>> {
-        return chatMessageDao.getMessagesByChannel(channelId.toInt())
+        return chatMessageDao.getMessagesByChannel(channelId)
     }
 
-    suspend fun insertMessage(entity: ChatMessageEntity) {
-        chatMessageDao.insertMessage(entity)
+    suspend fun insertMessage(entity: ChatMessageEntity): Long {
+        return chatMessageDao.insertMessage(entity)
     }
 
     suspend fun markMessageSent(messageId: Long) {

@@ -15,6 +15,23 @@
 #include <algorithm>
 
 namespace nevo {
+namespace {
+
+std::string endpointKey(const boost::asio::ip::udp::endpoint& ep) {
+    auto addr = ep.address();
+    if (addr.is_v6()) {
+        auto v6 = addr.to_v6();
+        if (v6.is_v4_mapped()) {
+            auto v4 = boost::asio::ip::make_address_v4(
+                boost::asio::ip::v4_mapped, v6);
+            return v4.to_string() + ":" + std::to_string(ep.port());
+        }
+        return "[" + addr.to_string() + "]:" + std::to_string(ep.port());
+    }
+    return addr.to_string() + ":" + std::to_string(ep.port());
+}
+
+} // namespace
 
 // ============================================================
 // 构造 / 析构
@@ -67,7 +84,7 @@ void VideoRelay::handleVideoPacket(const uint8_t* data, uint32_t size,
     // 解析包头
     uint16_t header_size = 0;
     std::memcpy(&header_size, data, 2);
-    if (header_size == 0 || 2 + header_size > size) {
+    if (header_size == 0 || static_cast<uint32_t>(2 + header_size) > size) {
         ++packets_dropped_;
         return;
     }
@@ -78,30 +95,39 @@ void VideoRelay::handleVideoPacket(const uint8_t* data, uint32_t size,
         return;
     }
 
-    UserId sender_id(header.sender_id());
+    UserId header_sender_id(header.sender_id());
     ChannelId packet_channel(header.channel_id());
 
     NEVO_LOG_INFO("video_relay", "RX pkt: sender_id={}, channel_id={}, frame_type={}, "
                   "size={}, header_size={}, addr={}:{}",
-                  sender_id.value, packet_channel.value, header.frame_type(),
+                  header_sender_id.value, packet_channel.value, header.frame_type(),
                   size, header_size,
                   sender.address().to_string(), sender.port());
 
+    // ---- 发送者身份解析（fail-closed）：身份以映射表为准，不信任包头 ----
     bool sender_resolved = false;
-
-    if (!sender_id) {
-        NEVO_LOG_WARN("video_relay", "RX pkt: sender_id=0, trying endpoint lookup");
-        auto sender_id_opt = findUserByEndpoint(sender);
-        if (!sender_id_opt) {
-            NEVO_LOG_WARN("video_relay", "RX pkt: endpoint lookup FAILED for {}:{}",
-                         sender.address().to_string(), sender.port());
+    UserId sender_id;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto mapped = findUserByEndpointLocked(sender);
+        if (!mapped) {
+            NEVO_LOG_WARN("video_relay", "RX pkt: endpoint {}:{} not mapped, dropping (fail-closed)",
+                          sender.address().to_string(), sender.port());
             ++packets_dropped_;
             return;
         }
-        sender_id = *sender_id_opt;
-        sender_resolved = true;
-        header.set_sender_id(sender_id.value);
-        NEVO_LOG_INFO("video_relay", "RX pkt: resolved sender_id={} via endpoint", sender_id.value);
+        sender_id = *mapped;
+        if (header_sender_id && header_sender_id != sender_id) {
+            NEVO_LOG_WARN("video_relay", "RX pkt: header sender_id={} != mapped user={}, dropping",
+                          header_sender_id.value, sender_id.value);
+            ++packets_dropped_;
+            return;
+        }
+        if (!header_sender_id) {
+            // 包头无 sender_id，用映射身份回填（供接收方识别）
+            sender_resolved = true;
+            header.set_sender_id(sender_id.value);
+        }
     }
 
     // --- 单次加锁：更新映射 + 收集 peers ---
@@ -110,24 +136,16 @@ void VideoRelay::handleVideoPacket(const uint8_t* data, uint32_t size,
     {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        auto it = client_map_.find(sender_id);
-        if (it != client_map_.end()) {
-            std::string old_key = it->second.endpoint.address().to_string() + ":" +
-                                  std::to_string(it->second.endpoint.port());
-            std::string new_key = sender.address().to_string() + ":" + std::to_string(sender.port());
-            if (old_key != new_key) {
-                NEVO_LOG_INFO("video_relay", "Endpoint changed for user_id={}: {} -> {}",
-                             sender_id.value, old_key, new_key);
-                endpoint_to_user_.erase(old_key);
-                endpoint_to_user_[new_key] = sender_id;
-                it->second.endpoint = sender;
-            }
-            sender_channel = packet_channel ? packet_channel : it->second.channel_id;
-            it->second.channel_id = sender_channel;
+        std::string sender_key = endpointKey(sender);
+
+        auto& user_mappings = client_map_[sender_id];
+        auto mit = user_mappings.find(sender_key);
+        if (mit != user_mappings.end()) {
+            // 该端点已存在，更新频道信息
+            sender_channel = packet_channel ? packet_channel : mit->second.channel_id;
+            mit->second.channel_id = sender_channel;
         } else {
-            NEVO_LOG_INFO("video_relay", "NEW client_map entry: user_id={}, channel_id={}, addr={}:{}",
-                         sender_id.value, packet_channel.value,
-                         sender.address().to_string(), sender.port());
+            // 端点已通过 addClientMapping 注册（前面 fail-closed 检查保证），此处兜底创建
             sender_channel = packet_channel;
             if (!sender_channel) {
                 ++packets_dropped_;
@@ -137,21 +155,22 @@ void VideoRelay::handleVideoPacket(const uint8_t* data, uint32_t size,
             mapping.user_id = sender_id;
             mapping.channel_id = sender_channel;
             mapping.endpoint = sender;
-            client_map_[sender_id] = mapping;
-            std::string new_key = sender.address().to_string() + ":" + std::to_string(sender.port());
-            endpoint_to_user_[new_key] = sender_id;
+            user_mappings[sender_key] = mapping;
+            endpoint_to_user_[sender_key] = sender_id;
+        }
 
-            if (session_key_query_) {
-                const uint8_t* key = session_key_query_(sender_id);
-                if (key) {
-                    auto crypto = std::make_unique<VoiceCrypto>();
-                    crypto->setSessionKey(key);
-                    client_cryptos_[sender_id] = std::move(crypto);
-                }
+        // ---- 频道成员校验（防跨频道视频注入） ----
+        if (channel_mgr_) {
+            Channel* channel = channel_mgr_->getChannel(sender_channel);
+            if (!channel || !channel->hasUser(sender_id)) {
+                NEVO_LOG_WARN("video_relay", "RX pkt: user={} is not a member of channel={}, dropping",
+                              sender_id.value, sender_channel.value);
+                ++packets_dropped_;
+                return;
             }
         }
 
-        peers = getChannelPeersLocked(sender_id, sender_channel);
+        peers = getChannelPeersLocked(sender_id, sender_channel, sender_key);
     }
 
     // --- Prepare AAD for decryption and re-encryption ---
@@ -203,7 +222,6 @@ void VideoRelay::handleVideoPacket(const uint8_t* data, uint32_t size,
     const uint8_t* ciphertext = encrypted_frame + XCHACHA_NONCE_SIZE;
     size_t ct_len = encrypted_frame_size - XCHACHA_NONCE_SIZE;
 
-    bool use_per_client_crypto = false;
     std::vector<uint8_t> plaintext;
     const uint8_t* sender_key = nullptr;
 
@@ -211,32 +229,29 @@ void VideoRelay::handleVideoPacket(const uint8_t* data, uint32_t size,
         sender_key = session_key_query_(sender_id);
     }
 
-    if (sender_key) {
-        std::string key_hex;
-        for (int i = 0; i < 8; i++) {
-            char buf[4];
-            snprintf(buf, sizeof(buf), "%02x", sender_key[i]);
-            key_hex += buf;
-        }
-        NEVO_LOG_INFO("video_relay", "DECRYPT: user_id={}, decrypt_aad_size={}, ct_len={}, key_prefix={}",
-                       sender_id.value, decrypt_aad_size, ct_len, key_hex);
+    // fail-closed：没有发送者密钥上下文时直接丢弃，绝不原样转发
+    if (!sender_key) {
+        NEVO_LOG_WARN("video_relay", "NO sender_key for user_id={}, dropping packet (fail-closed)",
+                      sender_id.value);
+        ++packets_dropped_;
+        return;
+    }
 
+    {
         auto decrypted = VoiceCrypto::decryptWithKey(
             sender_key, ciphertext, ct_len,
             nonce, XCHACHA_NONCE_SIZE,
             decrypt_aad_ptr, decrypt_aad_size);
         if (decrypted) {
             plaintext = std::move(*decrypted);
-            use_per_client_crypto = true;
-            NEVO_LOG_DEBUG("video_relay", "Decrypt SUCCESS: user_id={}, plaintext_len={}", sender_id.value, plaintext.size());
+            NEVO_LOG_DEBUG("video_relay", "Decrypt SUCCESS: user_id={}, plaintext_len={}",
+                           sender_id.value, plaintext.size());
         } else {
             ++packets_dropped_;
-            NEVO_LOG_WARN("video_relay", "Failed to decrypt video from user_id={} (decrypt_aad_size={}, ct_len={}, server_key_prefix={})",
-                          sender_id.value, decrypt_aad_size, ct_len, key_hex);
+            NEVO_LOG_WARN("video_relay", "Failed to decrypt video from user_id={} (decrypt_aad_size={}, ct_len={})",
+                          sender_id.value, decrypt_aad_size, ct_len);
             return;
         }
-    } else {
-        NEVO_LOG_WARN("video_relay", "NO sender_key for user_id={}, forwarding as-is (passthrough)", sender_id.value);
     }
 
     // --- Forward: re-encrypt for each receiver with UPDATED header AAD ---
@@ -252,45 +267,34 @@ void VideoRelay::handleVideoPacket(const uint8_t* data, uint32_t size,
 
         std::vector<uint8_t> packet_to_send;
 
-        if (use_per_client_crypto) {
-            // Dynamically get/create receiver's crypto (under lock to avoid timing issues)
-            VoiceCrypto* receiver_crypto = nullptr;
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                receiver_crypto = getOrCreateCryptoForUserLocked(receiver_id);
-            }
-
-            if (!receiver_crypto) {
-                NEVO_LOG_WARN("video_relay", "FWD SKIP: no crypto for receiver_id={}", receiver_id.value);
-                continue;
-            }
-
-            auto reencrypted = receiver_crypto->encrypt(
-                plaintext.data(), plaintext.size(),
-                encrypt_aad_ptr, encrypt_aad_size);
-            if (reencrypted.empty()) {
-                NEVO_LOG_WARN("video_relay", "FWD SKIP: reencrypt failed for receiver_id={}", receiver_id.value);
-                continue;
-            }
-
-            packet_to_send.reserve(2 + header_size + reencrypted.size());
-            if (sender_resolved) {
-                packet_to_send.insert(packet_to_send.end(), updated_header_bytes.data(),
-                                     updated_header_bytes.data() + 2 + header_size);
-            } else {
-                packet_to_send.insert(packet_to_send.end(), data, data + 2 + header_size);
-            }
-            packet_to_send.insert(packet_to_send.end(), reencrypted.begin(), reencrypted.end());
-        } else {
-            if (sender_resolved) {
-                packet_to_send.reserve(2 + header_size + (encrypted_frame_size));
-                packet_to_send.insert(packet_to_send.end(), updated_header_bytes.data(),
-                                     updated_header_bytes.data() + 2 + header_size);
-                packet_to_send.insert(packet_to_send.end(), encrypted_frame, encrypted_frame + encrypted_frame_size);
-            } else {
-                packet_to_send.assign(data, data + size);
-            }
+        // 接收者加密上下文（shared_ptr 持有引用，防止并发销毁）
+        std::shared_ptr<VoiceCrypto> receiver_crypto;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            receiver_crypto = getOrCreateCryptoForUserLocked(receiver_id);
         }
+
+        if (!receiver_crypto) {
+            NEVO_LOG_WARN("video_relay", "FWD SKIP: no crypto for receiver_id={}", receiver_id.value);
+            continue;
+        }
+
+        auto reencrypted = receiver_crypto->encrypt(
+            plaintext.data(), plaintext.size(),
+            encrypt_aad_ptr, encrypt_aad_size);
+        if (reencrypted.empty()) {
+            NEVO_LOG_WARN("video_relay", "FWD SKIP: reencrypt failed for receiver_id={}", receiver_id.value);
+            continue;
+        }
+
+        packet_to_send.reserve(2 + header_size + reencrypted.size());
+        if (sender_resolved) {
+            packet_to_send.insert(packet_to_send.end(), updated_header_bytes.data(),
+                                 updated_header_bytes.data() + 2 + header_size);
+        } else {
+            packet_to_send.insert(packet_to_send.end(), data, data + 2 + header_size);
+        }
+        packet_to_send.insert(packet_to_send.end(), reencrypted.begin(), reencrypted.end());
 
         auto data_copy = std::make_shared<std::vector<uint8_t>>(std::move(packet_to_send));
         auto target_str = peer_endpoint.address().to_string() + ":" + std::to_string(peer_endpoint.port());
@@ -310,7 +314,7 @@ void VideoRelay::handleVideoPacket(const uint8_t* data, uint32_t size,
         fwd_count++;
     }
 
-    packets_relayed_.fetch_add(peers.size());
+    packets_relayed_.fetch_add(fwd_count);
 }
 
 // ============================================================
@@ -321,22 +325,25 @@ void VideoRelay::addClientMapping(UserId user_id,
                                    const boost::asio::ip::udp::endpoint& ep,
                                    ChannelId channel_id) {
     std::lock_guard<std::mutex> lock(mutex_);
+
+    std::string ep_key = endpointKey(ep);
+
+    // 按端点键插入（不影响同一账号其他设备的映射）
     VideoClientMapping mapping;
     mapping.user_id = user_id;
     mapping.channel_id = channel_id;
     mapping.endpoint = ep;
-    client_map_[user_id] = mapping;
-
-    std::string ep_key = ep.address().to_string() + ":" + std::to_string(ep.port());
+    client_map_[user_id][ep_key] = mapping;
     endpoint_to_user_[ep_key] = user_id;
 
-    // 为该用户创建 VoiceCrypto 实例
-    if (session_key_query_) {
+    // 仅为该用户创建 VoiceCrypto（仅当不存在，避免覆盖其他设备的加密上下文）
+    if (session_key_query_ &&
+        client_cryptos_.find(user_id) == client_cryptos_.end()) {
         const uint8_t* key = session_key_query_(user_id);
         if (key) {
-            auto crypto = std::make_unique<VoiceCrypto>();
+            auto crypto = std::make_shared<VoiceCrypto>();
             crypto->setSessionKey(key);
-            client_cryptos_[user_id] = std::move(crypto);
+            client_cryptos_[user_id] = crypto;
         }
     }
 }
@@ -345,19 +352,49 @@ void VideoRelay::removeClientMapping(UserId user_id) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = client_map_.find(user_id);
     if (it != client_map_.end()) {
-        std::string ep_key = it->second.endpoint.address().to_string() +
-                             ":" + std::to_string(it->second.endpoint.port());
-        endpoint_to_user_.erase(ep_key);
+        for (const auto& [ep_key, mapping] : it->second) {
+            endpoint_to_user_.erase(ep_key);
+        }
+        client_map_.erase(it);
+        client_cryptos_.erase(user_id);
+        NEVO_LOG_INFO("video_relay", "Removed all mappings for user_id={}", user_id.value);
     }
-    client_map_.erase(user_id);
-    client_cryptos_.erase(user_id);
+}
+
+void VideoRelay::removeClientMapping(UserId user_id,
+                                     const boost::asio::ip::udp::endpoint& ep) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    std::string ep_key = endpointKey(ep);
+
+    auto it = client_map_.find(user_id);
+    if (it != client_map_.end()) {
+        auto mit = it->second.find(ep_key);
+        if (mit != it->second.end()) {
+            it->second.erase(mit);
+            endpoint_to_user_.erase(ep_key);
+
+            NEVO_LOG_INFO("video_relay", "Removed mapping for user_id={} endpoint={}:{}",
+                          user_id.value,
+                          ep.address().to_string(), ep.port());
+
+            // 该用户已无其他设备映射，销毁其 VoiceCrypto
+            if (it->second.empty()) {
+                client_map_.erase(it);
+                client_cryptos_.erase(user_id);
+            }
+        }
+    }
 }
 
 void VideoRelay::updateClientChannel(UserId user_id, ChannelId channel_id) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = client_map_.find(user_id);
     if (it != client_map_.end()) {
-        it->second.channel_id = channel_id;
+        // 遍历该用户的所有端点（支持同一账号多设备）
+        for (auto& [ep_key, mapping] : it->second) {
+            mapping.channel_id = channel_id;
+        }
     }
 }
 
@@ -367,7 +404,13 @@ void VideoRelay::updateClientChannel(UserId user_id, ChannelId channel_id) {
 
 std::optional<UserId> VideoRelay::findUserByEndpoint(
     const boost::asio::ip::udp::endpoint& ep) const {
-    std::string ep_key = ep.address().to_string() + ":" + std::to_string(ep.port());
+    std::lock_guard<std::mutex> lock(mutex_);
+    return findUserByEndpointLocked(ep);
+}
+
+std::optional<UserId> VideoRelay::findUserByEndpointLocked(
+    const boost::asio::ip::udp::endpoint& ep) const {
+    std::string ep_key = endpointKey(ep);
     auto it = endpoint_to_user_.find(ep_key);
     if (it != endpoint_to_user_.end()) {
         return it->second;
@@ -376,7 +419,8 @@ std::optional<UserId> VideoRelay::findUserByEndpoint(
 }
 
 std::vector<boost::asio::ip::udp::endpoint> VideoRelay::getChannelPeersLocked(
-    UserId sender_id, ChannelId channel_id) const {
+    UserId sender_id, ChannelId channel_id,
+    const std::string& sender_endpoint_key) const {
     std::vector<boost::asio::ip::udp::endpoint> peers;
 
     if (channel_mgr_) {
@@ -386,17 +430,24 @@ std::vector<boost::asio::ip::udp::endpoint> VideoRelay::getChannelPeersLocked(
         }
         const auto& users = channel->users();
         for (UserId uid : users) {
-            if (uid == sender_id) continue;
             auto it = client_map_.find(uid);
-            if (it != client_map_.end()) {
-                peers.push_back(it->second.endpoint);
+            if (it == client_map_.end()) {
+                continue;
+            }
+            // 遍历该用户的所有端点（支持同一账号多设备），排除发送者自身端点
+            for (const auto& [ep_key, mapping] : it->second) {
+                if (ep_key == sender_endpoint_key) continue;
+                peers.push_back(mapping.endpoint);
             }
         }
     } else {
-        for (const auto& [uid, mapping] : client_map_) {
-            if (uid == sender_id) continue;
-            if (mapping.channel_id == channel_id) {
-                peers.push_back(mapping.endpoint);
+        // 没有频道管理器，回退到映射表中的频道匹配
+        for (const auto& [uid, mappings] : client_map_) {
+            for (const auto& [ep_key, mapping] : mappings) {
+                if (ep_key == sender_endpoint_key) continue;
+                if (mapping.channel_id == channel_id) {
+                    peers.push_back(mapping.endpoint);
+                }
             }
         }
     }
@@ -405,21 +456,20 @@ std::vector<boost::asio::ip::udp::endpoint> VideoRelay::getChannelPeersLocked(
 }
 
 // 在调用方已持有 mutex_ 锁的前提下，获取或创建指定用户的 VoiceCrypto 实例
-VoiceCrypto* VideoRelay::getOrCreateCryptoForUserLocked(UserId user_id) {
+std::shared_ptr<VoiceCrypto> VideoRelay::getOrCreateCryptoForUserLocked(UserId user_id) {
     auto it = client_cryptos_.find(user_id);
     if (it != client_cryptos_.end() && it->second) {
-        return it->second.get();
+        return it->second;
     }
 
     // 动态创建：通过 session_key_query 获取密钥
     if (session_key_query_) {
         const uint8_t* key = session_key_query_(user_id);
         if (key) {
-            auto crypto = std::make_unique<VoiceCrypto>();
+            auto crypto = std::make_shared<VoiceCrypto>();
             crypto->setSessionKey(key);
-            VoiceCrypto* raw_ptr = crypto.get();
-            client_cryptos_[user_id] = std::move(crypto);
-            return raw_ptr;
+            client_cryptos_[user_id] = crypto;
+            return crypto;
         }
     }
     return nullptr;
@@ -431,10 +481,12 @@ void VideoRelay::_dumpClientMap() {
         NEVO_LOG_WARN("video_relay", "  client_map is EMPTY");
         return;
     }
-    for (const auto& [uid, mapping] : client_map_) {
-        auto ep_str = mapping.endpoint.address().to_string() + ":" + std::to_string(mapping.endpoint.port());
-        NEVO_LOG_WARN("video_relay", "  user={} endpoint={} channel={}",
-                      uid.value, ep_str, mapping.channel_id.value);
+    for (const auto& [uid, mappings] : client_map_) {
+        for (const auto& [ep_key, mapping] : mappings) {
+            auto ep_str = mapping.endpoint.address().to_string() + ":" + std::to_string(mapping.endpoint.port());
+            NEVO_LOG_WARN("video_relay", "  user={} endpoint={} channel={}",
+                          uid.value, ep_str, mapping.channel_id.value);
+        }
     }
 }
 

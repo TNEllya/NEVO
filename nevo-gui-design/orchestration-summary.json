@@ -1,0 +1,111 @@
+{
+  "project": {
+    "name": "NEVO 现代化 GUI 前端",
+    "path": "c:\\Users\\yzd20\\Desktop\\Project\\NEVO\\nevo-gui-design",
+    "operation": "create",
+    "deviceType": "desktop",
+    "language": "zh-CN",
+    "dashboardMode": false,
+    "designRead": "VoIP desktop app / power users & admins / dark emerald professional security / medium-high density / avoid neon glow and purple gradients",
+    "designDials": { "layoutVariance": 2, "motionIntensity": 2, "visualDensity": 4 },
+    "styleContinuityAnchors": {
+      "colorSystem": {
+        "primaryColorRole": "emerald green for connection states, CTAs, and active channel indicators",
+        "brandHuePolicy": "single emerald hue with no secondary/accent; categories use neutral or primary tints",
+        "stateColors": "success=green, warning=amber, error=red, info=blue"
+      },
+      "typographySystem": "Inter + MiSans for body, JetBrains Mono for technical data",
+      "surfaceAndDepth": "border-led cards with minimal shadow; floating layers use deeper shadow"
+    },
+    "sharedProjectShellContract": {
+      "navigationShell": "client pages use Discord-style 3-column: server rail (72px) + channel sidebar (240px) + main content; server pages use left sidebar nav (220px) + main area with topbar",
+      "primaryColorSystem": "single emerald primary; no secondary brand hue",
+      "typographySystem": "Inter/MiSans sans-serif body, JetBrains Mono for code/data",
+      "radiusScale": "sm=4, md=8, lg=12, xl=16, full=9999",
+      "surfaceDepthModel": "border-led card surfaces, shadow only for floating layers (modal, toast, dropdown)",
+      "ctaStyle": "rounded-md primary buttons with emerald fill, ghost buttons with border",
+      "alignmentRules": "tight spacing, dense information layout appropriate for communication tools"
+    },
+    "generationTree": {
+      "root": {
+        "nodeId": "gen-project-shell",
+        "kind": "project-shell",
+        "pageIds": ["page-connect", "page-main-voice", "page-video-call", "page-server-dashboard", "page-server-sessions"],
+        "output": null,
+        "sharedRegions": [],
+        "privateRegions": [],
+        "status": "planned",
+        "children": []
+      }
+    }
+  },
+  "designSource": {
+    "operatingMode": "free-explore",
+    "cssFilePath": "c:\\Users\\yzd20\\Desktop\\Project\\NEVO\\nevo-gui-design\\colors_and_type.css",
+    "brandPrefix": "",
+    "themeMode": "dark",
+    "designDecisionSummary": "Dark emerald theme for secure VoIP communication platform. Deep green-black backgrounds with emerald (#2DD4A8) primary. Professional, dense, communication-tool aesthetic."
+  },
+  "pages": [
+    {
+      "nodeId": "page-connect",
+      "title": "连接服务器",
+      "pageType": "task-driven",
+      "visualNorthStar": "Focused connection form with subtle emerald glow around the primary input. Minimal distractions, one clear CTA. Server address field is the visual anchor.",
+      "continuityAnchors": {
+        "colorSystem": "emerald primary",
+        "typographySystem": "Inter/MiSans + JetBrains Mono"
+      }
+    },
+    {
+      "nodeId": "page-main-voice",
+      "title": "主界面 — 语音频道",
+      "pageType": "information-dense",
+      "visualNorthStar": "Discord-style 3-column layout: slim server rail, channel tree sidebar with voice user indicators, main area with chat + voice panel. Voice activity indicators use animated emerald rings.",
+      "continuityAnchors": {
+        "colorSystem": "emerald primary",
+        "typographySystem": "Inter/MiSans + JetBrains Mono"
+      }
+    },
+    {
+      "nodeId": "page-video-call",
+      "title": "视频通话",
+      "pageType": "showcase",
+      "visualNorthStar": "Immersive video call overlay with dark background, large video frames, floating control bar at bottom. Minimal chrome, maximum video surface. End call button in red.",
+      "continuityAnchors": {
+        "colorSystem": "emerald primary",
+        "typographySystem": "Inter/MiSans"
+      }
+    },
+    {
+      "nodeId": "page-server-dashboard",
+      "title": "服务端 — 仪表盘",
+      "pageType": "information-dense",
+      "visualNorthStar": "Admin dashboard with sidebar navigation, stat cards grid (online users, channels, packets, uptime), compact session/channel tables, and real-time system metrics with gauges.",
+      "continuityAnchors": {
+        "colorSystem": "emerald primary",
+        "typographySystem": "Inter/MiSans + JetBrains Mono"
+      }
+    },
+    {
+      "nodeId": "page-server-sessions",
+      "title": "服务端 — 会话管理",
+      "pageType": "information-dense",
+      "visualNorthStar": "Session management table with batch selection, user details, connection info, channel membership, and bulk kick actions. Clean table layout with status badges and action buttons.",
+      "continuityAnchors": {
+        "colorSystem": "emerald primary",
+        "typographySystem": "Inter/MiSans + JetBrains Mono"
+      }
+    }
+  ],
+  "assets": [],
+  "wiringPlan": [
+    { "from": "page-connect", "to": "page-main-voice", "label": "连接成功" },
+    { "from": "page-main-voice", "to": "page-video-call", "label": "发起视频通话" },
+    { "from": "page-server-dashboard", "to": "page-server-sessions", "label": "查看会话" }
+  ],
+  "hiddenInteractionPlan": [
+    { "from": "page-video-call", "to": "page-main-voice", "dataDomId": "btn-hangup", "hideEdge": true, "label": "结束通话" },
+    { "from": "page-server-sessions", "to": "page-server-dashboard", "dataDomId": "nav-dashboard", "hideEdge": true, "label": "返回仪表盘" }
+  ]
+}

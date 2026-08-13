@@ -14,7 +14,7 @@ import androidx.room.PrimaryKey
 data class ChatMessageEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
-    val channelId: Int,
+    val channelId: Long,
     val senderId: Long,
     val senderName: String,
     val content: String,

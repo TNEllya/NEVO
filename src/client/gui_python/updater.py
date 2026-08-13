@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -50,6 +51,64 @@ DOWNLOAD_CHUNK_SIZE = 65536
 MAX_RETRIES = 5
 RETRY_DELAY = 3
 REQUEST_TIMEOUT = 30
+API_CACHE_TTL = 300  # 5 分钟内重复检查直接走缓存
+
+
+def _get_github_headers(token: Optional[str] = None) -> dict:
+    """构造 GitHub API 请求头，支持 GITHUB_TOKEN 提升速率限制。"""
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "NEVO-Client/Updater",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    effective_token = token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if effective_token:
+        headers["Authorization"] = f"Bearer {effective_token}"
+    return headers
+
+
+def _settings():
+    """获取 QSettings 实例（延迟导入，避免 Qt 未初始化时失败）。"""
+    from PyQt5.QtCore import QSettings
+    return QSettings("NEVO", "Client")
+
+
+def load_github_token() -> str:
+    """从 QSettings 读取用户绑定的 GitHub token。"""
+    try:
+        return _settings().value("github_token", "")
+    except Exception:
+        return ""
+
+
+def save_github_token(token: str):
+    """保存 GitHub token 到 QSettings。"""
+    try:
+        _settings().setValue("github_token", token)
+    except Exception as e:
+        logger.warning("Failed to save GitHub token: %s", e)
+
+
+class _ReleaseCache:
+    """简单的内存缓存，用于降低 GitHub API 调用频率。"""
+    _data: Optional[dict] = None
+    _timestamp: float = 0.0
+
+    @classmethod
+    def get(cls) -> Optional[dict]:
+        if cls._data and (time.time() - cls._timestamp) < API_CACHE_TTL:
+            return cls._data
+        return None
+
+    @classmethod
+    def set(cls, data: dict):
+        cls._data = data
+        cls._timestamp = time.time()
+
+    @classmethod
+    def clear(cls):
+        cls._data = None
+        cls._timestamp = 0.0
 
 
 class VersionInfo:
@@ -67,16 +126,18 @@ class VersionInfo:
 
     @staticmethod
     def parse(version_str: str) -> tuple:
-        parts = version_str.strip().lstrip("v").split(".")
-        result = []
-        for p in parts:
-            try:
-                result.append(int(p))
-            except ValueError:
-                result.append(0)
-        while len(result) < 3:
-            result.append(0)
-        return tuple(result[:3])
+        """从任意版本字符串中提取语义化版本号 (major, minor, patch)。
+
+        支持 "v0.1.0"、"B_V0.01"、"1.2.3-beta" 等非标准格式。
+        """
+        text = version_str.strip().lstrip("vV")
+        match = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", text)
+        if match:
+            major = int(match.group(1))
+            minor = int(match.group(2))
+            patch = int(match.group(3)) if match.group(3) else 0
+            return (major, minor, patch)
+        return (0, 0, 0)
 
     def is_newer_than(self, current_version: str) -> bool:
         return self.parse(self.version) > self.parse(current_version)
@@ -187,6 +248,14 @@ class Updater:
         self._downloaded_size = 0
         self._total_size = 0
         self._download_file_path: Optional[Path] = None
+        self._github_token: str = load_github_token()
+
+    def set_github_token(self, token: str):
+        """设置用户绑定的 GitHub token，会立即清除 API 缓存。"""
+        self._github_token = token.strip()
+        save_github_token(self._github_token)
+        _ReleaseCache.clear()
+        log_update_event("github_token_set", {"has_token": bool(self._github_token)})
 
     @property
     def state(self) -> str:
@@ -296,17 +365,36 @@ class Updater:
 
     def _fetch_latest_release(self) -> Optional[VersionInfo]:
         url = f"{GITHUB_API_BASE}/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
-        headers = {"Accept": "application/vnd.github+json"}
 
+        cached = _ReleaseCache.get()
+        if cached is not None:
+            logger.debug("Using cached release info")
+            return self._parse_release_data(cached)
+
+        headers = _get_github_headers(self._github_token)
         resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
         if resp.status_code == 404:
-                logger.info(_tr("No release found on GitHub"))
-                return None
+            logger.info(_tr("No release found on GitHub"))
+            return None
+        if resp.status_code == 403:
+            # 速率限制或 IP 限制
+            try:
+                detail = resp.json().get("message", "")
+            except Exception:
+                detail = resp.text
+            if "rate limit" in detail.lower():
+                raise CheckError(
+                    _tr("GitHub API rate limit exceeded. Try again later or set GITHUB_TOKEN environment variable."))
+            raise CheckError(f"GitHub API forbidden: {detail}")
         resp.raise_for_status()
 
         data = resp.json()
+        _ReleaseCache.set(data)
+        return self._parse_release_data(data)
+
+    def _parse_release_data(self, data: dict) -> Optional[VersionInfo]:
         tag_name = data.get("tag_name", "")
-        version = tag_name.lstrip("v")
+        version = tag_name.lstrip("vV")
         changelog = data.get("body", "")
         published_at = data.get("published_at", "")
 
@@ -315,37 +403,53 @@ class Updater:
         file_size = 0
 
         platform_keywords = _get_platform_asset_keywords()
+        if sys.platform == "win32":
+            supported_extensions = (".zip", ".exe")
+        elif sys.platform == "darwin":
+            supported_extensions = (".zip", ".dmg")
+        else:
+            supported_extensions = (".zip", ".tar.gz")
+
+        def _is_platform_match(name: str) -> bool:
+            lower = name.lower()
+            for kw in platform_keywords:
+                if kw in lower:
+                    return True
+            # Windows 单文件可执行文件通常没有 win 关键字，通过扩展名兜底
+            if sys.platform == "win32" and lower.endswith(".exe"):
+                return True
+            return False
+
+        def _is_client_asset(name: str) -> bool:
+            lower = name.lower()
+            # 排除明显非客户端的资源
+            if "server" in lower:
+                return False
+            return True
 
         for asset in data.get("assets", []):
-            name = asset.get("name", "").lower()
+            name = asset.get("name", "")
+            lower_name = name.lower()
 
-            is_platform_match = False
-            for kw in platform_keywords:
-                if kw in name:
-                    is_platform_match = True
-                    break
+            is_match = _is_platform_match(name)
+            is_client = _is_client_asset(name)
 
-            if is_platform_match and name.endswith((".zip", ".dmg")):
+            if is_match and is_client and lower_name.endswith(supported_extensions):
                 download_url = asset.get("browser_download_url", "")
                 file_size = asset.get("size", 0)
+                sha256_hash = asset.get("digest", "").replace("sha256:", "")
 
-            sha_name = name
-            if is_platform_match and ("sha256" in sha_name or sha_name.endswith(".sha256")):
-                sha256_url = asset.get("browser_download_url", "")
-                if sha256_url:
-                    try:
-                        sha_resp = requests.get(sha256_url, timeout=REQUEST_TIMEOUT)
-                        sha_resp.raise_for_status()
-                        sha256_hash = sha_resp.text.strip().split()[0]
-                    except Exception as e:
-                        logger.warning(_tr("Failed to fetch SHA256: %s"), e)
-
+        # 兜底：如果没有平台匹配，优先找客户端 exe/zip/dmg
         if not download_url:
             for asset in data.get("assets", []):
                 name = asset.get("name", "")
-                if name.endswith((".zip", ".dmg")):
+                lower_name = name.lower()
+                if not _is_client_asset(name):
+                    continue
+                if lower_name.endswith(supported_extensions):
                     download_url = asset.get("browser_download_url", "")
                     file_size = asset.get("size", 0)
+                    sha256_hash = asset.get("digest", "").replace("sha256:", "")
                     break
 
         return VersionInfo(
@@ -515,27 +619,20 @@ class Updater:
                 raise InstallError(_tr("Not ready to install"))
             self._set_state(UpdateState.INSTALLING)
 
+        self._install_manifest: list = []
+        self._installed_files: list = []
+
         try:
             install_dir = self._get_install_dir()
+            if not install_dir:
+                raise InstallError(_tr("Cannot determine install directory"))
 
             if sys.platform == "darwin" and downloaded_file.suffix == ".dmg":
                 self._install_dmg_update(downloaded_file)
+            elif sys.platform == "win32" and downloaded_file.suffix == ".exe" and getattr(sys, "frozen", False):
+                self._install_windows_exe_update(downloaded_file, install_dir)
             else:
-                if not install_dir:
-                    raise InstallError(_tr("Cannot determine install directory"))
-
-                backup_dir = install_dir.parent / ".nevo_backup"
-                if backup_dir.exists():
-                    shutil.rmtree(backup_dir, ignore_errors=True)
-                shutil.copytree(install_dir, backup_dir)
-
-                temp_extract = get_update_dir() / "extracted"
-                if temp_extract.exists():
-                    shutil.rmtree(temp_extract, ignore_errors=True)
-
-                shutil.unpack_archive(str(downloaded_file), str(temp_extract))
-
-                self._apply_update(temp_extract, install_dir)
+                self._install_archive_update(downloaded_file, install_dir)
 
             log_update_event("install_complete", {
                 "version": self._latest_info.version if self._latest_info else "unknown",
@@ -549,12 +646,101 @@ class Updater:
                 self._error_message = str(e)
                 self._set_state(UpdateState.ERROR)
             log_update_event("install_error", {"error": str(e)})
-            if sys.platform != "darwin":
-                self._rollback_update()
+            self._rollback_update()
             raise InstallError(str(e))
 
+    def _install_windows_exe_update(self, new_exe: Path, install_dir: Path):
+        """Windows 单文件 exe 热更新。
+
+        原理：当前进程无法被自身替换，因此将新 exe 复制到 .nevo_update/
+        并生成一个临时批处理脚本，由脚本等待当前进程退出后替换原 exe 并启动。
+        """
+        current_exe = Path(sys.executable)
+        update_dir = get_update_dir()
+        staged_exe = update_dir / "NEVO.exe.new"
+        backup_exe = update_dir / "NEVO.exe.bak"
+
+        # 复制新版本到暂存目录
+        shutil.copy2(str(new_exe), str(staged_exe))
+
+        # 备份当前 exe
+        shutil.copy2(str(current_exe), str(backup_exe))
+
+        # 生成替换脚本
+        script_path = update_dir / "apply_update.bat"
+        script_content = self._build_windows_update_bat(
+            str(current_exe),
+            str(staged_exe),
+            str(backup_exe),
+        )
+        script_path.write_text(script_content, encoding="gbk")
+
+        # 记录清单，用于回滚
+        self._install_manifest = [
+            {"type": "backup", "path": str(backup_exe), "original": str(current_exe)},
+        ]
+        self._installed_files = [str(script_path), str(staged_exe), str(backup_exe)]
+
+        # 启动替换脚本（独立进程，不阻塞）
+        subprocess.Popen(
+            ["cmd.exe", "/c", str(script_path)],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    def _build_windows_update_bat(self, current_exe: str, staged_exe: str, backup_exe: str) -> str:
+        return f'''@echo off
+chcp 65001 >nul
+setlocal enabledelayedexpansion
+set "CURRENT_EXE={current_exe}"
+set "STAGED_EXE={staged_exe}"
+set "BACKUP_EXE={backup_exe}"
+set "PID={os.getpid()}"
+
+:wait_loop
+tasklist | findstr /I " %PID% " >nul
+if %errorlevel% == 0 (
+    timeout /t 1 /nobreak >nul
+    goto wait_loop
+)
+
+timeout /t 1 /nobreak >nul
+
+if exist "%BACKUP_EXE%" (
+    del /f /q "%BACKUP_EXE%" >nul 2>&1
+)
+
+move /y "%CURRENT_EXE%" "%BACKUP_EXE%" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo Failed to backup current executable >&2
+    exit /b 1
+)
+
+move /y "%STAGED_EXE%" "%CURRENT_EXE%" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo Failed to stage new executable >&2
+    move /y "%BACKUP_EXE%" "%CURRENT_EXE%" >nul 2>&1
+    exit /b 1
+)
+
+start "" "%CURRENT_EXE%"
+endlocal
+'''
+
+    def _install_archive_update(self, downloaded_file: Path, install_dir: Path):
+        temp_extract = get_update_dir() / "extracted"
+        if temp_extract.exists():
+            shutil.rmtree(temp_extract, ignore_errors=True)
+
+        shutil.unpack_archive(str(downloaded_file), str(temp_extract))
+
+        manifest = self._apply_update(temp_extract, install_dir)
+        self._install_manifest = manifest
+        self._installed_files = [str(downloaded_file), str(temp_extract)]
+
     def _install_dmg_update(self, dmg_path: Path):
-        mount_point = Path("/Volumes/NEVO")
+        mount_point = Path(tempfile.mkdtemp(prefix="nevo_mount_"))
         try:
             subprocess.run(
                 ["hdiutil", "attach", str(dmg_path),
@@ -577,8 +763,7 @@ class Updater:
                     backup = candidate.parent / ".nevo_backup"
                     if backup.exists():
                         shutil.rmtree(backup, ignore_errors=True)
-                    if candidate.exists():
-                        shutil.move(str(candidate), str(backup))
+                    shutil.move(str(candidate), str(backup))
                     break
 
             target = _BUNDLE_CANDIDATES[0]
@@ -593,32 +778,65 @@ class Updater:
                 ["hdiutil", "detach", str(mount_point), "-quiet"],
                 timeout=10,
             )
+            shutil.rmtree(mount_point, ignore_errors=True)
 
     def _get_install_dir(self) -> Optional[Path]:
         if getattr(sys, "frozen", False):
-            return Path(sys.executable).parent
+            exe_dir = Path(sys.executable).parent
+            # 安全检查：避免在 Windows 系统目录下操作
+            forbidden = {"Windows", "System32", "SysWOW64"}
+            for part in exe_dir.parts:
+                if part in forbidden:
+                    return None
+            return exe_dir
         return Path(__file__).parent.parent.parent.parent
 
-    def _apply_update(self, source: Path, target: Path):
+    def _apply_update(self, source: Path, target: Path) -> list:
+        """应用更新并返回操作清单，用于回滚。"""
+        manifest = []
         for item in source.rglob("*"):
             if item.is_dir():
                 continue
             relative = item.relative_to(source)
             dest = target / relative
             dest.parent.mkdir(parents=True, exist_ok=True)
+
+            backup_entry = None
+            if dest.exists():
+                # 备份原文件
+                backup_path = get_update_dir() / "backup" / relative
+                backup_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(dest), str(backup_path))
+                backup_entry = str(backup_path)
+
             shutil.copy2(str(item), str(dest))
+            manifest.append({
+                "relative": str(relative).replace("\\", "/"),
+                "target": str(dest),
+                "backup": backup_entry,
+            })
+        return manifest
 
     def _rollback_update(self):
-        install_dir = self._get_install_dir()
-        if not install_dir:
-            return
-        backup_dir = install_dir.parent / ".nevo_backup"
-        if not backup_dir.exists():
+        if not self._install_manifest:
             return
         try:
-            shutil.rmtree(install_dir, ignore_errors=True)
-            shutil.copytree(backup_dir, install_dir)
-            shutil.rmtree(backup_dir, ignore_errors=True)
+            for entry in self._install_manifest:
+                if isinstance(entry, dict):
+                    if entry.get("type") == "backup":
+                        # Windows exe 回滚
+                        original = Path(entry["original"])
+                        backup = Path(entry["path"])
+                        if backup.exists() and original.exists():
+                            original.unlink()
+                            shutil.copy2(str(backup), str(original))
+                    else:
+                        target = Path(entry["target"])
+                        backup = Path(entry["backup"]) if entry.get("backup") else None
+                        if backup and backup.exists():
+                            shutil.copy2(str(backup), str(target))
+                        elif target.exists():
+                            target.unlink()
             log_update_event("rollback_complete", {})
         except Exception as e:
             logger.error("Rollback failed: %s", e)

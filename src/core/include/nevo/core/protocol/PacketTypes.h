@@ -52,12 +52,21 @@ enum class ControlMessageType : uint32_t {
     FileListResponse = 41,
     FileUploadRequest = 42,
     FileUploadResponse = 43,
+    FileUploadChunkRequest = 44,
+    FileUploadChunkAck = 45,
     FileDownloadRequest = 46,
     FileDownloadResponse = 47,
     FileDeleteRequest = 49,
     FileDeleteResponse = 50,
+    ScreenShareStart = 60,
+    ScreenShareStop = 61,
+    ScreenShareState = 62,
     BindOwnerRequest = 70,
     BindOwnerResponse = 71,
+    VideoCallRequest = 80,
+    VideoCallResponse = 81,
+    VideoCallHangup = 82,
+    VideoCallProfileUpdate = 83,
 };
 
 // ============================================================
@@ -78,10 +87,14 @@ inline constexpr uint32_t UDP_MAX_PACKET_SIZE = 1400;
 /// Opus 编码最大帧大小
 inline constexpr uint32_t OPUS_MAX_FRAME_SIZE = 4000;
 
-/// AES-GCM Nonce 长度（12字节）
+/// @deprecated AES-GCM Nonce 长度（12字节）——历史遗留常量。
+/// 语音加密实际使用 XChaCha20-Poly1305（24 字节 nonce，见 network/VoiceCrypto.h 的
+/// XCHACHA_NONCE_SIZE）。本常量仅为早期协议设计保留，新代码不得使用。
 inline constexpr uint32_t AES_GCM_NONCE_SIZE = 12;
 
-/// AES-GCM 认证标签长度（16字节）
+/// @deprecated AES-GCM 认证标签长度（16字节）——历史遗留常量。
+/// 实际使用的 Poly1305 认证标签同为 16 字节（POLY1305_TAG_SIZE），数值巧合一致，
+/// 但算法不同。新代码应使用 VoiceCrypto.h 中的 POLY1305_TAG_SIZE。
 inline constexpr uint32_t AES_GCM_TAG_SIZE = 16;
 
 /// 密钥轮换间隔（秒）

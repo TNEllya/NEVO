@@ -223,6 +223,19 @@ ControlMessageType getControlMessageType(const control::ControlMessage& msg) {
         case control::ControlMessage::kFileListResponse:    return ControlMessageType::FileListResponse;
         case control::ControlMessage::kFileUploadRequest:   return ControlMessageType::FileUploadRequest;
         case control::ControlMessage::kFileUploadResponse:  return ControlMessageType::FileUploadResponse;
+        case control::ControlMessage::kFileUploadChunkRequest: return ControlMessageType::FileUploadChunkRequest;
+        case control::ControlMessage::kFileUploadChunkAck:  return ControlMessageType::FileUploadChunkAck;
+        case control::ControlMessage::kFileDownloadRequest: return ControlMessageType::FileDownloadRequest;
+        case control::ControlMessage::kFileDownloadResponse: return ControlMessageType::FileDownloadResponse;
+        case control::ControlMessage::kFileDeleteRequest:   return ControlMessageType::FileDeleteRequest;
+        case control::ControlMessage::kFileDeleteResponse:  return ControlMessageType::FileDeleteResponse;
+        case control::ControlMessage::kScreenShareStart:    return ControlMessageType::ScreenShareStart;
+        case control::ControlMessage::kScreenShareStop:     return ControlMessageType::ScreenShareStop;
+        case control::ControlMessage::kScreenShareState:    return ControlMessageType::ScreenShareState;
+        case control::ControlMessage::kVideoCallRequest:    return ControlMessageType::VideoCallRequest;
+        case control::ControlMessage::kVideoCallResponse:   return ControlMessageType::VideoCallResponse;
+        case control::ControlMessage::kVideoCallHangup:     return ControlMessageType::VideoCallHangup;
+        case control::ControlMessage::kVideoProfileUpdate:  return ControlMessageType::VideoCallProfileUpdate;
         default: return ControlMessageType::Unknown;
     }
 }
@@ -272,6 +285,13 @@ const char* controlMessageTypeToString(ControlMessageType type) {
         case ControlMessageType::FileDownloadResponse: return "FileDownloadResponse";
         case ControlMessageType::FileDeleteRequest:   return "FileDeleteRequest";
         case ControlMessageType::FileDeleteResponse:  return "FileDeleteResponse";
+        case ControlMessageType::ScreenShareStart:    return "ScreenShareStart";
+        case ControlMessageType::ScreenShareStop:     return "ScreenShareStop";
+        case ControlMessageType::ScreenShareState:    return "ScreenShareState";
+        case ControlMessageType::VideoCallRequest:    return "VideoCallRequest";
+        case ControlMessageType::VideoCallResponse:   return "VideoCallResponse";
+        case ControlMessageType::VideoCallHangup:     return "VideoCallHangup";
+        case ControlMessageType::VideoCallProfileUpdate: return "VideoCallProfileUpdate";
         default: return "Unknown";
     }
 }
@@ -421,6 +441,14 @@ bool decodeMuteToggle(CustomWireReader& r, control::ControlMessage& msg) {
     return true;
 }
 
+bool decodeSpeakingState(CustomWireReader& r, control::ControlMessage& msg) {
+    // 客户端上报的说话状态（VAD/连续模式），user_id 由服务端从会话中获取
+    bool v = false;
+    if (!r.readBool(v)) return false;
+    msg.mutable_user_speaking()->set_speaking(v);
+    return true;
+}
+
 bool decodeUdpPingRequest(CustomWireReader& r, control::ControlMessage& msg) {
     auto* req = msg.mutable_udp_ping_request();
     uint32_t seq = 0;
@@ -530,6 +558,47 @@ bool decodeFileDeleteRequest(CustomWireReader& r, control::ControlMessage& msg) 
     return true;
 }
 
+bool decodeFileUploadChunkRequest(CustomWireReader& r, control::ControlMessage& msg) {
+    auto* req = msg.mutable_file_upload_chunk_request();
+    uint64_t id = 0;
+    if (!r.readU64(id)) return false;
+    req->set_file_id(id);
+    uint32_t idx = 0;
+    if (!r.readU32(idx)) return false;
+    req->set_chunk_index(idx);
+    if (!r.readU32(idx)) return false;
+    req->set_total_chunks(idx);
+    std::string data;
+    if (!r.readBytes(data)) return false;
+    req->set_data(data);
+    return true;
+}
+
+bool decodeFileDownloadRequest(CustomWireReader& r, control::ControlMessage& msg) {
+    uint64_t id = 0;
+    if (!r.readU64(id)) return false;
+    msg.mutable_file_download_request()->set_file_id(id);
+    // 可选：文件名（与 Python 端兼容——旧客户端仅发 file_id）
+    if (!r.eof()) {
+        std::string s;
+        if (r.readString(s)) {
+            msg.mutable_file_download_request()->set_filename(s);
+        }
+    }
+    return true;
+}
+
+bool decodeKeyRotationResponse(CustomWireReader& r, control::ControlMessage& msg) {
+    auto* resp = msg.mutable_key_rotation_response();
+    std::string publicKey;
+    if (!r.readBytes(publicKey)) return false;
+    resp->set_new_client_public_key(publicKey);
+    uint64_t epoch = 0;
+    if (!r.readU64(epoch)) return false;
+    resp->set_key_epoch(epoch);
+    return true;
+}
+
 using DecodeFunc = bool(*)(CustomWireReader&, control::ControlMessage&);
 
 static const std::unordered_map<uint32_t, DecodeFunc> CASE_DECODERS = {
@@ -540,6 +609,7 @@ static const std::unordered_map<uint32_t, DecodeFunc> CASE_DECODERS = {
     {6,  decodeDeleteChannelRequest},
     {11, decodePttToggle},
     {12, decodeMuteToggle},
+    {36, decodeSpeakingState},
     {16, decodeUdpPingRequest},
     {20, decodeAdminAuthRequest},
     {32, decodeSetServerNameRequest},
@@ -550,7 +620,10 @@ static const std::unordered_map<uint32_t, DecodeFunc> CASE_DECODERS = {
     {34, decodeRenameChannelRequest},
     {40, decodeFileListRequest},
     {42, decodeFileUploadRequest},
+    {44, decodeFileUploadChunkRequest},
+    {46, decodeFileDownloadRequest},
     {49, decodeFileDeleteRequest},
+    {19, decodeKeyRotationResponse},
 };
 
 } // anonymous namespace
@@ -879,6 +952,12 @@ std::vector<uint8_t> encodeMuteToggle(const control::ControlMessage& msg) {
     return w.take();
 }
 
+std::vector<uint8_t> encodePttToggle(const control::ControlMessage& msg) {
+    CustomWireWriter w;
+    w.writeBool(msg.ptt_toggle().active());
+    return w.take();
+}
+
 std::vector<uint8_t> encodeStunBindRequest(const control::ControlMessage& msg) {
     CustomWireWriter w;
     w.writeU32(msg.stun_bind_request().transaction_id());
@@ -945,6 +1024,29 @@ std::vector<uint8_t> encodeFileDeleteResponse(const control::ControlMessage& msg
     return w.take();
 }
 
+std::vector<uint8_t> encodeFileUploadChunkAck(const control::ControlMessage& msg) {
+    CustomWireWriter w;
+    const auto& ack = msg.file_upload_chunk_ack();
+    w.writeU64(ack.file_id());
+    w.writeU32(ack.chunk_index());
+    w.writeU32(static_cast<uint32_t>(ack.result()));
+    return w.take();
+}
+
+std::vector<uint8_t> encodeFileDownloadResponse(const control::ControlMessage& msg) {
+    CustomWireWriter w;
+    const auto& resp = msg.file_download_response();
+    w.writeU32(static_cast<uint32_t>(resp.result()));
+    w.writeString(resp.message());
+    w.writeU64(resp.file_id());
+    w.writeString(resp.filename());
+    w.writeU64(resp.file_size());
+    w.writeU32(resp.chunk_index());
+    w.writeU32(resp.total_chunks());
+    w.writeBytes(resp.data());
+    return w.take();
+}
+
 // ============================================================
 // C++ Protobuf case → Python wire format case
 //
@@ -972,6 +1074,7 @@ static const std::unordered_map<int, EncodeFunc> CASE_ENCODERS = {
     {control::ControlMessage::kUserJoined,       encodeUserJoinedChannel},
     {control::ControlMessage::kUserLeft,         encodeUserLeftChannel},
     {control::ControlMessage::kUserSpeaking,           encodeUserSpeaking},
+    {control::ControlMessage::kPttToggle,              encodePttToggle},
     {control::ControlMessage::kMuteToggle,             encodeMuteToggle},
     {control::ControlMessage::kStunBindRequest,        encodeStunBindRequest},
     {control::ControlMessage::kKeyRotationRequest,     encodeKeyRotationRequest},
@@ -979,6 +1082,8 @@ static const std::unordered_map<int, EncodeFunc> CASE_ENCODERS = {
     {control::ControlMessage::kChatBroadcast,          encodeChatBroadcast},
     {control::ControlMessage::kFileListResponse,        encodeFileListResponse},
     {control::ControlMessage::kFileUploadResponse,      encodeFileUploadResponse},
+    {control::ControlMessage::kFileUploadChunkAck,      encodeFileUploadChunkAck},
+    {control::ControlMessage::kFileDownloadResponse,    encodeFileDownloadResponse},
     {control::ControlMessage::kFileDeleteResponse,      encodeFileDeleteResponse},
 };
 

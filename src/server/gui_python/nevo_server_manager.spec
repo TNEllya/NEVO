@@ -11,7 +11,8 @@ datas = collect_data_files('qfluentwidgets')
 
 # Include translation files
 import os
-spec_dir = r'c:\Users\yzd20\Desktop\NEVO\src\server\gui_python'
+# SPECPATH = .spec 所在目录（src/server/gui_python），动态获取避免硬编码
+spec_dir = os.path.abspath(SPECPATH)
 translations_dir = os.path.join(spec_dir, 'translations')
 if os.path.isdir(translations_dir):
     datas.append((translations_dir, 'translations'))

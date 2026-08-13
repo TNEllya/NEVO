@@ -193,11 +193,16 @@ object ProtocolSerializer {
     }
 
     fun serializeLeaveChannelRequest(msg: LeaveChannelRequest): ByteArray {
-        return ByteArray(0)
+        val buf = NevoBuffer()
+        buf.writeU64(msg.channelId)
+        return buf.getBytes()
     }
 
     fun deserializeLeaveChannelRequest(data: ByteArray): LeaveChannelRequest {
-        return LeaveChannelRequest()
+        val buf = NevoBuffer(data)
+        return LeaveChannelRequest(
+            channelId = buf.readU64()
+        )
     }
 
     fun serializeCreateChannelRequest(msg: CreateChannelRequest): ByteArray {

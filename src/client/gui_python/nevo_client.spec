@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+import sys
 
 block_cipher = None
 
@@ -8,7 +9,8 @@ datas = collect_data_files('qfluentwidgets')
 datas += collect_data_files('mss')
 
 import os
-spec_dir = r'c:\Users\yzd20\Desktop\NEVO\src\client\gui_python'
+# SPECPATH = .spec 所在目录（src/client/gui_python），动态获取避免硬编码
+spec_dir = os.path.abspath(SPECPATH)
 translations_dir = os.path.join(spec_dir, 'translations')
 if os.path.isdir(translations_dir):
     datas.append((translations_dir, 'translations'))
@@ -40,23 +42,11 @@ hiddenimports += [
     'PyQt5.QtMultimedia',
     'charset_normalizer',
     'sounddevice',
-    'noisereduce',
     'numpy',
-    'scipy',
-    'scipy.signal',
-    'scipy.fft',
-    'scipy.special',
-    'scipy.linalg',
-    'scipy.sparse',
-    'scipy.io',
-    'scipy.ndimage',
-    'joblib',
-    'tqdm',
     'pynput',
     'pynput.keyboard',
     'pynput.keyboard._win32',
     'cryptography',
-    'pynacl',
     'nacl',
     'nacl.public',
     'nacl.bindings',
@@ -73,21 +63,31 @@ hiddenimports += [
     'screen_capture',
     'video_encoder',
     'video_engine',
+    'video_call_engine',
+    'camera_capture',
     'screen_share_dialog',
     'screen_audio_capture',
+    'wasapi_loopback',
     'views.screen_share_view',
     'views.update_dialog',
+    'views.video_call_dialog',
+    'views.incoming_call_dialog',
     'theme_manager',
     'updater',
     'win32gui',
     'win32api',
     'win32con',
+    'cv2',
 ]
 
-binaries = [
-    (r'C:\vcpkg\installed\x64-windows\bin\opus.dll', '.'),
-    (r'C:\Users\yzd20\Desktop\NEVO\test\server\libsodium.dll', '.'),
-]
+binaries = []
+# opus.dll: opuslib 需要的编解码库
+_opus_dll = os.path.join(os.path.dirname(sys.executable), 'opus.dll')
+if not os.path.isfile(_opus_dll):
+    _opus_dll = os.path.join(os.path.dirname(sys.executable), 'Scripts', 'opus.dll')
+if os.path.isfile(_opus_dll):
+    binaries.append((_opus_dll, '.'))
+# libsodium: PyNaCl 通过 _sodium.pyd 静态链接，无需独立 DLL
 
 a = Analysis(
     ['main.py'],
@@ -101,7 +101,10 @@ a = Analysis(
     excludes=[
         'tkinter', 'PIL', 'sqlalchemy', 'django', 'flask',
         'grpcio', 'grpc_tools',
-        'matplotlib',
+        'matplotlib', 'torch', 'tensorflow', 'pandas', 'datasets',
+        'nltk', 'transformers', 'sklearn', 'scipy', 'noisereduce',
+        'joblib', 'tqdm', 'librosa', 'sympy', 'pyarrow',
+        'uvicorn', 'fastapi', 'IPython', 'jupyter', 'notebook',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -110,6 +113,9 @@ a = Analysis(
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+_icon_path = os.path.join(spec_dir, 'resources', 'nevo_icon.ico')
+_icon_arg = _icon_path if os.path.isfile(_icon_path) else None
 
 exe = EXE(
     pyz,
@@ -125,8 +131,8 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
-    icon=None,
+    console=False,
+    icon=_icon_arg,
     version=None,
     onefile=True,
 )

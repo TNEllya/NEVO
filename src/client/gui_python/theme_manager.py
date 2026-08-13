@@ -13,33 +13,39 @@ THEME_SYSTEM = "system"
 APP_NAME = "NEVO"
 
 DARK_PALETTE = {
-    "bg_primary": "#2b2d31",
-    "bg_secondary": "#1e1e2e",
-    "bg_card": "rgba(43, 45, 49, 0.85)",
-    "bg_card_solid": "#2b2d31",
+    "bg_primary": "#1A1B1E",
+    "bg_secondary": "#22242A",
+    "bg_card": "rgba(42, 45, 53, 0.90)",
+    "bg_card_solid": "#2A2D35",
     "bg_input": "rgba(255, 255, 255, 0.05)",
     "bg_input_hover": "rgba(255, 255, 255, 0.08)",
     "bg_input_pressed": "rgba(255, 255, 255, 0.12)",
     "bg_overlay": "rgba(0, 0, 0, 0.2)",
-    "bg_hover": "rgba(79, 84, 92, 0.4)",
-    "bg_inner_card": "#383a45",
+    "bg_hover": "rgba(46, 49, 58, 0.6)",
+    "bg_inner_card": "#2E313A",
     "bg_status": "rgba(255, 255, 255, 0.05)",
-    "text_primary": "#dbdee1",
-    "text_secondary": "#8b8d97",
-    "text_muted": "#6d6f78",
-    "text_timestamp": "#72767d",
-    "text_system_msg": "#72767d",
-    "text_white": "#ffffff",
-    "text_accent": "#43b581",
-    "text_warning": "#faa61a",
-    "border_dashed": "#666",
-    "border_avatar": "#ccc",
-    "bg_avatar_empty": "#f0f0f0",
-    "scrollbar_handle": "rgba(255,255,255,0.2)",
-    "status_online": "#2ecc71",
-    "status_offline": "#e74c3c",
-    "star_color": "#f1c40f",
-    "chat_bg": "#313338",
+    "text_primary": "#E8EAF0",
+    "text_secondary": "#9CA3B4",
+    "text_muted": "#6B7280",
+    "text_timestamp": "#6B7280",
+    "text_system_msg": "#6B7280",
+    "text_white": "#E8EAF0",
+    "text_accent": "#2DD4A8",
+    "text_warning": "#FBBF24",
+    "border_dashed": "#4A5060",
+    "border_avatar": "#3D4250",
+    "bg_avatar_empty": "#3D4250",
+    "scrollbar_handle": "rgba(255,255,255,0.15)",
+    "status_online": "#34D399",
+    "status_offline": "#F87171",
+    "star_color": "#FBBF24",
+    "chat_bg": "#22242A",
+    "primary": "#2DD4A8",
+    "primary_hover": "#26B892",
+    "error": "#F87171",
+    "error_hover": "#D63B3B",
+    "voice_active": "#2DD4A8",
+    "voice_idle": "#3D4250",
 }
 
 LIGHT_PALETTE = {
@@ -70,6 +76,12 @@ LIGHT_PALETTE = {
     "status_offline": "#e74c3c",
     "star_color": "#f1c40f",
     "chat_bg": "#e8eaed",
+    "primary": "#2DD4A8",
+    "primary_hover": "#26B892",
+    "error": "#F87171",
+    "error_hover": "#D63B3B",
+    "voice_active": "#2DD4A8",
+    "voice_idle": "#6B7280",
 }
 
 
@@ -309,3 +321,51 @@ def overlay_stylesheet() -> str:
     tm = ThemeManager.instance()
     pal = tm.palette()
     return f"background-color: {pal['bg_overlay']}; border: none;"
+
+
+def status_hover_stylesheet(connected: bool) -> str:
+    tm = ThemeManager.instance()
+    pal = tm.palette()
+    hover_color = (
+        "rgba(46, 204, 113, 0.15)" if connected
+        else "rgba(231, 76, 60, 0.15)"
+    )
+    return (
+        "ToolButton {"
+        "  background-color: transparent;"
+        "  border: none;"
+        "  border-radius: 6px;"
+        "}"
+        f"ToolButton:hover {{"
+        f"  background-color: {hover_color};"
+        f"}}"
+    )
+
+
+def primary_slider_stylesheet() -> str:
+    tm = ThemeManager.instance()
+    pal = tm.palette()
+    return (
+        f"QSlider::groove:horizontal {{"
+        f"  height: 6px; background: {pal['bg_hover']}; border-radius: 3px;"
+        f"}}"
+        f"QSlider::handle:horizontal {{"
+        f"  background: {pal['primary']}; width: 14px; height: 14px;"
+        f"  margin: -4px 0; border-radius: 7px;"
+        f"}}"
+        f"QSlider::sub-page:horizontal {{"
+        f"  background: {pal['primary']}; border-radius: 3px;"
+        f"}}"
+    )
+
+
+def primary_button_stylesheet() -> str:
+    tm = ThemeManager.instance()
+    pal = tm.palette()
+    return (
+        f"QPushButton {{"
+        f"  background-color: {pal['primary']}; color: white; border: none;"
+        f"  border-radius: 4px; padding: 6px 16px; font-size: 12px;"
+        f"}}"
+        f"QPushButton:hover {{ background-color: {pal['primary_hover']}; }}"
+    )

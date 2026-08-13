@@ -6,6 +6,7 @@ add_library(nevo_client
     src/AudioInput.cpp
     src/AudioOutput.cpp
     src/NetworkManager.cpp
+    src/VideoCallManager.cpp
 )
 
 target_include_directories(nevo_client PUBLIC
@@ -17,11 +18,6 @@ target_link_libraries(nevo_client PUBLIC
     nevo_core
     nevo_network
 )
-
-if(Qt6_FOUND AND NOT MINGW)
-    target_link_libraries(nevo_client PUBLIC Qt6::Core)
-    target_compile_definitions(nevo_client PUBLIC NEVO_HAS_QT)
-endif()
 
 nevo_set_compiler_warnings(nevo_client)
 nevo_platform_setup(nevo_client)

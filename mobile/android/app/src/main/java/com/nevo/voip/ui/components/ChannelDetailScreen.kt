@@ -82,7 +82,7 @@ fun ChannelDetailScreen(
 
             ChatInputBar(
                 text = chatState.inputText,
-                onTextChange = { chatViewModel.updateInputText(it) },
+                onTextChange = { chatViewModel.onInputChanged(it) },
                 onSend = { chatViewModel.sendMessage() },
                 modifier = Modifier.fillMaxWidth()
             )

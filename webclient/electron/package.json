@@ -15,6 +15,9 @@
     "electron": "^33.0.0",
     "electron-builder": "^25.0.0"
   },
+  "updater": {
+    "requireSignedManifest": true
+  },
   "build": {
     "appId": "com.nevo.webclient",
     "productName": "NEVO Web Client",
@@ -27,6 +30,7 @@
       "package.json",
       "preload.js",
       "updater.js",
+      "apply_update.js",
       "app-icon.ico"
     ],
     "extraResources": [

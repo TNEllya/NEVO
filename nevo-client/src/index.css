@@ -1,0 +1,180 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===== NEVO Brand Design Tokens (Dark - default) ===== */
+:root,
+.dark {
+  --color-primary: #2dd4a8;
+  --color-primary-hover: #26b892;
+  --color-primary-active: #1f9c7c;
+  --color-primary-muted: rgba(45, 212, 168, 0.12);
+  --color-primary-foreground: #0a1a14;
+
+  --color-bg-base: #1a1b1e;
+  --color-bg-surface: #22242a;
+  --color-bg-elevated: #2a2d35;
+  --color-bg-overlay: #32363f;
+  --color-bg-hover: #2e313a;
+  --color-bg-active: #363a45;
+
+  --color-text-primary: #e8eaf0;
+  --color-text-secondary: #9ca3b4;
+  --color-text-tertiary: #6b7280;
+  --color-text-inverse: #0a0a0c;
+
+  --color-border: #2e313a;
+  --color-border-hover: #3d4250;
+  --color-border-active: #4a5060;
+
+  --state-success: #34d399;
+  --state-warning: #fbbf24;
+  --state-error: #f87171;
+  --state-info: #60a5fa;
+
+  --color-voice-active: #2dd4a8;
+  --color-voice-idle: #3d4250;
+
+  --font-display: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", Consolas, monospace;
+
+  --shadow-floating: 0 12px 32px rgba(0, 0, 0, 0.2);
+}
+
+/* ===== Light theme overrides ===== */
+.light {
+  --color-primary: #14b88a;
+  --color-primary-hover: #11a07a;
+  --color-primary-active: #0e8865;
+  --color-primary-muted: rgba(20, 184, 138, 0.1);
+  --color-primary-foreground: #ffffff;
+
+  --color-bg-base: #f5f6f8;
+  --color-bg-surface: #ffffff;
+  --color-bg-elevated: #ffffff;
+  --color-bg-overlay: #eef0f3;
+  --color-bg-hover: #eef0f4;
+  --color-bg-active: #e3e6ec;
+
+  --color-text-primary: #1a1b1e;
+  --color-text-secondary: #5a6275;
+  --color-text-tertiary: #8a92a3;
+  --color-text-inverse: #ffffff;
+
+  --color-border: #e3e6ec;
+  --color-border-hover: #d0d5de;
+  --color-border-active: #b8c0cc;
+
+  --state-success: #10b981;
+  --state-warning: #f59e0b;
+  --state-error: #ef4444;
+  --state-info: #3b82f6;
+
+  --color-voice-active: #14b88a;
+  --color-voice-idle: #c8ced8;
+
+  --shadow-floating: 0 12px 32px rgba(0, 0, 0, 0.12);
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg-base);
+  color: var(--color-text-primary);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Hide scrollbars but keep scroll */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* ===== Keyframe Animations ===== */
+@keyframes voice-bar {
+  0% { height: 4px; }
+  100% { height: 20px; }
+}
+@keyframes voice-bar-idle {
+  0% { height: 3px; opacity: 0.4; }
+  100% { height: 7px; opacity: 0.7; }
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+@keyframes meter-pulse {
+  0%, 100% { width: 35%; }
+  50% { width: 55%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Range slider thumb styling */
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  background: var(--color-primary);
+  border-radius: 9999px;
+  cursor: pointer;
+  border: 2px solid var(--color-bg-base);
+  box-shadow: 0 0 0 1px var(--color-primary);
+  transition: transform 150ms ease, box-shadow 150ms ease;
+}
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  box-shadow: 0 0 0 2px rgba(45, 212, 168, 0.3);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  background: var(--color-primary);
+  border-radius: 9999px;
+  cursor: pointer;
+  border: 2px solid var(--color-bg-base);
+  box-shadow: 0 0 0 1px var(--color-primary);
+}
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--color-bg-elevated);
+  border-radius: 9999px;
+  outline: none;
+  cursor: pointer;
+}
+
+select option {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}
+
+/* Only enable hover styles on devices that support hover */
+@media (hover: none) {
+  .hover-only {
+    pointer-events: none;
+  }
+}

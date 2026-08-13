@@ -3,6 +3,7 @@ import struct
 import threading
 import time
 import traceback
+from collections import deque
 
 from voice_crypto import VoiceCrypto, XCHACHA_NONCE_SIZE, POLY1305_TAG_SIZE
 from screen_capture import ScreenCapture, SOURCE_SCREEN, SOURCE_WINDOW
@@ -13,19 +14,37 @@ VIDEO_UDP_MAX_PACKET_SIZE = 1400
 VIDEO_NAL_MAX_FRAGMENT = 1200
 VIDEO_REASSEMBLY_MAX_AGE = 5.0
 _VIDEO_LOG_FILE = None
+_VIDEO_LOG_FIRST_OPEN = True
+_VIDEO_LOG_LOCK = threading.Lock()
 
 def _vlog(msg):
     """Log to both console and a file for diagnostics."""
-    global _VIDEO_LOG_FILE
+    global _VIDEO_LOG_FILE, _VIDEO_LOG_FIRST_OPEN
     line = f"[VIDEO] {msg}\n"
     print(line, end="")
     try:
-        if _VIDEO_LOG_FILE is None:
-            import os
-            log_dir = os.path.expanduser("~")
-            _VIDEO_LOG_FILE = open(os.path.join(log_dir, "nevo_video_debug.log"), "w")
-        _VIDEO_LOG_FILE.write(line)
-        _VIDEO_LOG_FILE.flush()
+        with _VIDEO_LOG_LOCK:
+            if _VIDEO_LOG_FILE is None:
+                import os
+                log_dir = os.path.expanduser("~")
+                # 首次打开截断旧日志；关闭后重新打开则追加，避免覆盖本次会话早前内容
+                mode = "w" if _VIDEO_LOG_FIRST_OPEN else "a"
+                _VIDEO_LOG_FILE = open(os.path.join(log_dir, "nevo_video_debug.log"), mode)
+                _VIDEO_LOG_FIRST_OPEN = False
+            _VIDEO_LOG_FILE.write(line)
+            _VIDEO_LOG_FILE.flush()
+    except Exception:
+        pass
+
+
+def _vlog_close():
+    """Close the diagnostic log file handle (call from stop/close paths)."""
+    global _VIDEO_LOG_FILE
+    try:
+        with _VIDEO_LOG_LOCK:
+            if _VIDEO_LOG_FILE is not None:
+                _VIDEO_LOG_FILE.close()
+                _VIDEO_LOG_FILE = None
     except Exception:
         pass
 
@@ -87,17 +106,54 @@ class VideoEngine:
         self._sequence = 0
         self._capture_thread = None
         self._recv_thread = None
+        self._keepalive_thread = None
         self._reassembler = FragmentReassembler()
         self._decoders = {}
         self._decoders_lock = threading.Lock()
 
+        # 逐包调试信息：仅在显式开启 debug 时写入内存环形缓冲，避免逐包打印/文件日志
+        self._debug_enabled = False
+        self._debug_log = deque(maxlen=100)
+        self._debug_lock = threading.Lock()
+
         self.on_video_frame = None
         self.on_share_state_changed = None
+
+    def set_debug_enabled(self, enabled: bool):
+        """开启/关闭逐包调试记录（内存环形缓冲）。"""
+        self._debug_enabled = bool(enabled)
+
+    def get_debug_log(self) -> list:
+        """返回最近最多 100 条逐包调试记录的快照。"""
+        with self._debug_lock:
+            return list(self._debug_log)
+
+    def _pkt_debug(self, msg: str):
+        """记录逐包调试信息到内存环形缓冲（仅在 debug 开启时）。"""
+        if not self._debug_enabled:
+            return
+        try:
+            with self._debug_lock:
+                self._debug_log.append(msg)
+        except Exception:
+            pass
 
     def set_server_udp(self, host, port):
         old = self._server_udp_addr
         self._server_udp_addr = (host, port)
         _vlog(f"[INIT] set_server_udp: {old} -> {self._server_udp_addr}")
+
+    def _resolve_sendto_addr(self):
+        if not self._server_udp_addr or not self._udp_sock:
+            return self._server_udp_addr
+        host = self._server_udp_addr[0]
+        port = self._server_udp_addr[1]
+        try:
+            if self._udp_sock.family == socket.AF_INET6 and '.' in host:
+                return ('::ffff:' + host, port, 0, 0)
+        except Exception:
+            pass
+        return self._server_udp_addr
 
     def set_user_info(self, user_id, channel_id):
         _vlog(f"[INIT] set_user_info: user_id={user_id}, channel_id={channel_id} (was {self._user_id}/{self._channel_id})")
@@ -109,6 +165,10 @@ class VideoEngine:
     def set_session_key(self, key):
         if isinstance(key, (bytes, bytearray)):
             self._crypto.set_session_key(key)
+
+    def rotate_session_key(self, key):
+        if isinstance(key, (bytes, bytearray)):
+            self._crypto.rotate_key(key)
 
     def _send_registration_packet(self):
         if not self._udp_sock or not self._server_udp_addr:
@@ -132,7 +192,7 @@ class VideoEngine:
 
             header_len_prefix = struct.pack('<H', len(header_bytes))
             packet = header_len_prefix + header_bytes + encrypted
-            self._udp_sock.sendto(packet, self._server_udp_addr)
+            self._udp_sock.sendto(packet, self._resolve_sendto_addr())
             _vlog(f"Registration packet sent to {self._server_udp_addr}")
         except Exception as e:
             _vlog_exc(e)
@@ -193,6 +253,7 @@ class VideoEngine:
         self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self._recv_thread.start()
         _vlog(f"[RECV] receive thread started, port={self.local_udp_port}")
+        self._start_keepalive_loop()
         if self._channel_id > 0:
             self._send_registration_packet()
 
@@ -201,6 +262,29 @@ class VideoEngine:
         if self._recv_thread and self._recv_thread.is_alive():
             self._recv_thread.join(timeout=3.0)
         self._recv_thread = None
+        self._stop_keepalive_loop()
+        _vlog_close()
+
+    def _start_keepalive_loop(self):
+        if self._keepalive_thread and self._keepalive_thread.is_alive():
+            return
+        self._keepalive_thread = threading.Thread(target=self._keepalive_loop, daemon=True)
+        self._keepalive_thread.start()
+
+    def _stop_keepalive_loop(self):
+        if self._keepalive_thread and self._keepalive_thread.is_alive():
+            self._keepalive_thread.join(timeout=3.0)
+        self._keepalive_thread = None
+
+    def _keepalive_loop(self):
+        next_send = time.time() + 15.0
+        while self._running:
+            now = time.time()
+            if now >= next_send:
+                if self._udp_sock and self._server_udp_addr and self._user_id > 0 and self._channel_id > 0:
+                    self._send_registration_packet()
+                next_send = now + 15.0
+            time.sleep(0.5)
 
     def start_share(self, source_type=SOURCE_SCREEN, source_index=0, fps=SCREEN_SHARE_FPS):
         _vlog(f"=== start_share called: type={source_type}, idx={source_index}, fps={fps} ===")
@@ -268,7 +352,8 @@ class VideoEngine:
             self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
             self._capture_thread.start()
             _vlog("=== start_share SUCCESS ===")
-            
+
+            self._start_keepalive_loop()
             self._send_registration_packet()
 
             if self.on_share_state_changed:
@@ -309,6 +394,7 @@ class VideoEngine:
     def close(self):
         self.stop_share()
         self.stop_receive()
+        self._stop_keepalive_loop()
         if self._udp_sock:
             try:
                 self._udp_sock.close()
@@ -319,6 +405,7 @@ class VideoEngine:
             for dec in self._decoders.values():
                 dec.close()
             self._decoders.clear()
+        _vlog_close()
 
     def _capture_loop(self):
         last_time = time.time()
@@ -333,19 +420,19 @@ class VideoEngine:
                     # Create a copy to ensure the frame data persists after this iteration
                     frame_copy = frame.copy()
                     try:
-                        _vlog(f"[SELFVIEW] calling on_video_frame for user_id={self._user_id}, frame_shape={frame_copy.shape}")
+                        self._pkt_debug(f"[SELFVIEW] calling on_video_frame for user_id={self._user_id}, frame_shape={frame_copy.shape}")
                         self.on_video_frame(self._user_id, frame_copy, w, h)
-                        _vlog(f"[SELFVIEW] on_video_frame returned OK")
+                        self._pkt_debug(f"[SELFVIEW] on_video_frame returned OK")
                     except Exception as e:
                         _vlog_exc(e)
-                        _vlog(f"[SELFVIEW] on_video_frame RAISED EXCEPTION")
+                        self._pkt_debug(f"[SELFVIEW] on_video_frame RAISED EXCEPTION")
 
                 nals = self._encoder.encode(frame)
-                _vlog(f"[CAPTURE] frame#{frame_count}: size={frame.shape[1]}x{frame.shape[0]}, nals={len(nals)}")
+                self._pkt_debug(f"[CAPTURE] frame#{frame_count}: size={frame.shape[1]}x{frame.shape[0]}, nals={len(nals)}")
                 frame_count += 1
                 for i, nal in enumerate(nals):
                     is_keyframe = (i == 0 and len(nals) > 0)
-                    _vlog(f"[CAPTURE]   nal[{i}]: size={len(nal)}, keyframe={is_keyframe}")
+                    self._pkt_debug(f"[CAPTURE]   nal[{i}]: size={len(nal)}, keyframe={is_keyframe}")
                     self._send_video_nal(nal, frame_type=0 if is_keyframe else 1)
 
             elapsed = time.time() - last_time
@@ -375,12 +462,12 @@ class VideoEngine:
         if len(nal_data) <= VIDEO_NAL_MAX_FRAGMENT:
             header.fragment_index = 0
             header.fragment_total = 1
-            _vlog(f"[SEND] seq={self._sequence}, nal_size={len(nal_data)}, addr={self._server_udp_addr}")
+            self._pkt_debug(f"[SEND] seq={self._sequence}, nal_size={len(nal_data)}, addr={self._server_udp_addr}")
             self._send_packet(header, nal_data)
         else:
             total = (len(nal_data) + VIDEO_NAL_MAX_FRAGMENT - 1) // VIDEO_NAL_MAX_FRAGMENT
             header.fragment_total = total
-            _vlog(f"[SEND] seq={self._sequence}, nal_size={len(nal_data)}, frags={total}, addr={self._server_udp_addr}")
+            self._pkt_debug(f"[SEND] seq={self._sequence}, nal_size={len(nal_data)}, frags={total}, addr={self._server_udp_addr}")
             for i in range(total):
                 start = i * VIDEO_NAL_MAX_FRAGMENT
                 end = min(start + VIDEO_NAL_MAX_FRAGMENT, len(nal_data))
@@ -401,7 +488,7 @@ class VideoEngine:
             return
 
         try:
-            self._udp_sock.sendto(packet, self._server_udp_addr)
+            self._udp_sock.sendto(packet, self._resolve_sendto_addr())
         except Exception:
             pass
 
@@ -486,14 +573,14 @@ class VideoEngine:
             header_aad = data[2 : 2 + header_size]
             plaintext = self._crypto.decrypt_simple(payload, header_aad)
             if plaintext is None:
-                _vlog(f"[RECV] DECRYPT FAILED: sender={sender_id}, seq={header.sequence_number}, "
-                      f"payload_len={len(payload)}, aad_len={len(header_aad)}")
+                self._pkt_debug(f"[RECV] DECRYPT FAILED: sender={sender_id}, seq={header.sequence_number}, "
+                                f"payload_len={len(payload)}, aad_len={len(header_aad)}")
                 return
 
-            _vlog(f"[RECV] OK: sender={sender_id}, seq={header.sequence_number}, "
-                  f"frag={header.fragment_index}/{header.fragment_total}, nal_size={len(plaintext)}, "
-                  f"from_addr={addr}, frame_type={header.frame_type}, "
-                  f"resolution={header.width}x{header.height}")
+            self._pkt_debug(f"[RECV] OK: sender={sender_id}, seq={header.sequence_number}, "
+                            f"frag={header.fragment_index}/{header.fragment_total}, nal_size={len(plaintext)}, "
+                            f"from_addr={addr}, frame_type={header.frame_type}, "
+                            f"resolution={header.width}x{header.height}")
 
             seq = header.sequence_number
             frag_idx = header.fragment_index
@@ -506,7 +593,7 @@ class VideoEngine:
                     sender_id, seq, frag_idx, frag_total, plaintext
                 )
                 if nal is not None:
-                    _vlog(f"[RECV] reassembled NAL for sender={sender_id}, size={len(nal)}")
+                    self._pkt_debug(f"[RECV] reassembled NAL for sender={sender_id}, size={len(nal)}")
                     self._process_nal(sender_id, nal, header)
         except Exception as e:
             _vlog_exc(e)
@@ -539,10 +626,10 @@ class VideoEngine:
 
         frame = decoder.decode(nal_data)
         if frame is not None and self.on_video_frame:
-            _vlog(f"[DECODE] decoded frame from sender={sender_id}: {frame.shape}")
+            self._pkt_debug(f"[DECODE] decoded frame from sender={sender_id}: {frame.shape}")
             try:
                 self.on_video_frame(sender_id, frame, header.width, header.height)
             except Exception as e:
                 _vlog_exc(e)
         elif frame is None:
-            _vlog(f"[DECODE] decode returned None for sender={sender_id}")
+            self._pkt_debug(f"[DECODE] decode returned None for sender={sender_id}")

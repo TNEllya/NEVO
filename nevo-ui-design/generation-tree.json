@@ -1,0 +1,47 @@
+{
+  "root": {
+    "nodeId": "gen-project-shell",
+    "kind": "project-shell",
+    "pageIds": [],
+    "output": "partials/project-shell.html",
+    "sharedRegions": ["app-frame", "sidebar", "top-bar", "root-background", "brand-css-usage", "font-loading", "base-typography-scale", "radius-scale", "surface-depth-model"],
+    "privateRegions": [],
+    "mutableSlots": ["pageTitle"],
+    "status": "planned",
+    "children": [
+      {
+        "nodeId": "gen-page-main-interface",
+        "kind": "page-leaf",
+        "pageIds": ["page-main-interface"],
+        "output": "pages/main-interface.html",
+        "sharedRegions": [],
+        "privateRegions": ["main-content", "channel-tree", "voice-users", "chat-panel", "connection-bar"],
+        "mutableSlots": [],
+        "status": "planned",
+        "children": []
+      },
+      {
+        "nodeId": "gen-page-video-call",
+        "kind": "page-leaf",
+        "pageIds": ["page-video-call"],
+        "output": "pages/video-call.html",
+        "sharedRegions": [],
+        "privateRegions": ["video-area", "controls-overlay", "self-view", "call-info"],
+        "mutableSlots": [],
+        "status": "planned",
+        "children": []
+      },
+      {
+        "nodeId": "gen-page-settings",
+        "kind": "page-leaf",
+        "pageIds": ["page-settings"],
+        "output": "pages/settings.html",
+        "sharedRegions": [],
+        "privateRegions": ["settings-panels", "audio-config", "device-selectors"],
+        "mutableSlots": [],
+        "status": "planned",
+        "children": []
+      }
+    ]
+  }
+}

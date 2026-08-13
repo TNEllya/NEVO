@@ -26,7 +26,12 @@ class ChatViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
-    private val channelId: Long = savedStateHandle.get<String>("channelId")?.toLongOrNull() ?: 0L
+    private val channelId: Long = when (val value = savedStateHandle.get<Any>("channelId")) {
+        is Long -> value
+        is Int -> value.toLong()
+        is String -> value.toLongOrNull() ?: 0L
+        else -> 0L
+    }
 
     private val _uiState = MutableStateFlow(ChatUiState(channelId = channelId))
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
@@ -41,7 +46,7 @@ class ChatViewModel @Inject constructor(
             chatRepository.chatBroadcasts.collect { broadcast ->
                 if (broadcast.channelId == channelId) {
                     val entity = ChatMessageEntity(
-                        channelId = broadcast.channelId.toInt(),
+                        channelId = broadcast.channelId,
                         senderId = broadcast.senderId,
                         senderName = broadcast.senderName,
                         content = broadcast.text,
@@ -58,8 +63,8 @@ class ChatViewModel @Inject constructor(
         _uiState.update { it.copy(inputText = text) }
     }
 
-    fun updateInputText(text: String) {
-        _uiState.update { it.copy(inputText = text) }
+    fun appendEmoji(emoji: String) {
+        _uiState.update { it.copy(inputText = it.inputText + emoji) }
     }
 
     fun sendMessage() {
@@ -67,7 +72,7 @@ class ChatViewModel @Inject constructor(
         if (text.isEmpty() || _uiState.value.isSending) return
 
         val entity = ChatMessageEntity(
-            channelId = channelId.toInt(),
+            channelId = channelId,
             senderId = 0,
             senderName = "",
             content = text,
@@ -77,11 +82,13 @@ class ChatViewModel @Inject constructor(
         )
 
         viewModelScope.launch {
-            chatRepository.insertMessage(entity)
+            val insertedId = chatRepository.insertMessage(entity)
             _uiState.update { it.copy(inputText = "", isSending = true) }
-            chatRepository.sendMessage(channelId, text).onSuccess {
-                chatRepository.markMessageSent(entity.id)
-            }
+            chatRepository.sendMessage(channelId, text)
+                .onSuccess { chatRepository.markMessageSent(insertedId) }
+                .onFailure {
+                    // Message sending failed — keep pendingSend = true for UI display
+                }
             _uiState.update { it.copy(isSending = false) }
         }
     }

@@ -25,16 +25,8 @@
 #endif
 
 #include <random>
-#include <fstream>
-#include <filesystem>
 
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <iphlpapi.h>
-#pragma comment(lib, "ws2_32.lib")
-#pragma comment(lib, "iphlpapi.lib")
-#else
+#ifndef _WIN32
 #include <ifaddrs.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -71,6 +63,62 @@ ServerCore::~ServerCore() {
 // ============================================================
 // Lifecycle Management
 // ============================================================
+
+void ServerCore::updateLocalAddresses() {
+#ifndef _WIN32
+    struct ifaddrs* ifaddr = nullptr;
+    if (getifaddrs(&ifaddr) == -1) {
+        NEVO_LOG_WARN("server", "Failed to enumerate network interfaces for local addresses");
+        return;
+    }
+
+    for (struct ifaddrs* ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
+        if (!ifa->ifa_addr) {
+            continue;
+        }
+        int family = ifa->ifa_addr->sa_family;
+        if (family == AF_INET) {
+            char addr_str[INET_ADDRSTRLEN];
+            void* addr = &reinterpret_cast<struct sockaddr_in*>(ifa->ifa_addr)->sin_addr;
+            inet_ntop(AF_INET, addr, addr_str, INET_ADDRSTRLEN);
+            std::string s(addr_str);
+            if (s != "127.0.0.1" && ipv4_address_.empty()) {
+                ipv4_address_ = s;
+            }
+        } else if (family == AF_INET6) {
+            char addr_str[INET6_ADDRSTRLEN];
+            void* addr = &reinterpret_cast<struct sockaddr_in6*>(ifa->ifa_addr)->sin6_addr;
+            inet_ntop(AF_INET6, addr, addr_str, INET6_ADDRSTRLEN);
+            std::string s(addr_str);
+            if (!s.empty() && s != "::1" && ipv6_address_.empty()) {
+                ipv6_address_ = s;
+            }
+        }
+    }
+
+    freeifaddrs(ifaddr);
+
+    NEVO_LOG_INFO("server", "Detected local addresses: IPv4={}, IPv6={}",
+        ipv4_address_.empty() ? "none" : ipv4_address_,
+        ipv6_address_.empty() ? "none" : ipv6_address_);
+#else
+    // Windows fallback: use hostname resolution
+    try {
+        boost::asio::ip::tcp::resolver resolver(io_ctx_);
+        auto results = resolver.resolve(boost::asio::ip::host_name(), "");
+        for (const auto& entry : results) {
+            auto addr = entry.endpoint().address();
+            if (addr.is_v4() && !addr.is_loopback() && ipv4_address_.empty()) {
+                ipv4_address_ = addr.to_string();
+            } else if (addr.is_v6() && !addr.is_loopback() && ipv6_address_.empty()) {
+                ipv6_address_ = addr.to_string();
+            }
+        }
+    } catch (const std::exception& e) {
+        NEVO_LOG_WARN("server", "Failed to resolve local addresses: {}", e.what());
+    }
+#endif
+}
 
 Result<void> ServerCore::initialize(const std::string& db_path) {
     NEVO_LOG_INFO("server", "Initializing ServerCore with db: {}", db_path);
@@ -134,16 +182,6 @@ Result<void> ServerCore::initialize(const std::string& db_path) {
     }
     NEVO_LOG_WARN("server", "Server session key generated (std::random_device, libsodium not available)");
 #endif
-
-    // Derive password file path from db_path directory
-    std::filesystem::path db_dir = std::filesystem::path(db_path).parent_path();
-    if (db_dir.empty()) {
-        db_dir = ".";
-    }
-    password_file_path_ = (db_dir / "nevo_admin.dat").string();
-
-    // Load persisted admin password hash
-    loadAdminPassword();
 
     // Load SSL/TLS configuration from database
     auto ssl_enabled_str = db_->getConfig("ssl_enabled");
@@ -225,6 +263,9 @@ void ServerCore::start() {
         boost::asio::detached);
 
     NEVO_LOG_INFO("server", "ServerCore started on TCP:{} UDP:{}", tcp_port_, udp_port_);
+
+    // Detect local addresses for status snapshots
+    updateLocalAddresses();
 
     // Start control server for Python GUI IPC
     control_server_ = std::make_unique<ControlServer>(io_ctx_, control_port_, this);
@@ -358,6 +399,9 @@ ServerStatusSnapshot ServerCore::getStatusSnapshot() const {
         if (s.is_authenticated) ++snapshot.authenticated_users;
     }
 
+    snapshot.ipv4_address = ipv4_address_;
+    snapshot.ipv6_address = ipv6_address_;
+
     if (channel_mgr_) {
         auto channels = channel_mgr_->getChannelsWithUsers();
         snapshot.total_channels = channels.size();
@@ -382,81 +426,7 @@ ServerStatusSnapshot ServerCore::getStatusSnapshot() const {
         snapshot.uptime_seconds = static_cast<uint64_t>((now - start_time_ms_) / 1000);
     }
 
-    // Collect local IP addresses
-    auto [ipv4, ipv6] = collectLocalAddresses();
-    snapshot.ipv4_address = ipv4;
-    snapshot.ipv6_address = ipv6;
-
     return snapshot;
-}
-
-std::pair<std::string, std::string> ServerCore::collectLocalAddresses() const {
-    std::string ipv4, ipv6;
-
-#ifdef _WIN32
-    ULONG family = AF_UNSPEC;
-    ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
-    ULONG buf_len = 15000;
-    std::vector<uint8_t> buf(buf_len);
-
-    ULONG ret = GetAdaptersAddresses(family, flags, nullptr,
-                                     reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buf.data()), &buf_len);
-    if (ret == ERROR_BUFFER_OVERFLOW) {
-        buf.resize(buf_len);
-        ret = GetAdaptersAddresses(family, flags, nullptr,
-                                   reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buf.data()), &buf_len);
-    }
-    if (ret != ERROR_SUCCESS) {
-        return {ipv4, ipv6};
-    }
-
-    auto* adapter = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buf.data());
-    for (; adapter != nullptr; adapter = adapter->Next) {
-        if (adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
-        if (adapter->OperStatus != IfOperStatusUp) continue;
-
-        for (auto* unicast = adapter->FirstUnicastAddress; unicast != nullptr; unicast = unicast->Next) {
-            auto* sa = unicast->Address.lpSockaddr;
-            if (!sa) continue;
-
-            char addr_str[INET6_ADDRSTRLEN] = {};
-            if (sa->sa_family == AF_INET && ipv4.empty()) {
-                auto* sin = reinterpret_cast<sockaddr_in*>(sa);
-                inet_ntop(AF_INET, &sin->sin_addr, addr_str, sizeof(addr_str));
-                ipv4 = addr_str;
-            } else if (sa->sa_family == AF_INET6 && ipv6.empty()) {
-                auto* sin6 = reinterpret_cast<sockaddr_in6*>(sa);
-                inet_ntop(AF_INET6, &sin6->sin6_addr, addr_str, sizeof(addr_str));
-                ipv6 = addr_str;
-            }
-            if (!ipv4.empty() && !ipv6.empty()) break;
-        }
-        if (!ipv4.empty() && !ipv6.empty()) break;
-    }
-#else
-    struct ifaddrs* ifaddr = nullptr;
-    if (getifaddrs(&ifaddr) == 0) {
-        for (struct ifaddrs* ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
-            if (!ifa->ifa_addr) continue;
-            if (std::string(ifa->ifa_name) == "lo" || std::string(ifa->ifa_name).find("loopback") != std::string::npos)
-                continue;
-
-            char addr_str[INET6_ADDRSTRLEN] = {};
-            if (ifa->ifa_addr->sa_family == AF_INET && ipv4.empty()) {
-                auto* sin = reinterpret_cast<struct sockaddr_in*>(ifa->ifa_addr);
-                inet_ntop(AF_INET, &sin->sin_addr, addr_str, sizeof(addr_str));
-                ipv4 = addr_str;
-            } else if (ifa->ifa_addr->sa_family == AF_INET6 && ipv6.empty()) {
-                auto* sin6 = reinterpret_cast<struct sockaddr_in6*>(ifa->ifa_addr);
-                inet_ntop(AF_INET6, &sin6->sin6_addr, addr_str, sizeof(addr_str));
-                ipv6 = addr_str;
-            }
-            if (!ipv4.empty() && !ipv6.empty()) break;
-        }
-        freeifaddrs(ifaddr);
-    }
-#endif
-    return {ipv4, ipv6};
 }
 
 std::vector<SessionSnapshot> ServerCore::getActiveSessions() const {
@@ -542,6 +512,17 @@ void ServerCore::onClientConnected(std::shared_ptr<ClientSession> session) {
     {
         std::lock_guard<std::mutex> lock(sessions_mutex_);
 
+        // 检查最大连接数限制（此前该检查被错误地放在断开回调中，形同虚设）
+        if (max_users_ > 0 && static_cast<int>(sessions_.size()) >= max_users_) {
+            NEVO_LOG_WARN("server", "Rejecting connection: max users limit reached ({}/{})",
+                          sessions_.size(), max_users_);
+            // 在锁外断开连接以避免死锁
+            boost::asio::post(io_ctx_, [session]() {
+                session->disconnect();
+            });
+            return;
+        }
+
         uid = session->userId();
         sid = session->sessionId();
 
@@ -556,6 +537,11 @@ void ServerCore::onClientConnected(std::shared_ptr<ClientSession> session) {
         // Add to AudioRelay mapping if UDP endpoint is available
         if (audio_relay_ && session->udpEndpoint()) {
             audio_relay_->addClientMapping(uid, *session->udpEndpoint());
+            // 用户登录时已被移入默认频道，同步映射中的频道信息
+            ChannelId current_channel = session->user().currentChannel();
+            if (current_channel) {
+                audio_relay_->updateClientChannel(uid, current_channel);
+            }
         }
     }
 
@@ -593,41 +579,52 @@ void ServerCore::onClientDisconnected(std::shared_ptr<ClientSession> session) {
     {
         std::lock_guard<std::mutex> lock(sessions_mutex_);
 
-        // 检查用户数量限制
-        int authenticated_count = 0;
-        for (const auto& [sid, sess] : sessions_) {
-            if (sess && sess->isAuthenticated()) {
-                ++authenticated_count;
-            }
-        }
-        if (max_users_ > 0 && authenticated_count >= max_users_) {
-            NEVO_LOG_WARN("server", "Rejecting connection: max users limit reached ({}/{})",
-                          authenticated_count, max_users_);
-            // 在锁外断开连接以避免死锁
-            boost::asio::post(io_ctx_, [session]() {
-                session->disconnect();
-            });
-            return;
-        }
-
         uid = session->userId();
         sid = session->sessionId();
 
-        // Remove from AudioRelay mapping
-        if (audio_relay_ && uid) {
-            audio_relay_->removeClientMapping(uid);
+        // 判断该用户是否还有其他活动会话（同账号多设备场景）
+        bool user_has_other_sessions = false;
+        if (uid) {
+            for (const auto& [other_sid, other_session] : sessions_) {
+                if (other_sid == sid) continue;
+                if (other_session && other_session->userId() == uid) {
+                    user_has_other_sessions = true;
+                    break;
+                }
+            }
         }
 
-        if (video_relay_) {
-            video_relay_->removeClientMapping(uid);
+        // Remove from AudioRelay mapping
+        if (audio_relay_ && uid) {
+            if (!user_has_other_sessions) {
+                audio_relay_->removeClientMapping(uid);
+            } else if (session->udpEndpoint()) {
+                // 同账号仍有其他设备在线：仅移除本设备对应的端点
+                audio_relay_->removeClientMapping(uid, *session->udpEndpoint());
+            }
+        }
+
+        if (video_relay_ && uid) {
+            if (!user_has_other_sessions) {
+                video_relay_->removeClientMapping(uid);
+            } else if (session->udpEndpoint()) {
+                video_relay_->removeClientMapping(uid, *session->udpEndpoint());
+            }
         }
 
         // Remove from session list
         sessions_.erase(sid);
-        user_session_map_.erase(uid);
+        if (uid) {
+            auto um_it = user_session_map_.find(uid);
+            if (um_it != user_session_map_.end() && um_it->second == sid) {
+                user_session_map_.erase(um_it);
+            }
+        }
 
-        // 移除客户端独立会话密钥
-        removeClientSessionKey(uid);
+        // 移除客户端独立会话密钥（仅当该用户已无其他在线设备时）
+        if (uid && !user_has_other_sessions) {
+            removeClientSessionKey(uid);
+        }
 
         NEVO_LOG_INFO("server", "Client disconnected: user={} session={} (total clients: {})",
                       uid.value, sid.value, sessions_.size());
@@ -703,7 +700,8 @@ static constexpr size_t CRYPTO_BOX_SEALBYTES = 48;
 
 std::vector<uint8_t> ServerCore::generateSessionKeyForClient(
     UserId user_id,
-    const std::vector<uint8_t>& client_public_key)
+    const std::vector<uint8_t>& client_public_key,
+    bool reuse_existing)
 {
     if (client_public_key.size() != CRYPTO_BOX_PUBLICKEYBYTES) {
         NEVO_LOG_WARN("server", "Invalid client public key size: {} (expected {})",
@@ -713,7 +711,22 @@ std::vector<uint8_t> ServerCore::generateSessionKeyForClient(
 
 #ifdef NEVO_HAS_SODIUM
     std::array<uint8_t, CRYPTO_KEY_SIZE> session_key{};
-    randombytes_buf(session_key.data(), CRYPTO_KEY_SIZE);
+
+    // 同账号多设备场景：重复登录（第二个设备）时若该用户已有会话密钥则复用它，
+    // 确保同一账号的所有设备共享同一个密钥（否则后登录设备会覆盖前一台设备的密钥）。
+    // 密钥轮换（reuse_existing=false）时必须强制生成新密钥。
+    bool reused_existing = false;
+    if (reuse_existing) {
+        std::lock_guard<std::mutex> lock(client_keys_mutex_);
+        auto it = client_session_keys_.find(user_id);
+        if (it != client_session_keys_.end()) {
+            session_key = it->second;
+            reused_existing = true;
+        }
+    }
+    if (!reused_existing) {
+        randombytes_buf(session_key.data(), CRYPTO_KEY_SIZE);
+    }
 
     // 使用 crypto_box_seal 加密会话密钥
     std::vector<uint8_t> encrypted(CRYPTO_KEY_SIZE + CRYPTO_BOX_SEALBYTES);
@@ -732,7 +745,8 @@ std::vector<uint8_t> ServerCore::generateSessionKeyForClient(
         client_session_keys_[user_id] = session_key;
     }
 
-    NEVO_LOG_INFO("server", "Generated per-client session key for user_id={}", user_id.value);
+    NEVO_LOG_INFO("server", "Generated{} per-client session key for user_id={}",
+                  reused_existing ? " (reused existing)" : "", user_id.value);
     return encrypted;
 #else
     NEVO_LOG_ERROR("server", "libsodium not available, cannot generate session key!");
@@ -811,15 +825,6 @@ std::string ServerCore::serverName() const {
 }
 
 void ServerCore::setAdminPassword(const std::string& password) {
-    if (password.empty()) {
-        NEVO_LOG_INFO("server", "Admin password cleared");
-        admin_password_hash_.clear();
-        // Delete the persisted file
-        std::error_code ec;
-        std::filesystem::remove(password_file_path_, ec);
-        return;
-    }
-
 #ifdef NEVO_HAS_SODIUM
     char hashed_password[crypto_pwhash_STRBYTES];
     if (crypto_pwhash_str(hashed_password,
@@ -831,9 +836,6 @@ void ServerCore::setAdminPassword(const std::string& password) {
         return;
     }
     admin_password_hash_ = hashed_password;
-
-    // Persist encrypted hash to disk
-    saveAdminPassword();
 #else
     NEVO_LOG_ERROR("server", "Cannot set admin password: libsodium not available!");
     admin_password_hash_.clear();
@@ -846,93 +848,83 @@ bool ServerCore::isAdminPasswordSet() const {
     return !admin_password_hash_.empty();
 }
 
-void ServerCore::saveAdminPassword() {
+Result<void> ServerCore::verifyAdminPassword(const std::string& password) {
     if (admin_password_hash_.empty()) {
-        return;
+        return Error(ResultCode::Unknown, "Admin password not set on server");
     }
+
 #ifdef NEVO_HAS_SODIUM
-    static constexpr const char* APP_SECRET = "NEVO_ADMIN_VAULT_SECRET_KEY_2024_v1";
-    uint8_t key[crypto_secretbox_KEYBYTES];
-    crypto_generichash(key, sizeof(key),
-                       reinterpret_cast<const uint8_t*>(APP_SECRET), strlen(APP_SECRET),
-                       nullptr, 0);
-
-    uint8_t nonce[crypto_secretbox_NONCEBYTES];
-    randombytes_buf(nonce, sizeof(nonce));
-
-    std::vector<uint8_t> ciphertext(admin_password_hash_.size() + crypto_secretbox_MACBYTES);
-    crypto_secretbox_easy(ciphertext.data(),
-                          reinterpret_cast<const uint8_t*>(admin_password_hash_.data()),
-                          admin_password_hash_.size(),
-                          nonce, key);
-
-    std::ofstream ofs(password_file_path_, std::ios::binary);
-    if (!ofs) {
-        NEVO_LOG_ERROR("server", "Failed to open admin password file for writing: {}", password_file_path_);
-        return;
+    if (crypto_pwhash_str_verify(admin_password_hash_.c_str(), password.c_str(), password.size()) != 0) {
+        return Error(ResultCode::AuthFailed, "Incorrect admin password");
     }
-    ofs.write(reinterpret_cast<const char*>(nonce), sizeof(nonce));
-    ofs.write(reinterpret_cast<const char*>(ciphertext.data()), ciphertext.size());
-    ofs.close();
-
-    NEVO_LOG_INFO("server", "Admin password encrypted and saved to {}", password_file_path_);
+    return {};
 #else
-    NEVO_LOG_ERROR("server", "Cannot save admin password: libsodium not available!");
+    NEVO_LOG_ERROR("server", "Cannot verify admin password: libsodium not available!");
+    return Error(ResultCode::Unknown, "Cannot verify admin password");
 #endif
 }
 
-void ServerCore::loadAdminPassword() {
+// ============================================================
+// 管理面认证令牌
+// ============================================================
+
+namespace {
+/// 生成 32 字节随机令牌并转为 hex 字符串
+std::string generateRandomTokenHex() {
+    uint8_t token_bytes[32];
 #ifdef NEVO_HAS_SODIUM
-    std::error_code ec;
-    if (!std::filesystem::exists(password_file_path_, ec)) {
-        NEVO_LOG_INFO("server", "No persisted admin password file found at {}", password_file_path_);
-        return;
-    }
-
-    std::ifstream ifs(password_file_path_, std::ios::binary);
-    if (!ifs) {
-        NEVO_LOG_ERROR("server", "Failed to open admin password file for reading: {}", password_file_path_);
-        return;
-    }
-
-    // Read nonce (24 bytes)
-    uint8_t nonce[crypto_secretbox_NONCEBYTES];
-    ifs.read(reinterpret_cast<char*>(nonce), sizeof(nonce));
-    if (ifs.gcount() != static_cast<std::streamsize>(sizeof(nonce))) {
-        NEVO_LOG_ERROR("server", "Admin password file is corrupted (nonce too short)");
-        return;
-    }
-
-    // Read the rest (ciphertext)
-    std::vector<uint8_t> ciphertext(
-        (std::istreambuf_iterator<char>(ifs)),
-        std::istreambuf_iterator<char>());
-    ifs.close();
-
-    if (ciphertext.size() < crypto_secretbox_MACBYTES) {
-        NEVO_LOG_ERROR("server", "Admin password file is corrupted (ciphertext too short)");
-        return;
-    }
-
-    static constexpr const char* APP_SECRET = "NEVO_ADMIN_VAULT_SECRET_KEY_2024_v1";
-    uint8_t key[crypto_secretbox_KEYBYTES];
-    crypto_generichash(key, sizeof(key),
-                       reinterpret_cast<const uint8_t*>(APP_SECRET), strlen(APP_SECRET),
-                       nullptr, 0);
-
-    std::vector<uint8_t> plaintext(ciphertext.size() - crypto_secretbox_MACBYTES);
-    if (crypto_secretbox_open_easy(plaintext.data(),
-                                   ciphertext.data(), ciphertext.size(),
-                                   nonce, key) != 0) {
-        NEVO_LOG_ERROR("server", "Failed to decrypt admin password file — data may be tampered or corrupted");
-        return;
-    }
-
-    admin_password_hash_.assign(reinterpret_cast<const char*>(plaintext.data()), plaintext.size());
-    NEVO_LOG_INFO("server", "Admin password loaded from encrypted file {}", password_file_path_);
+    randombytes_buf(token_bytes, sizeof(token_bytes));
 #else
-    NEVO_LOG_INFO("server", "Cannot load admin password: libsodium not available");
+    std::random_device rd;
+    std::uniform_int_distribution<uint8_t> dist(0, 255);
+    for (size_t i = 0; i < sizeof(token_bytes); ++i) {
+        token_bytes[i] = dist(rd);
+    }
 #endif
+    char hex_buf[65];
+    for (size_t i = 0; i < sizeof(token_bytes); ++i) {
+        snprintf(hex_buf + i * 2, 3, "%02x", token_bytes[i]);
+    }
+    hex_buf[64] = '\0';
+    return std::string(hex_buf, 64);
+}
+} // namespace
+
+std::string ServerCore::generateAdminAuthToken() {
+    std::lock_guard<std::mutex> lock(admin_auth_token_mutex_);
+    admin_auth_token_ = generateRandomTokenHex();
+    NEVO_LOG_INFO("server", "Admin auth token regenerated");
+    return admin_auth_token_;
+}
+
+std::string ServerCore::ensureAdminAuthToken() {
+    std::lock_guard<std::mutex> lock(admin_auth_token_mutex_);
+    if (admin_auth_token_.empty()) {
+        admin_auth_token_ = generateRandomTokenHex();
+        NEVO_LOG_INFO("server", "Admin auth token generated");
+    }
+    return admin_auth_token_;
+}
+
+bool ServerCore::verifyAdminAuthToken(const std::string& token) const {
+    std::lock_guard<std::mutex> lock(admin_auth_token_mutex_);
+    if (admin_auth_token_.empty() || token.empty()) {
+        return false;
+    }
+    if (token.size() != admin_auth_token_.size()) {
+        return false;
+    }
+    // 常量时间比较，防止时序侧信道
+    uint8_t diff = 0;
+    for (size_t i = 0; i < token.size(); ++i) {
+        diff |= static_cast<uint8_t>(token[i]) ^ static_cast<uint8_t>(admin_auth_token_[i]);
+    }
+    return diff == 0;
+}
+
+bool ServerCore::hasAdminAuthToken() const {
+    std::lock_guard<std::mutex> lock(admin_auth_token_mutex_);
+    return !admin_auth_token_.empty();
 }
 
 ServerConfig ServerCore::config() const {
@@ -1352,19 +1344,19 @@ void ServerCore::rotateSessionKey() {
 
     ++key_epoch_;
 
-    // 获取所有已认证会话的快照
-    std::vector<std::pair<UserId, SessionPtr>> authenticated_sessions;
+    // 构建 用户 -> 该用户所有会话 的映射（同账号多设备需要全部通知）
+    std::unordered_map<UserId, std::vector<SessionPtr>> sessions_by_user;
     {
         std::lock_guard<std::mutex> lock(sessions_mutex_);
         for (const auto& [sid, session] : sessions_) {
-            if (session->isAuthenticated()) {
-                authenticated_sessions.emplace_back(session->userId(), session);
+            if (session->isAuthenticated() && session->userId()) {
+                sessions_by_user[session->userId()].push_back(session);
             }
         }
     }
 
     size_t notified_count = 0;
-    for (const auto& [user_id, session] : authenticated_sessions) {
+    for (const auto& [user_id, user_sessions] : sessions_by_user) {
         if (!user_id) continue;
 
         // 从数据库获取客户端公钥
@@ -1381,25 +1373,37 @@ void ServerCore::rotateSessionKey() {
             continue;
         }
 
-        // 生成新密钥并加密
+        // 每个用户生成一份新密钥并加密（同账号多设备共享同一密钥）
         auto encrypted_key = generateSessionKeyForClient(user_id, client_pubkey);
         if (encrypted_key.empty()) {
             NEVO_LOG_ERROR("server", "Key rotation failed for user_id={}: encryption failed", user_id.value);
             continue;
         }
 
-        // 发送个体 KeyRotationRequest
-        control::ControlMessage msg;
-        auto* req = msg.mutable_key_rotation_request();
-        req->set_key_epoch(key_epoch_);
-        req->set_encrypted_session_key(
-            std::string(reinterpret_cast<const char*>(encrypted_key.data()), encrypted_key.size()));
-        session->sendControl(msg, ControlMessageType::KeyRotationRequest, 0);
-        ++notified_count;
+        if (audio_relay_) {
+            const uint8_t* rotated_key = getClientSessionKey(user_id);
+            audio_relay_->rotateClientKey(user_id, rotated_key);
+        }
+
+        // 向该用户的所有会话（设备）发送个体 KeyRotationRequest
+        for (const auto& s : user_sessions) {
+            control::ControlMessage msg;
+            auto* req = msg.mutable_key_rotation_request();
+            req->set_key_epoch(key_epoch_);
+            req->set_encrypted_session_key(
+                std::string(reinterpret_cast<const char*>(encrypted_key.data()), encrypted_key.size()));
+            s->sendControl(msg, ControlMessageType::KeyRotationRequest, 0);
+            ++notified_count;
+        }
+    }
+
+    size_t total_sessions = 0;
+    for (const auto& [uid, user_sessions] : sessions_by_user) {
+        total_sessions += user_sessions.size();
     }
 
     NEVO_LOG_INFO("server", "Key rotation complete, notified {} / {} clients",
-                  notified_count, authenticated_sessions.size());
+                  notified_count, total_sessions);
 }
 
 void ServerCore::startKeyRotationTimer() {
@@ -1486,6 +1490,39 @@ void ServerCore::removeVideoRelayMapping(UserId user_id) {
 void ServerCore::updateVideoRelayChannel(UserId user_id, ChannelId channel_id) {
     if (video_relay_) {
         video_relay_->updateClientChannel(user_id, channel_id);
+    }
+}
+
+void ServerCore::broadcastScreenShareState(UserId sharer_id, bool is_sharing,
+                                            int source_type, const std::string& source_name,
+                                            int width, int height) {
+    control::ControlMessage control_msg;
+    auto* state = control_msg.mutable_screen_share_state();
+    state->set_user_id(sharer_id.value);
+    state->set_sharing(is_sharing);
+    state->set_source_type(source_type);
+    state->set_source_name(source_name);
+    state->set_width(width);
+    state->set_height(height);
+
+    ChannelId channel_id;
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+        for (const auto& [sid, session] : sessions_) {
+            if (session->userId() == sharer_id) {
+                channel_id = session->getChannelId();
+                break;
+            }
+        }
+    }
+
+    if (!channel_id) return;
+
+    std::lock_guard<std::mutex> lock(sessions_mutex_);
+    for (const auto& [sid, session] : sessions_) {
+        if (session->getChannelId() == channel_id) {
+            session->sendControl(control_msg, ControlMessageType::ScreenShareState, 0);
+        }
     }
 }
 

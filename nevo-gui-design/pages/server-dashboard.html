@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>服务端 — 仪表盘</title>
+    <style id="theme-vars">
+/* NEVO GUI Design System — Amber Gold Theme */
+/* Brand: NEVO VoIP — Secure Voice Communication */
+
+:root {
+  /* === Color System === */
+  --color-primary: #F5B731;
+  --color-primary-hover: #E0A528;
+  --color-primary-dim: rgba(245, 183, 49, 0.12);
+  --color-primary-subtle: rgba(245, 183, 49, 0.06);
+
+  --color-bg-base: #0F0D0A;
+  --color-bg-secondary: #16140F;
+  --color-bg-tertiary: #1D1A13;
+  --color-bg-elevated: #242017;
+  --color-bg-hover: #2B2619;
+  --color-bg-active: #332D1F;
+  --color-bg-overlay: rgba(0, 0, 0, 0.65);
+
+  --color-border: #2B2619;
+  --color-border-light: #3D3625;
+  --color-border-focus: #F5B731;
+
+  --color-text-primary: #F0ECE4;
+  --color-text-secondary: #A89E8A;
+  --color-text-muted: #756B58;
+  --color-text-inverse: #0F0D0A;
+  --color-text-link: #F5B731;
+
+  --color-surface-card: #16140F;
+  --color-surface-sunken: #12100B;
+
+  /* State colors */
+  --state-success: #34D399;
+  --state-success-dim: rgba(52, 211, 153, 0.12);
+  --state-warning: #FBBF24;
+  --state-warning-dim: rgba(251, 191, 36, 0.12);
+  --state-error: #F87171;
+  --state-error-dim: rgba(248, 113, 113, 0.12);
+  --state-info: #60A5FA;
+  --state-info-dim: rgba(96, 165, 250, 0.12);
+
+  /* === Typography === */
+  --font-sans: 'Inter', 'MiSans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', monospace;
+
+  --text-xs: 0.6875rem;    /* 11px */
+  --text-sm: 0.8125rem;    /* 13px */
+  --text-base: 0.875rem;   /* 14px */
+  --text-lg: 1rem;         /* 16px */
+  --text-xl: 1.125rem;     /* 18px */
+  --text-2xl: 1.375rem;    /* 22px */
+  --text-3xl: 1.75rem;     /* 28px */
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+
+  --tracking-tight: -0.02em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.04em;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* === Radius === */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* === Spacing === */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* === Surface & Depth === */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-elevated: 0 4px 12px rgba(0, 0, 0, 0.04);
+  --shadow-modal: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-floating: 0 4px 16px rgba(0, 0, 0, 0.5);
+
+  /* === Transitions === */
+  --transition-fast: 0.12s ease;
+  --transition-normal: 0.2s ease;
+  --transition-slow: 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* === Utility Classes === */
+.heading-xl {
+  font-family: var(--font-sans);
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-text-primary);
+}
+
+.heading-lg {
+  font-family: var(--font-sans);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-text-primary);
+}
+
+.heading-md {
+  font-family: var(--font-sans);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  color: var(--color-text-primary);
+}
+
+.heading-sm {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-normal);
+  color: var(--color-text-primary);
+}
+
+.body-md {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-normal);
+  color: var(--color-text-secondary);
+}
+
+.caption {
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-normal);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-primary: var(--color-primary);
+    --color-border: var(--color-border);
+  }
+  @layer base {
+    body { background: var(--color-bg-base); color: var(--color-text-primary); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+    <main class="flex h-screen overflow-hidden">
+        <!-- Sidebar Navigation -->
+        <aside class="w-[220px] shrink-0 flex flex-col border-r" style="border-color: var(--color-border); background: var(--color-bg-secondary);">
+            <!-- Logo Area -->
+            <div class="px-5 py-5 flex items-center gap-3">
+                <div class="w-9 h-9 flex items-center justify-center" style="background: var(--color-primary); border-radius: var(--radius-md);">
+                    <i data-lucide="radio" class="w-5 h-5" style="color: var(--color-text-inverse);"></i>
+                </div>
+                <div class="min-w-0">
+                    <div class="text-sm font-semibold truncate" style="color: var(--color-text-primary);">NEVO</div>
+                    <div class="text-xs truncate" style="color: var(--color-text-muted);">管理面板</div>
+                </div>
+            </div>
+
+            <!-- Nav Links -->
+            <nav class="flex-1 px-3 py-3 space-y-1">
+                <!-- Active: 仪表盘 -->
+                <a href="#" class="flex items-center gap-3 px-3 py-2 rounded-md transition-colors" style="background: var(--color-primary-dim); border-left: 3px solid var(--color-primary); color: var(--color-primary); border-radius: 0 var(--radius-md) var(--radius-md) 0;">
+                    <i data-lucide="layout-grid" class="w-[18px] h-[18px] shrink-0"></i>
+                    <span class="text-sm font-medium whitespace-nowrap">仪表盘</span>
+                </a>
+                <!-- 会话管理 -->
+                <a href="#" id="nav-sessions" class="flex items-center gap-3 px-3 py-2 rounded-md transition-colors" style="color: var(--color-text-muted); border-left: 3px solid transparent;">
+                    <i data-lucide="users" class="w-[18px] h-[18px] shrink-0"></i>
+                    <span class="text-sm font-medium whitespace-nowrap">会话管理</span>
+                </a>
+                <!-- 频道 -->
+                <a href="#" class="flex items-center gap-3 px-3 py-2 rounded-md transition-colors" style="color: var(--color-text-muted); border-left: 3px solid transparent;">
+                    <i data-lucide="hash" class="w-[18px] h-[18px] shrink-0"></i>
+                    <span class="text-sm font-medium whitespace-nowrap">频道</span>
+                </a>
+                <!-- 性能监控 -->
+                <a href="#" class="flex items-center gap-3 px-3 py-2 rounded-md transition-colors" style="color: var(--color-text-muted); border-left: 3px solid transparent;">
+                    <i data-lucide="activity" class="w-[18px] h-[18px] shrink-0"></i>
+                    <span class="text-sm font-medium whitespace-nowrap">性能监控</span>
+                </a>
+                <!-- 系统配置 -->
+                <a href="#" class="flex items-center gap-3 px-3 py-2 rounded-md transition-colors" style="color: var(--color-text-muted); border-left: 3px solid transparent;">
+                    <i data-lucide="settings" class="w-[18px] h-[18px] shrink-0"></i>
+                    <span class="text-sm font-medium whitespace-nowrap">系统配置</span>
+                </a>
+                <!-- 服务器控制 -->
+                <a href="#" class="flex items-center gap-3 px-3 py-2 rounded-md transition-colors" style="color: var(--color-text-muted); border-left: 3px solid transparent;">
+                    <i data-lucide="server" class="w-[18px] h-[18px] shrink-0"></i>
+                    <span class="text-sm font-medium whitespace-nowrap">服务器控制</span>
+                </a>
+            </nav>
+
+            <!-- Bottom: Connection status + Shutdown -->
+            <div class="px-3 pb-4 space-y-3">
+                <div class="flex items-center gap-2 px-3 py-2">
+                    <span class="w-2 h-2 shrink-0" style="background: var(--state-success); border-radius: var(--radius-full);"></span>
+                    <span class="text-xs" style="color: var(--color-text-muted);">服务运行中</span>
+                </div>
+                <button class="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium whitespace-nowrap transition-colors" style="background: var(--state-error-dim); color: var(--state-error); border-radius: var(--radius-md);">
+                    <i data-lucide="power" class="w-3.5 h-3.5 shrink-0"></i>
+                    <span>关闭服务器</span>
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <div class="flex-1 flex flex-col overflow-hidden" style="background: var(--color-bg-base);">
+
+            <!-- Topbar -->
+            <header class="shrink-0 flex items-center justify-between px-6 py-4 border-b" style="border-color: var(--color-border);">
+                <h1 class="text-xl font-semibold" style="color: var(--color-text-primary);">仪表盘</h1>
+                <div class="flex items-center gap-3">
+                    <span class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium whitespace-nowrap" style="background: var(--color-bg-secondary); border: 1px solid var(--color-border); border-radius: var(--radius-md); color: var(--color-text-secondary);">
+                        <i data-lucide="clock" class="w-3.5 h-3.5 shrink-0"></i>
+                        运行 2h 15m
+                    </span>
+                    <button class="inline-flex items-center justify-center w-8 h-8 whitespace-nowrap transition-colors" style="background: var(--color-bg-secondary); border: 1px solid var(--color-border); border-radius: var(--radius-md); color: var(--color-text-secondary);">
+                        <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                    </button>
+                    <button class="inline-flex items-center justify-center w-8 h-8 whitespace-nowrap transition-colors" style="background: var(--state-error-dim); border: 1px solid transparent; border-radius: var(--radius-md); color: var(--state-error);">
+                        <i data-lucide="power" class="w-4 h-4"></i>
+                    </button>
+                </div>
+            </header>
+
+            <!-- Scrollable Content -->
+            <div class="flex-1 overflow-y-auto no-scrollbar p-6 space-y-6">
+
+                <!-- Stats Grid: 4 cards 2x2 -->
+                <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                    <!-- Card: 服务状态 -->
+                    <div class="flex flex-col items-center justify-center p-5 text-center" style="background: var(--color-bg-secondary); border: 1px solid var(--color-border); border-radius: var(--radius-lg);">
+                        <div class="text-xs font-medium mb-3" style="color: var(--color-text-muted);">服务状态</div>
+                        <div class="text-lg font-bold flex items-center gap-2" style="color: var(--state-success);">
+                            <span class="w-2.5 h-2.5 shrink-0" style="background: var(--state-success); border-radius: var(--radius-full);"></span>
+                            运行中
+                        </div>
+                    </div>
+                    <!-- Card: 在线用户 -->
+                    <div class="flex flex-col items-center justify-center p-5 text-center" style="background: var(--color-bg-secondary); border: 1px solid var(--color-border); border-radius: var(--radius-lg);">
+                        <div class="text-xs font-medium mb-3" style="color: var(--color-text-muted);">在线用户</div>
+                        <div class="text-lg font-bold" style="color: var(--color-text-primary); font-family: var(--font-mono);">12</div>
+                        <div class="text-xs mt-1" style="color: var(--color-text-muted);">活跃会话 8</div>
+                    </div>
+                    <!-- Card: 频道数 -->
+                    <div class="flex flex-col items-center justify-center p-5 text-center" style="background: var(--color-bg-secondary); border: 1px solid var(--color-border); border-radius: var(--radius-lg);">
+                        <div class="text-xs font-medium mb-3" style="color: var(--color-text-muted);">频道数</div>
+                        <div class="text-lg font-bold" style="color: var(--color-text-primary); font-family: var(--font-mono);">6</div>
+                    </div>
+                    <!-- Card: 数据包转发 -->
+                    <div class="flex flex-col items-center justify-center p-5 text-center" style="background: var(--color-bg-secondary); border: 1px solid var(--color-border); border-radius: var(--radius-lg);">
+                        <div class="text-xs font-medium mb-3" style="color: var(--color-text-muted);">数据包转发</div>
+                        <div class="text-lg font-bold" style="color: var(--color-text-primary); font-family: var(--font-mono);">45.2K</div>
+                        <div class="text-xs mt-1" style="color: var(--color-text-muted);">运行时间 2h 15m</div>
+                    </div>
+                </div>
+
+                <!-- Network Addresses + Quick Actions row -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <!-- Network Addresses Card -->
+                    <div class="p-5" style="background: var(--color-bg-secondary); border: 1px solid var(--color-border); border-radius: var(--radius-lg);">
+                        <div class="text-xs font-medium mb-4" style="color: var(--color-text-muted);">网络地址</div>
+                        <div class="space-y-3">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs" style="color: var(--color-text-secondary);">IPv4</span>
+                                <span class="text-sm font-medium mono" style="color: var(--color-primary);">192.168.1.100</span>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs" style="color: var(--color-text-secondary);">IPv6</span>
+                                <span class="text-sm font-medium mono" style="color: var(--color-text-secondary);">::1</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Quick Actions Card -->
+                    <div class="p-5" style="background: var(--color-bg-secondary); border: 1px solid var(--color-border); border-radius: var(--radius-lg);">
+                        <div class="text-xs font-medium mb-4" style="color: var(--color-text-muted);">快捷操作</div>
+                        <div class="flex gap-3">
+                            <button class="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors" style="background: transparent; border: 1px solid var(--color-border); border-radius: var(--radius-md); color: var(--color-text-secondary);">
+                                <i data-lucide="refresh-cw" class="w-4 h-4 shrink-0"></i>
+                                刷新数据
+                            </button>
+                            <button class="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors" style="background: transparent; border: 1px solid var(--state-error); border-radius: var(--radius-md); color: var(--state-error);">
+                                <i data-lucide="unplug" class="w-4 h-4 shrink-0"></i>
+                                断开所有连接
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Active Sessions Preview + Channel Preview row -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <!-- Active Sessions Preview -->
+                    <div class="p-5" style="background: var(--color-bg-secondary); border: 1px solid var(--color-border); border-radius: var(--radius-lg);">
+                        <div class="flex items-center justify-between mb-4">
+                            <div class="text-xs font-medium" style="color: var(--color-text-muted);">活跃会话</div>
+                            <a href="#" id="nav-sessions-link" class="text-xs font-medium whitespace-nowrap" style="color: var(--color-primary);">查看全部 →</a>
+                        </div>
+                        <table class="w-full">
+                            <thead>
+                                <tr class="text-xs" style="color: var(--color-text-muted);">
+                                    <th class="text-left pb-3 font-medium">用户</th>
+                                    <th class="text-left pb-3 font-medium">地址</th>
+                                    <th class="text-left pb-3 font-medium">频道</th>
+                                    <th class="text-right pb-3 font-medium">状态</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr class="border-t" style="border-color: var(--color-border);">
+                                    <td class="py-2.5 text-sm font-medium mono truncate" style="color: var(--color-text-primary);">alice</td>
+                                    <td class="py-2.5 text-xs mono truncate" style="color: var(--color-text-secondary);">192.168.1.50</td>
+                                    <td class="py-2.5 text-xs truncate" style="color: var(--color-text-secondary);">语音大厅</td>
+                                    <td class="py-2.5 text-right">
+                                        <span class="inline-flex items-center px-2 py-0.5 text-xs font-medium whitespace-nowrap" style="background: var(--state-success-dim); color: var(--state-success); border-radius: var(--radius-full);">在线</span>
+                                    </td>
+                                </tr>
+                                <tr class="border-t" style="border-color: var(--color-border);">
+                                    <td class="py-2.5 text-sm font-medium mono truncate" style="color: var(--color-text-primary);">bob</td>
+                                    <td class="py-2.5 text-xs mono truncate" style="color: var(--color-text-secondary);">192.168.1.73</td>
+                                    <td class="py-2.5 text-xs truncate" style="color: var(--color-text-secondary);">会议室</td>
+                                    <td class="py-2.5 text-right">
+                                        <span class="inline-flex items-center px-2 py-0.5 text-xs font-medium whitespace-nowrap" style="background: var(--state-warning-dim); color: var(--state-warning); border-radius: var(--radius-full);">认证中</span>
+                                    </td>
+                                </tr>
+                                <tr class="border-t" style="border-color: var(--color-border);">
+                                    <td class="py-2.5 text-sm font-medium mono truncate" style="color: var(--color-text-primary);">charlie</td>
+                                    <td class="py-2.5 text-xs mono truncate" style="color: var(--color-text-secondary);">10.0.0.12</td>
+                                    <td class="py-2.5 text-xs truncate" style="color: var(--color-text-secondary);">语音大厅</td>
+                                    <td class="py-2.5 text-right">
+                                        <span class="inline-flex items-center px-2 py-0.5 text-xs font-medium whitespace-nowrap" style="background: var(--state-success-dim); color: var(--state-success); border-radius: var(--radius-full);">在线</span>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Channel Preview -->
+                    <div class="p-5" style="background: var(--color-bg-secondary); border: 1px solid var(--color-border); border-radius: var(--radius-lg);">
+                        <div class="flex items-center justify-between mb-4">
+                            <div class="text-xs font-medium" style="color: var(--color-text-muted);">频道列表</div>
+                            <a href="#" class="text-xs font-medium whitespace-nowrap" style="color: var(--color-primary);">查看全部 →</a>
+                        </div>
+                        <div class="space-y-0">
+                            <!-- Channel 1 -->
+                            <div class="flex items-center justify-between py-3 border-t" style="border-color: var(--color-border);">
+                                <div class="flex items-center gap-3 min-w-0 flex-1">
+                                    <i data-lucide="volume-2" class="w-4 h-4 shrink-0" style="color: var(--color-primary);"></i>
+                                    <div class="min-w-0 flex-1">
+                                        <div class="text-sm font-medium truncate" style="color: var(--color-text-primary);">语音大厅</div>
+                                        <div class="text-xs mono truncate" style="color: var(--color-text-muted);">#general-voice</div>
+                                    </div>
+                                </div>
+                                <span class="inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium whitespace-nowrap shrink-0 ml-3" style="background: var(--color-primary-dim); color: var(--color-primary); border-radius: var(--radius-full);">5</span>
+                            </div>
+                            <!-- Channel 2 -->
+                            <div class="flex items-center justify-between py-3 border-t" style="border-color: var(--color-border);">
+                                <div class="flex items-center gap-3 min-w-0 flex-1">
+                                    <i data-lucide="volume-2" class="w-4 h-4 shrink-0" style="color: var(--color-primary);"></i>
+                                    <div class="min-w-0 flex-1">
+                                        <div class="text-sm font-medium truncate" style="color: var(--color-text-primary);">会议室</div>
+                                        <div class="text-xs mono truncate" style="color: var(--color-text-muted);">#meeting-room</div>
+                                    </div>
+                                </div>
+                                <span class="inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium whitespace-nowrap shrink-0 ml-3" style="background: var(--color-primary-dim); color: var(--color-primary); border-radius: var(--radius-full);">3</span>
+                            </div>
+                            <!-- Channel 3 -->
+                            <div class="flex items-center justify-between py-3 border-t" style="border-color: var(--color-border);">
+                                <div class="flex items-center gap-3 min-w-0 flex-1">
+                                    <i data-lucide="volume-2" class="w-4 h-4 shrink-0" style="color: var(--color-primary);"></i>
+                                    <div class="min-w-0 flex-1">
+                                        <div class="text-sm font-medium truncate" style="color: var(--color-text-primary);">技术支持</div>
+                                        <div class="text-xs mono truncate" style="color: var(--color-text-muted);">#tech-support</div>
+                                    </div>
+                                </div>
+                                <span class="inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium whitespace-nowrap shrink-0 ml-3" style="background: var(--color-primary-dim); color: var(--color-primary); border-radius: var(--radius-full);">4</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </main>
+    <script>lucide.createIcons();</script>
+</body>
+</html>

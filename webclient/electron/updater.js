@@ -30,7 +30,77 @@ const CFG = {
   progressThrottleMs: 200,
   setupTimeoutMs: 5 * 60 * 1000,
   assetName: 'latest.json',
+  zipMaxEntries: 5000,                    // 解压条目数上限（zip 炸弹防护）
+  zipMaxTotalBytes: 512 * 1024 * 1024,    // 解压总字节上限 512MB（zip 炸弹防护）
+  requireSignedManifest: true,            // 强制清单签名（可被 package.json updater 配置覆盖）
 };
+
+// package.json 中的 updater 配置（如 requireSignedManifest），缺省保持安全默认值
+try {
+  const pkgJson = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf-8'));
+  const updaterCfg = (pkgJson && pkgJson.updater) || {};
+  if (typeof updaterCfg.requireSignedManifest === 'boolean') {
+    CFG.requireSignedManifest = updaterCfg.requireSignedManifest;
+  }
+} catch (_) { /* 使用内置默认值 */ }
+
+// ============================================================
+// 清单签名（Ed25519，供应链防篡改）
+// ============================================================
+// Ed25519 SPKI DER 前缀：与 32 字节原始公钥拼接后构造 crypto KeyObject
+const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+// 发布清单验证公钥（32 字节原始公钥，hex 编码）。
+// 安全警告：当前为开发/测试公钥。生产发布前必须替换为正式发布密钥对的公钥，
+// 对应私钥仅由发布流水线持有（环境变量 NEVO_RELEASE_KEY_HEX，64 字符 hex 种子），
+// 严禁将私钥写入仓库或任何客户端代码。
+let PUBLIC_KEY_HEX = '2b9c2782c3016a9e4bfedf75b1648fc6e54686a4b2529130eb946789d93dd6fc';
+
+let _pubKeyObject = null;
+function publicKeyObject() {
+  if (!_pubKeyObject) {
+    _pubKeyObject = crypto.createPublicKey({
+      key: Buffer.concat([ED25519_SPKI_PREFIX, Buffer.from(PUBLIC_KEY_HEX, 'hex')]),
+      format: 'der',
+      type: 'spki',
+    });
+  }
+  return _pubKeyObject;
+}
+
+/**
+ * 注入/更换清单验证公钥（32 字节原始公钥，hex）。
+ * 生产环境由发布配置注入正式公钥；测试环境注入运行时生成的测试公钥，
+ * 从而仓库中不保存任何私钥材料。
+ */
+function setPublicKey(hex) {
+  if (typeof hex !== 'string' || !/^[0-9a-f]{64}$/i.test(hex)) {
+    throw new Error('Invalid Ed25519 public key hex (expected 64 hex chars)');
+  }
+  PUBLIC_KEY_HEX = hex.toLowerCase();
+  _pubKeyObject = null;
+}
+
+/** 规范化字节：清单对象去除 signature 字段后的紧凑 JSON 序列化（键序与发布端 make_release.py 一致）。 */
+function canonicalManifestBytes(parsed) {
+  const copy = {};
+  for (const k of Object.keys(parsed)) {
+    if (k === 'signature') continue;
+    copy[k] = parsed[k];
+  }
+  return Buffer.from(JSON.stringify(copy), 'utf-8');
+}
+
+/**
+ * 验证清单 Ed25519 签名。message = sha256(去除 signature 字段后的规范化字节)。
+ * sigHex 必须为 128 字符 hex（Ed25519 签名 64 字节）。
+ */
+function verifyManifestSignature(text, sigHex) {
+  if (typeof sigHex !== 'string' || !/^[0-9a-f]{128}$/i.test(sigHex)) return false;
+  let parsed;
+  try { parsed = JSON.parse(text); } catch (_) { return false; }
+  const msg = crypto.createHash('sha256').update(canonicalManifestBytes(parsed)).digest();
+  return crypto.verify(null, msg, publicKeyObject(), Buffer.from(sigHex, 'hex'));
+}
 
 // ============================================================
 // 版本解析与比较
@@ -69,25 +139,85 @@ function proxyGithubUrl(url, prefix) {
 // ============================================================
 // 清单解析
 // ============================================================
-function parseManifest(text) {
-  const data = JSON.parse(text);
-  if (!data || typeof data.version !== 'string') {
+/**
+ * 相对路径安全性校验：必须是纯相对路径，拒绝空段、'.'/'..'、盘符前缀、
+ * 反斜杠分隔符（统一按 '/' 处理）等一切可能逃逸目标目录的写法。
+ */
+function isSafeRelPath(rel) {
+  if (typeof rel !== 'string' || rel.length === 0) return false;
+  const parts = rel.replace(/\\/g, '/').split('/');
+  if (parts.some((p) => p === '' || p === '.' || p === '..')) return false;
+  if (/^[A-Za-z]:/.test(parts[0])) return false;
+  return true;
+}
+
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/i;
+
+/**
+ * 解析并校验更新清单。
+ * opts.requireSignature：缺省取 CFG.requireSignedManifest（package.json 可配置，默认 true）。
+ * 安全规则：
+ *  - 含 signature 字段 → 必须通过 Ed25519 验证，失败即抛错；
+ *  - 无 signature 且 requireSignature → 拒绝；
+ *  - full/delta 条目缺 sha256（或非 64 位 hex）→ 拒绝（下载后必须能校验完整性）；
+ *  - files 条目缺 path/sha256 或路径不安全 → 拒绝。
+ */
+function parseManifest(text, opts = {}) {
+  const requireSig = opts.requireSignature === undefined
+    ? CFG.requireSignedManifest
+    : opts.requireSignature;
+  let data;
+  try { data = JSON.parse(text); } catch (_) { throw new Error('Invalid manifest: bad json'); }
+  if (!data || typeof data !== 'object' || typeof data.version !== 'string') {
     throw new Error('Invalid manifest: version missing');
+  }
+  if (typeof data.signature === 'string') {
+    if (!verifyManifestSignature(text, data.signature)) {
+      throw new Error('Invalid manifest: signature verification failed');
+    }
+  } else if (requireSig) {
+    throw new Error('Invalid manifest: signature missing');
   }
   if (!data.full_package || typeof data.full_package.url !== 'string') {
     throw new Error('Invalid manifest: full_package.url missing');
   }
+  if (typeof data.full_package.sha256 !== 'string' || !SHA256_HEX_RE.test(data.full_package.sha256)) {
+    throw new Error('Invalid manifest: full_package.sha256 missing or invalid');
+  }
+  if (!(Number.isFinite(data.full_package.size) && data.full_package.size > 0)) {
+    throw new Error('Invalid manifest: full_package.size missing or invalid');
+  }
+  if (data.delta) {
+    if (!data.delta.url || typeof data.delta.url !== 'string') {
+      throw new Error('Invalid manifest: delta.url missing');
+    }
+    if (typeof data.delta.sha256 !== 'string' || !SHA256_HEX_RE.test(data.delta.sha256)) {
+      throw new Error('Invalid manifest: delta.sha256 missing or invalid');
+    }
+    if (!(Number.isFinite(data.delta.size) && data.delta.size > 0)) {
+      throw new Error('Invalid manifest: delta.size missing or invalid');
+    }
+  }
+  const files = Array.isArray(data.files) ? data.files : [];
+  for (const f of files) {
+    if (!f || typeof f.path !== 'string' || !isSafeRelPath(f.path)) {
+      throw new Error('Invalid manifest: file entry path missing or unsafe');
+    }
+    if (typeof f.sha256 !== 'string' || !SHA256_HEX_RE.test(f.sha256)) {
+      throw new Error('Invalid manifest: file entry sha256 missing or invalid: ' + f.path);
+    }
+  }
   return {
     version: data.version,
     changelog: data.changelog || '',
-    files: Array.isArray(data.files) ? data.files : [],
+    files,
     full: {
       url: data.full_package.url,
-      size: data.full_package.size || 0,
-      sha256: data.full_package.sha256 || '',
+      size: data.full_package.size,
+      sha256: data.full_package.sha256,
     },
-    delta: (data.delta && data.delta.url)
-      ? { from: data.delta.from || '', url: data.delta.url, size: data.delta.size || 0, sha256: data.delta.sha256 || '' }
+    delta: data.delta
+      ? { from: data.delta.from || '', url: data.delta.url, size: data.delta.size, sha256: data.delta.sha256 }
       : null,
   };
 }
@@ -175,10 +305,10 @@ function sha256File(filePath) {
 
 /**
  * 断点续传下载。
- * opts: { onProgress(percent,speed,downloaded,total), shouldCancel(), retries, timeoutMs, sha256 }
+ * opts: { onProgress(percent,speed,downloaded,total), shouldCancel(), retries, timeoutMs, sha256, expectedSize }
  */
 async function downloadWithResume(url, destPath, opts = {}) {
-  const { onProgress, shouldCancel, sha256 } = opts;
+  const { onProgress, shouldCancel, sha256, expectedSize } = opts;
   const retries = opts.retries === undefined ? CFG.maxRetries : opts.retries;
   const timeoutMs = opts.timeoutMs === undefined ? CFG.timeoutMs : opts.timeoutMs;
   const partPath = destPath + '.part';
@@ -246,13 +376,22 @@ async function downloadWithResume(url, destPath, opts = {}) {
     }
 
     fs.renameSync(partPath, destPath);
+    // 完整性校验：sha256 必须与清单一致（强制），字节数必须与清单 size 一致；
+    // 任一失败即删除产物（含残留 .part）并报错。
     if (sha256) {
       const actual = sha256File(destPath);
       if (actual !== sha256) {
         fs.unlinkSync(destPath);
+        try { fs.unlinkSync(partPath); } catch (_) {}
         if (attempt < retries) { await sleep(delays[attempt]); continue; }
         throw new Error('sha256 mismatch');
       }
+    }
+    if (expectedSize && fs.statSync(destPath).size !== expectedSize) {
+      fs.unlinkSync(destPath);
+      try { fs.unlinkSync(partPath); } catch (_) {}
+      if (attempt < retries) { await sleep(delays[attempt]); continue; }
+      throw new Error('size mismatch');
     }
     return destPath;
   }
@@ -262,10 +401,10 @@ async function downloadWithResume(url, destPath, opts = {}) {
 /**
  * 多线路断点续传：按 urls 顺序尝试，统一使用 destPath + '.part'，
  * 线路失败自动切换下一线路；全部线路失败后按 retries 退避重试。
- * opts: { onProgress, shouldCancel, sha256, retries, timeoutMs, onFailover(urlIndex, url) }
+ * opts: { onProgress, shouldCancel, sha256, expectedSize, retries, timeoutMs, onFailover(urlIndex, url) }
  */
 async function downloadWithRoutes(urls, destPath, opts = {}) {
-  const { onProgress, shouldCancel, sha256, onFailover } = opts;
+  const { onProgress, shouldCancel, sha256, expectedSize, onFailover } = opts;
   const retries = opts.retries === undefined ? CFG.maxRetries : opts.retries;
   const timeoutMs = opts.timeoutMs === undefined ? CFG.timeoutMs : opts.timeoutMs;
   const partPath = destPath + '.part';
@@ -341,7 +480,7 @@ async function downloadWithRoutes(urls, destPath, opts = {}) {
 
       if (shouldCancel && shouldCancel()) { fs.unlinkSync(partPath); throw new Error('cancelled'); }
 
-      // 全部数据已写入：校验后再改名
+      // 全部数据已写入：完整性校验（sha256 强制 + 字节数与清单 size 一致）后再改名
       if (sha256) {
         const tmp = destPath + '.sha';
         fs.renameSync(partPath, tmp);
@@ -356,6 +495,14 @@ async function downloadWithRoutes(urls, destPath, opts = {}) {
         fs.renameSync(tmp, destPath);
       } else {
         fs.renameSync(partPath, destPath);
+      }
+      if (expectedSize && fs.statSync(destPath).size !== expectedSize) {
+        fs.unlinkSync(destPath);
+        try { fs.unlinkSync(partPath); } catch (_) {}
+        lastErr = new Error('size mismatch');
+        lastUrl = url;
+        if (u < urls.length - 1) { if (onFailover) onFailover(u, url); continue; }
+        break;
       }
       return destPath;
     }
@@ -562,7 +709,15 @@ class UpdateEngine {
 
       // 2) 多源清单下载：主源直连 + 各镜像，复用同一 assetUrl
       const { text, source } = await this._fetchManifestMulti(assetUrl, errors);
-      const manifest = parseManifest(text);
+      let manifest;
+      try {
+        manifest = parseManifest(text);
+      } catch (err) {
+        // 清单被拒绝（签名验证失败 / 缺 sha256 / 结构非法）→ 进入 error，拒绝后续下载
+        this._log('check_error', { error: 'manifest rejected: ' + err.message, result: 'failed' });
+        await this._setState('error');
+        throw new Error('manifest rejected: ' + err.message);
+      }
       this._manifest = manifest;
       this._source = source;
       if (!isNewerVersion(manifest.version, this.currentVersion)) {
@@ -609,8 +764,14 @@ class UpdateEngine {
     const target = mode === 'delta'
       ? manifest.delta.url
       : manifest.full.url;
+    // sha256 为强制校验（parseManifest 已保证其存在且合法）
     const sha = mode === 'delta' ? manifest.delta.sha256 : manifest.full.sha256;
-    const filename = target.split('/').pop() || (mode === 'delta' ? 'delta.zip' : 'setup.exe');
+    const expectedSize = mode === 'delta' ? manifest.delta.size : manifest.full.size;
+    // 下载文件名取自 URL path 末段，必须净化；空结果回退到固定文件名
+    let rawName = '';
+    try { rawName = new URL(target).pathname.split('/').pop() || ''; }
+    catch (_) { rawName = String(target || '').split('/').pop() || ''; }
+    const filename = sanitizeFilename(rawName, mode === 'delta' ? 'delta.zip' : 'setup.exe');
     const destPath = path.join(updateDir, filename);
     this._log('download_start', { mode, target_version: manifest.version, source: this._source });
     await this._setState('downloading');
@@ -625,7 +786,8 @@ class UpdateEngine {
     try {
       this._downloadedPath = await downloadWithRoutes(urls, destPath, {
         timeoutMs: CFG.timeoutMs,
-        sha256: sha || undefined,
+        sha256: sha,
+        expectedSize: expectedSize || undefined,
         shouldCancel: () => this._cancel,
         onProgress: (p, s, d, t) => this._emitProgress(p, s, d, t),
         onFailover: (idx, url) => this._log('route_failover', { target_version: manifest.version, route_index: idx, url }),
@@ -697,21 +859,36 @@ class UpdateEngine {
     const entries = [];
     for (const f of inner.files) {
       const rel = f.path.replace(/\\/g, '/');
+      // 路径校验：拒绝 ../ 逃逸与绝对路径（parseManifest 已校验，此处纵深防御）
+      if (!isSafeRelPath(rel)) throw new Error('unsafe file path in delta manifest: ' + f.path);
       const src = path.join(extracted, rel);
       if (!fs.existsSync(src)) continue;
+      // 校验解压产物与清单 sha256 一致，防止镜像源篡改 delta 包内容
+      if (f.sha256 && sha256File(src) !== f.sha256.toLowerCase()) {
+        throw new Error('delta file sha256 mismatch: ' + rel);
+      }
       const dst = path.join(staged, rel);
       fs.mkdirSync(path.dirname(dst), { recursive: true });
       fs.copyFileSync(src, dst);
-      entries.push({ rel, sha256: f.sha256 });
+      entries.push({ path: rel, sha256: f.sha256 });
     }
     if (entries.length === 0) throw new Error('delta package contains no files');
 
-    // 生成替换脚本：等主进程退出 → 备份 → 替换 → 失败回滚 → 启动
+    // 落盘替换计划（固定文件名 apply_manifest.json，由 apply_update.js 读取）。
+    // 文件操作不再写入 .cmd，避免批处理特殊字符注入。
     const pid = process.pid;
     const appExe = process.execPath;
+    const applyJsPath = getApplyJsPath();
     const cmdPath = path.join(updateDir, 'apply_update.cmd');
     const backupDir = path.join(updateDir, 'backup');
-    const cmd = buildApplyCmd(pid, appExe, staged, resourcesDir, backupDir, entries);
+    const plan = {
+      appDir: resourcesDir,
+      stagedDir: staged,
+      backupDir: backupDir,
+      files: entries,
+    };
+    fs.writeFileSync(path.join(updateDir, 'apply_manifest.json'), JSON.stringify(plan, null, 2), 'utf-8');
+    const cmd = buildApplyCmd(pid, appExe, applyJsPath);
     fs.writeFileSync(cmdPath, cmd, { encoding: 'utf-8' });
     this._stagedCmd = cmdPath;
     this._log('apply_ready', { mode: 'delta', file_count: entries.length });
@@ -803,17 +980,57 @@ function getResourcesDir() {
   return path.join(__dirname, '..');
 }
 
+/** apply_update.js 路径：packaged 时位于 app.asar 内（Electron 支持以 node 模式执行 asar 内脚本）。 */
+function getApplyJsPath() {
+  if (electron && electron.app && electron.app.isPackaged) {
+    return path.join(electron.app.getAppPath(), 'apply_update.js');
+  }
+  return path.join(__dirname, 'apply_update.js');
+}
+
+/**
+ * 下载文件名净化：仅保留 [A-Za-z0-9._-]，非法字符替换为 '_'；
+ * 纯点号（. / .. / ...）或空结果回退到 fallback。防止 URL 末段被用作路径穿越或保留名。
+ */
+function sanitizeFilename(name, fallback) {
+  let s = '';
+  try { s = decodeURIComponent(String(name || '')); } catch (_) { s = String(name || ''); }
+  s = s.replace(/[^A-Za-z0-9._-]/g, '_');
+  s = s.replace(/^\.+$/, '');
+  if (!s) return fallback;
+  return s;
+}
+
+/** 校验 zip 条目名并将其解析到 outDir 内；任何可能逃逸的条目直接抛错。 */
+function resolveZipDest(outDir, name) {
+  const root = path.resolve(outDir);
+  if (typeof name !== 'string' || name.includes('\0')) {
+    throw new Error('unsafe zip entry: ' + name);
+  }
+  if (!isSafeRelPath(name)) {
+    throw new Error('unsafe zip entry: ' + name);
+  }
+  const dest = path.resolve(root, name.replace(/\\/g, '/'));
+  if (dest !== root && !dest.startsWith(root + path.sep)) {
+    throw new Error('unsafe zip entry: ' + name);
+  }
+  return dest;
+}
+
 // 纯 Node zip 解压（仅支持无压缩/存储与 deflate 的 zip，足以满足发布产物）
+// 安全加固：条目名路径校验（防 ../ 逃逸与绝对路径）+ zip 炸弹防护（条目数与解压总字节上限）
 function extractZip(zipPath, outDir) {
   const zlib = require('zlib');
   const buf = fs.readFileSync(zipPath);
   let offset = 0;
-  const pending = [];
+  let entryCount = 0;
+  let totalBytes = 0;
   while (offset + 30 <= buf.length) {
     // 局部文件头签名 0x04034b50
     if (buf.readUInt32LE(offset) !== 0x04034b50) break;
     const method = buf.readUInt16LE(offset + 8);
     const compSize = buf.readUInt32LE(offset + 18);
+    const uncompSize = buf.readUInt32LE(offset + 22);
     const nameLen = buf.readUInt16LE(offset + 26);
     const extraLen = buf.readUInt16LE(offset + 28);
     const name = buf.toString('utf-8', offset + 30, offset + 30 + nameLen);
@@ -821,56 +1038,59 @@ function extractZip(zipPath, outDir) {
     const data = buf.slice(dataStart, dataStart + compSize);
     offset = dataStart + compSize;
     if (/\/$/.test(name)) continue;
-    const dest = path.join(outDir, name);
+    entryCount++;
+    if (entryCount > CFG.zipMaxEntries) {
+      throw new Error('zip entry count exceeds limit (' + CFG.zipMaxEntries + ')');
+    }
+    if (uncompSize > 0 && totalBytes + uncompSize > CFG.zipMaxTotalBytes) {
+      throw new Error('zip total uncompressed size exceeds limit');
+    }
+    const dest = resolveZipDest(outDir, name);
+    let payload;
+    if (method === 0) payload = data;
+    else if (method === 8) {
+      // maxOutputLength 防止解压炸弹在内存中膨胀
+      payload = zlib.inflateRawSync(data, { maxOutputLength: CFG.zipMaxTotalBytes - totalBytes });
+    } else {
+      throw new Error('unsupported zip method ' + method);
+    }
+    totalBytes += payload.length;
+    if (totalBytes > CFG.zipMaxTotalBytes) {
+      throw new Error('zip total uncompressed size exceeds limit');
+    }
     fs.mkdirSync(path.dirname(dest), { recursive: true });
-    if (method === 0) fs.writeFileSync(dest, data);
-    else if (method === 8) fs.writeFileSync(dest, zlib.inflateRawSync(data));
-    else throw new Error('unsupported zip method ' + method);
+    fs.writeFileSync(dest, payload);
   }
-  if (pending) pending.length = 0;
   return Promise.resolve();
 }
 
-// 生成增量替换脚本（等待主进程退出后逐文件备份+替换+回滚+启动）
-function buildApplyCmd(pid, appExe, stagedDir, resourcesDir, backupDir, entries) {
+/**
+ * 生成增量替换引导脚本。安全设计：脚本不再内嵌任何清单文件名（避免批处理
+ * 特殊字符注入），只做三件事：
+ *   1) 等待主进程退出（pid 为纯数字，安全）；
+ *   2) 以 node 模式（ELECTRON_RUN_AS_NODE）执行固定路径的 apply_update.js，
+ *      由它读取 updateDir/apply_manifest.json（固定文件名）完成备份→替换→回滚；
+ *   3) 重启应用。
+ * appExe/applyJsPath 为本地固定路径（% 转义为 %%），不含任何网络内容。
+ */
+function buildApplyCmd(pid, appExe, applyJsPath) {
+  const pidStr = String(parseInt(pid, 10) || 0);
+  const esc = (s) => String(s).replace(/\//g, '\\').replace(/%/g, '%%');
   const lines = ['@echo off', 'chcp 65001 >nul', 'setlocal enabledelayedexpansion', ''];
   lines.push('rem wait for app to exit');
   lines.push(':wait_loop');
-  lines.push(`tasklist /fi "PID eq ${pid}" 2>nul | findstr /I "${pid}" >nul`);
+  lines.push(`tasklist /fi "PID eq ${pidStr}" 2>nul | findstr /I "${pidStr}" >nul`);
   lines.push('if !errorlevel! == 0 (');
   lines.push('  timeout /t 1 /nobreak >nul');
   lines.push('  goto wait_loop');
   lines.push(')');
   lines.push('timeout /t 1 /nobreak >nul');
-  lines.push('set "STAGED=' + stagedDir.replace(/\//g, '\\') + '"');
-  lines.push('set "RES=' + resourcesDir.replace(/\//g, '\\') + '"');
-  lines.push('set "BACKUP=' + backupDir.replace(/\//g, '\\') + '"');
-  lines.push('set "FAILED=0"');
-  lines.push('mkdir "%BACKUP%" >nul 2>&1');
-  for (const e of entries) {
-    const rel = e.rel.replace(/\//g, '\\');
-    lines.push('');
-    lines.push(`if exist "%RES%\\${rel}" (`);
-    lines.push(`  copy /y "%RES%\\${rel}" "%BACKUP%\\${rel}" >nul 2>&1`);
-    lines.push(')');
-    lines.push(`if not exist "%STAGED%\\${rel}" ( echo MISSING %STAGED%\\${rel} & set "FAILED=1" )`);
-    lines.push(`xcopy /y /q "%STAGED%\\${rel}" "%RES%\\${rel}" >nul 2>&1`);
-    lines.push(`if errorlevel 1 ( set "FAILED=1" )`);
-  }
-  lines.push('');
-  lines.push('if !FAILED! == 1 (');
-  lines.push('  echo rollback...');
-  lines.push('  set "FAILED=0"');
-  for (const e of entries) {
-    const rel = e.rel.replace(/\//g, '\\');
-    lines.push(`  if exist "%BACKUP%\\${rel}" ( copy /y "%BACKUP%\\${rel}" "%RES%\\${rel}" >nul 2>&1 )`);
-    lines.push(`  if errorlevel 1 ( set "FAILED=1" )`);
-  }
-  lines.push('  echo Update failed, rollback done.');
-  lines.push(') else (');
-  lines.push(`  start "" "${appExe.replace(/\//g, '\\')}"`);
-  lines.push(')');
   lines.push('endlocal');
+  lines.push('rem apply files: run apply_update.js in node mode (fixed path, no dynamic args)');
+  lines.push('set "ELECTRON_RUN_AS_NODE=1"');
+  lines.push(`"${esc(appExe)}" "${esc(applyJsPath)}" "%~dp0"`);
+  lines.push('rem restart app');
+  lines.push(`start "" "${esc(appExe)}"`);
   return lines.join('\r\n');
 }
 
@@ -882,5 +1102,7 @@ module.exports = {
   downloadWithRoutes,
   median, probeOne, probeRoutes,
   UpdateEngine, defaultBaseDir, defaultCurrentVersion, defaultFetcher,
-  getResourcesDir, extractZip, buildApplyCmd,
+  getResourcesDir, getApplyJsPath, sanitizeFilename, isSafeRelPath,
+  resolveZipDest, extractZip, buildApplyCmd,
+  PUBLIC_KEY_HEX, setPublicKey, canonicalManifestBytes, verifyManifestSignature,
 };

@@ -3,11 +3,23 @@ import socket
 import struct
 import threading
 import time
+from collections import deque
 import numpy as np
 import sounddevice as sd
 
 from voice_crypto import VoiceCrypto, XCHACHA_NONCE_SIZE, POLY1305_TAG_SIZE
 from proto import voice_pb2
+
+# Ensure opus.dll is findable by ctypes.util.find_library('opus')
+import sys as _sys
+if getattr(_sys, 'frozen', False):
+    _OPUS_DLL_DIR = getattr(_sys, '_MEIPASS', '') or os.path.dirname(_sys.executable)
+else:
+    _OPUS_DLL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "build", "bin", "Release")
+    if not os.path.exists(_OPUS_DLL_DIR):
+        _OPUS_DLL_DIR = os.path.dirname(os.path.abspath(__file__))
+if os.path.isdir(_OPUS_DLL_DIR) and _OPUS_DLL_DIR not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = _OPUS_DLL_DIR + os.pathsep + os.environ.get("PATH", "")
 
 SAMPLE_RATE = 48000
 CHANNELS = 1
@@ -38,6 +50,7 @@ class VoiceEngine:
         self._crypto = VoiceCrypto()
         self._udp_sock = None
         self._udp_recv_thread = None
+        self._keepalive_thread = None
         self._running = False
         self._lock = threading.Lock()
 
@@ -68,7 +81,31 @@ class VoiceEngine:
         self._user_local_mutes = set()
         self._user_mutes_lock = threading.Lock()
 
+        # 逐包调试信息：仅在显式开启 debug 时写入内存环形缓冲，避免逐包文件日志
+        self._debug_enabled = False
+        self._debug_log = deque(maxlen=100)
+        self._debug_lock = threading.Lock()
+
         self.on_voice_received = None
+
+    def set_debug_enabled(self, enabled: bool):
+        """开启/关闭逐包调试记录（内存环形缓冲）。"""
+        self._debug_enabled = bool(enabled)
+
+    def get_debug_log(self) -> list:
+        """返回最近最多 100 条逐包调试记录的快照。"""
+        with self._debug_lock:
+            return list(self._debug_log)
+
+    def _pkt_debug(self, msg: str):
+        """记录逐包调试信息到内存环形缓冲（仅在 debug 开启时）。"""
+        if not self._debug_enabled:
+            return
+        try:
+            with self._debug_lock:
+                self._debug_log.append(msg)
+        except Exception:
+            pass
 
     @staticmethod
     def _apply_opus_option(obj, attr_name, value, method_name=None):
@@ -96,6 +133,18 @@ class VoiceEngine:
         self._server_udp_addr = (host, port)
         _log_wf(f"[VOICE_ENGINE] set_server_udp: {host}:{port}")
 
+    def _resolve_sendto_addr(self):
+        if not self._server_udp_addr or not self._udp_sock:
+            return self._server_udp_addr
+        host = self._server_udp_addr[0]
+        port = self._server_udp_addr[1]
+        try:
+            if self._udp_sock.family == socket.AF_INET6 and '.' in host:
+                return ('::ffff:' + host, port, 0, 0)
+        except Exception:
+            pass
+        return self._server_udp_addr
+
     def get_user_audio_levels(self):
         now = time.time()
         threshold = self._audio_level_staleness_ms / 1000.0
@@ -106,7 +155,7 @@ class VoiceEngine:
                 if uid == self._user_id or (now - ts) < threshold:
                     result[uid] = rms
         if result:
-            _log_wf(f"[VOICE_ENGINE] get_user_audio_levels: {list(result.keys())}")
+            self._pkt_debug(f"[VOICE_ENGINE] get_user_audio_levels: {list(result.keys())}")
         return result
 
     def set_user_info(self, user_id, channel_id):
@@ -119,6 +168,10 @@ class VoiceEngine:
     def set_session_key(self, key):
         if isinstance(key, (bytes, bytearray)):
             self._crypto.set_session_key(key)
+
+    def rotate_session_key(self, key):
+        if isinstance(key, (bytes, bytearray)):
+            self._crypto.rotate_key(key)
 
     def _send_registration_packet(self):
         """向服务器发送 UDP 注册包，让服务器知道我们的 UDP 端点"""
@@ -146,7 +199,7 @@ class VoiceEngine:
             header_len_prefix = struct.pack('<H', len(header_bytes))
             packet = header_len_prefix + header_bytes + encrypted
 
-            self._udp_sock.sendto(packet, self._server_udp_addr)
+            self._udp_sock.sendto(packet, self._resolve_sendto_addr())
             _log_wf(f"[VOICE_ENGINE] SENT registration packet to {self._server_udp_addr} uid={self._user_id} channel={self._channel_id}")
         except Exception as e:
             _log_wf(f"[VOICE_ENGINE] _send_registration_packet EXCEPTION: {e}")
@@ -196,6 +249,7 @@ class VoiceEngine:
             self._create_udp_socket()
             _log_wf(f"[VOICE_ENGINE] start: udp_port={self.local_udp_port} server={self._server_udp_addr} user_id={self._user_id} channel_id={self._channel_id}")
             self._start_receive_loop()
+            self._start_keepalive_loop()
             self._start_capture()
             self._start_playback()
             if self._channel_id > 0:
@@ -212,6 +266,7 @@ class VoiceEngine:
 
         self._stop_capture()
         self._stop_playback()
+        self._stop_keepalive_loop()
         self._stop_receive_loop()
         self._close_udp_socket()
         self._cleanup_opus()
@@ -285,17 +340,17 @@ class VoiceEngine:
         if not self._running or self._muted:
             return
         if not self._udp_sock or not self._server_udp_addr:
-            _log_wf(f"[VOICE_ENGINE] send_voice_data SKIP: no socket={self._udp_sock} server={self._server_udp_addr}")
+            self._pkt_debug(f"[VOICE_ENGINE] send_voice_data SKIP: no socket={self._udp_sock} server={self._server_udp_addr}")
             return
         if not self._opus_encoder:
-            _log_wf(f"[VOICE_ENGINE] send_voice_data SKIP: no opus encoder")
+            self._pkt_debug(f"[VOICE_ENGINE] send_voice_data SKIP: no opus encoder")
             return
 
         try:
             pcm_bytes = (pcm_data * 32767).astype(np.int16).tobytes()
             encoded = self._opus_encoder.encode(pcm_bytes, FRAME_SIZE)
             if not encoded:
-                _log_wf(f"[VOICE_ENGINE] send_voice_data: opus encode returned empty")
+                self._pkt_debug(f"[VOICE_ENGINE] send_voice_data: opus encode returned empty")
                 return
 
             header = voice_pb2.VoicePacketHeader()
@@ -311,31 +366,31 @@ class VoiceEngine:
 
             encrypted = self._crypto.encrypt(encoded, header_bytes)
             if not encrypted or len(encrypted) == 0:
-                _log_wf(f"[VOICE_ENGINE] send_voice_data: encrypt failed/empty")
+                self._pkt_debug(f"[VOICE_ENGINE] send_voice_data: encrypt failed/empty")
                 return
 
             header_len_prefix = struct.pack('<H', len(header_bytes))
             packet = header_len_prefix + header_bytes + encrypted
             if len(packet) > UDP_MAX_PACKET_SIZE:
-                _log_wf(f"[VOICE_ENGINE] send_voice_data: packet too large {len(packet)}")
+                self._pkt_debug(f"[VOICE_ENGINE] send_voice_data: packet too large {len(packet)}")
                 return
 
-            self._udp_sock.sendto(packet, self._server_udp_addr)
+            self._udp_sock.sendto(packet, self._resolve_sendto_addr())
 
             if self._sequence <= 6 or self._sequence % 100 == 0:
-                _log_wf(f"[VOICE_ENGINE] SEND voice seq={self._sequence} size={len(packet)} to={self._server_udp_addr} channel={self._channel_id} uid={self._user_id}")
+                self._pkt_debug(f"[VOICE_ENGINE] SEND voice seq={self._sequence} size={len(packet)} to={self._server_udp_addr} channel={self._channel_id} uid={self._user_id}")
         except Exception as e:
-            _log_wf(f"[VOICE_ENGINE] SEND voice EXCEPTION: {e}")
+            self._pkt_debug(f"[VOICE_ENGINE] SEND voice EXCEPTION: {e}")
 
     def _handle_received_packet(self, data, addr):
         try:
             if len(data) < 2:
-                _log_wf(f"[VOICE_ENGINE] _handle_received_packet: DROP len<2 from={addr}")
+                self._pkt_debug(f"[VOICE_ENGINE] _handle_received_packet: DROP len<2 from={addr}")
                 return
 
             header_size = struct.unpack_from('<H', data, 0)[0]
             if header_size == 0 or 2 + header_size > len(data):
-                _log_wf(f"[VOICE_ENGINE] _handle_received_packet: DROP bad header_size={header_size} data_len={len(data)}")
+                self._pkt_debug(f"[VOICE_ENGINE] _handle_received_packet: DROP bad header_size={header_size} data_len={len(data)}")
                 return
 
             header = voice_pb2.VoicePacketHeader()
@@ -343,25 +398,25 @@ class VoiceEngine:
 
             sender_id = header.sender_id
             if sender_id == 0 or sender_id == self._user_id:
-                _log_wf(f"[VOICE_ENGINE] _handle_received_packet: DROP sender_id={sender_id} my_uid={self._user_id}")
+                self._pkt_debug(f"[VOICE_ENGINE] _handle_received_packet: DROP sender_id={sender_id} my_uid={self._user_id}")
                 return
 
             payload = data[2 + header_size:]
             if len(payload) < XCHACHA_NONCE_SIZE + POLY1305_TAG_SIZE:
-                _log_wf(f"[VOICE_ENGINE] _handle_received_packet: DROP payload too short len={len(payload)}")
+                self._pkt_debug(f"[VOICE_ENGINE] _handle_received_packet: DROP payload too short len={len(payload)}")
                 return
 
             header_aad = data[2:2 + header_size]
             plaintext = self._crypto.decrypt(payload, header_aad=header_aad)
 
             if plaintext is None:
-                _log_wf(f"[VOICE_ENGINE] decrypt FAILED for sender={sender_id} my_uid={self._user_id} pkt_size={len(data)}")
+                self._pkt_debug(f"[VOICE_ENGINE] decrypt FAILED for sender={sender_id} my_uid={self._user_id} pkt_size={len(data)}")
                 return
 
-            _log_wf(f"[VOICE_ENGINE] decrypt OK sender={sender_id} my_uid={self._user_id} pt_len={len(plaintext)}")
+            self._pkt_debug(f"[VOICE_ENGINE] decrypt OK sender={sender_id} my_uid={self._user_id} pt_len={len(plaintext)}")
             self._decode_and_play(sender_id, plaintext)
         except Exception as e:
-            _log_wf(f"[VOICE_ENGINE] _handle_received_packet EXCEPTION: {e}")
+            self._pkt_debug(f"[VOICE_ENGINE] _handle_received_packet EXCEPTION: {e}")
 
     def _try_decrypt_raw(self, data):
         if len(data) < XCHACHA_NONCE_SIZE + POLY1305_TAG_SIZE:
@@ -386,7 +441,7 @@ class VoiceEngine:
                     decoder = opuslib.Decoder(fs=SAMPLE_RATE, channels=CHANNELS)
                     self._opus_decoders[sender_id] = self._configure_decoder(decoder)
                 except Exception:
-                    _log_wf(f"[VOICE_ENGINE] _decode_and_play: opus decoder create FAILED for sender={sender_id}")
+                    self._pkt_debug(f"[VOICE_ENGINE] _decode_and_play: opus decoder create FAILED for sender={sender_id}")
                     return
 
         try:
@@ -399,10 +454,10 @@ class VoiceEngine:
                 try:
                     rms = float(np.sqrt(np.mean(np.square(pcm_data))))
                     self._audio_levels[sender_id] = (rms, time.time())
-                    _log_wf(f"[VOICE_ENGINE] audio_level SET sender={sender_id} rms={rms:.6f}")
+                    self._pkt_debug(f"[VOICE_ENGINE] audio_level SET sender={sender_id} rms={rms:.6f}")
                 except Exception as e:
                     self._audio_levels[sender_id] = (0.0, time.time())
-                    _log_wf(f"[VOICE_ENGINE] audio_level SET ERROR sender={sender_id}: {e}")
+                    self._pkt_debug(f"[VOICE_ENGINE] audio_level SET ERROR sender={sender_id}: {e}")
 
             with self._playback_lock:
                 if sender_id not in self._playback_buffer:
@@ -465,6 +520,27 @@ class VoiceEngine:
                 pass
             self._udp_sock = None
 
+    def _start_keepalive_loop(self):
+        if self._keepalive_thread and self._keepalive_thread.is_alive():
+            return
+        self._keepalive_thread = threading.Thread(target=self._keepalive_loop, daemon=True)
+        self._keepalive_thread.start()
+
+    def _stop_keepalive_loop(self):
+        if self._keepalive_thread and self._keepalive_thread.is_alive():
+            self._keepalive_thread.join(timeout=3.0)
+        self._keepalive_thread = None
+
+    def _keepalive_loop(self):
+        next_send = time.time() + 15.0
+        while self._running:
+            now = time.time()
+            if now >= next_send:
+                if self._udp_sock and self._server_udp_addr and self._user_id > 0 and self._channel_id > 0:
+                    self._send_registration_packet()
+                next_send = now + 15.0
+            time.sleep(0.5)
+
     def _start_receive_loop(self):
         if not self._udp_sock:
             return
@@ -486,7 +562,7 @@ class VoiceEngine:
                 if data:
                     _pkt_count += 1
                     if _pkt_count <= 5 or _pkt_count % _log_interval == 0:
-                        _log_wf(f"[VOICE_ENGINE] recv_loop: received pkt #{_pkt_count} from {addr} size={len(data)}")
+                        self._pkt_debug(f"[VOICE_ENGINE] recv_loop: received pkt #{_pkt_count} from {addr} size={len(data)}")
                     _last_timeout_log = 0.0
                     self._handle_received_packet(data, addr)
             except socket.timeout:
@@ -556,20 +632,23 @@ class VoiceEngine:
                 outdata.fill(0)
                 mixed = np.zeros(frames, dtype=np.float32)
                 count = 0
+                chunks = []
                 with self._playback_lock:
-                    items = list(self._playback_buffer.items())
-                for uid, buf in items:
-                    if len(buf) > 0:
+                    for uid, buf in list(self._playback_buffer.items()):
+                        if not buf:
+                            continue
                         chunk = buf.pop(0)
-                        with self._user_volumes_lock:
-                            gain = self._user_volumes.get(uid, 1.0)
-                        chunk = chunk * gain
-                        min_len = min(len(chunk), frames)
-                        mixed[:min_len] += chunk[:min_len]
-                        count += 1
                         if len(chunk) > frames:
-                            with self._playback_lock:
-                                self._playback_buffer[uid].insert(0, chunk[frames:])
+                            buf.insert(0, chunk[frames:])
+                            chunk = chunk[:frames]
+                        chunks.append((uid, chunk))
+                for uid, chunk in chunks:
+                    with self._user_volumes_lock:
+                        gain = self._user_volumes.get(uid, 1.0)
+                    chunk = chunk * gain
+                    min_len = min(len(chunk), frames)
+                    mixed[:min_len] += chunk[:min_len]
+                    count += 1
                 if count > 0:
                     gain = 1.0 / max(count, 1)
                     outdata[:, 0] = mixed * gain

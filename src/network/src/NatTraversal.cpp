@@ -928,11 +928,11 @@ std::optional<boost::asio::ip::udp::endpoint> NatTraversal::decodeAddressAttribu
 
     // 解码端口
     std::memcpy(&port, value.data() + 2, 2);
+    port = ntohs(port);
     if (is_xor) {
-        // 端口与 Magic Cookie 高 16 位异或
+        // 端口与 Magic Cookie 高 16 位异或（主机字节序）
         port ^= static_cast<uint16_t>(STUN_MAGIC_COOKIE >> 16);
     }
-    port = ntohs(port);
 
     if (family == 0x01) {
         // IPv4

@@ -153,9 +153,7 @@ fun ChatContent(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(8.dp))
                                     .clickable {
-                                        viewModel.onInputChanged(
-                                            uiState.inputText + emoji
-                                        )
+                                        viewModel.appendEmoji(emoji)
                                         showEmojiPicker = false
                                     }
                                     .padding(6.dp)

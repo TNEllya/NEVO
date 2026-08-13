@@ -1,7 +1,7 @@
 """Connection bar for the NEVO client."""
 
-from PyQt5.QtCore import QPoint, QSize, pyqtSignal, pyqtSlot
-from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QFrame
+from PyQt5.QtCore import QPoint, QSize, pyqtSignal, pyqtSlot, Qt
+from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QFrame, QWidget, QLabel, QPushButton, QSpinBox
 from qfluentwidgets import (
     LineEdit, SpinBox, PrimaryPushButton, PushButton,
     CaptionLabel, FluentIcon, StrongBodyLabel,
@@ -9,7 +9,9 @@ from qfluentwidgets import (
 )
 from theme_manager import (
     ThemeManager, button_stylesheet, status_dot_stylesheet,
+    status_hover_stylesheet,
 )
+from views.server_status import ServerStatusWidget
 
 
 class ConnectionBar(QFrame):
@@ -22,6 +24,7 @@ class ConnectionBar(QFrame):
     stop_screen_share_requested = pyqtSignal()
     audio_share_requested = pyqtSignal(str)  # source_type: "app" or "system"
     stop_audio_share_requested = pyqtSignal()
+    video_call_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -31,8 +34,8 @@ class ConnectionBar(QFrame):
 
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(12, 4, 12, 4)
-        main_layout.setSpacing(2)
+        main_layout.setContentsMargins(12, 6, 12, 6)
+        main_layout.setSpacing(6)
 
         # ── Row 1: Connection info ──
         row1 = QHBoxLayout()
@@ -46,11 +49,11 @@ class ConnectionBar(QFrame):
         row1.addWidget(self.edit_host)
 
         row1.addWidget(StrongBodyLabel(self.tr("Port:")))
-        self.spin_port = SpinBox()
-        self.spin_port.setRange(1, 65535)
-        self.spin_port.setValue(24430)
-        self.spin_port.setFixedWidth(120)
-        row1.addWidget(self.spin_port)
+        self.edit_port = LineEdit()
+        self.edit_port.setText("24430")
+        self.edit_port.setFixedWidth(80)
+        self.edit_port.setPlaceholderText("24430")
+        row1.addWidget(self.edit_port)
 
         row1.addWidget(StrongBodyLabel(self.tr("User:")))
         self.edit_username = LineEdit()
@@ -76,46 +79,55 @@ class ConnectionBar(QFrame):
 
         main_layout.addLayout(row1)
 
-        # ── Row 2: Action buttons ──
+        # ── Row 2: Action buttons (using standard QPushButton for horizontal icon+text) ──
         row2 = QHBoxLayout()
-        row2.setSpacing(6)
+        row2.setSpacing(8)
 
-        self.btn_mute = PushButton(self.tr("闭麦"))
-        self.btn_mute.setIcon(FluentIcon.MICROPHONE)
-        self.btn_mute.setIconSize(QSize(16, 16))
+        self.btn_mute = QPushButton(self.tr("闭麦"))
+        self.btn_mute.setIcon(FluentIcon.MICROPHONE.icon())
+        self.btn_mute.setIconSize(QSize(14, 14))
         self.btn_mute.setCheckable(True)
         self.btn_mute.setEnabled(False)
-        self.btn_mute.setFixedSize(100, 32)
+        self.btn_mute.setFixedSize(70, 32)
         self.btn_mute.setStyleSheet(button_stylesheet())
         row2.addWidget(self.btn_mute)
 
-        self.btn_deafen = PushButton(self.tr("禁言"))
-        self.btn_deafen.setIcon(FluentIcon.VOLUME)
-        self.btn_deafen.setIconSize(QSize(16, 16))
+        self.btn_deafen = QPushButton(self.tr("禁言"))
+        self.btn_deafen.setIcon(FluentIcon.VOLUME.icon())
+        self.btn_deafen.setIconSize(QSize(14, 14))
         self.btn_deafen.setCheckable(True)
         self.btn_deafen.setEnabled(False)
-        self.btn_deafen.setFixedSize(110, 32)
+        self.btn_deafen.setFixedSize(70, 32)
         self.btn_deafen.setStyleSheet(button_stylesheet())
         row2.addWidget(self.btn_deafen)
 
-        self.btn_share_screen = PushButton(self.tr("Share"))
-        self.btn_share_screen.setIcon(FluentIcon.VIDEO)
-        self.btn_share_screen.setIconSize(QSize(16, 16))
+        self.btn_share_screen = QPushButton(self.tr("共享"))
+        self.btn_share_screen.setIcon(FluentIcon.VIDEO.icon())
+        self.btn_share_screen.setIconSize(QSize(14, 14))
         self.btn_share_screen.setEnabled(False)
         self.btn_share_screen.setCheckable(True)
-        self.btn_share_screen.setFixedSize(100, 32)
+        self.btn_share_screen.setFixedSize(70, 32)
         self.btn_share_screen.setStyleSheet(button_stylesheet())
         self.btn_share_screen.toggled.connect(self._on_share_screen_toggled)
         row2.addWidget(self.btn_share_screen)
 
-        self.btn_audio_share = PushButton(self.tr("Audio"))
-        self.btn_audio_share.setIcon(FluentIcon.MICROPHONE)
-        self.btn_audio_share.setIconSize(QSize(16, 16))
+        self.btn_audio_share = QPushButton(self.tr("音频共享"))
+        self.btn_audio_share.setIcon(FluentIcon.MICROPHONE.icon())
+        self.btn_audio_share.setIconSize(QSize(14, 14))
         self.btn_audio_share.setEnabled(False)
         self.btn_audio_share.setFixedSize(100, 32)
         self.btn_audio_share.setStyleSheet(button_stylesheet())
         self.btn_audio_share.clicked.connect(self._on_audio_share_click)
         row2.addWidget(self.btn_audio_share)
+
+        self.btn_video_call = QPushButton(self.tr("视频通话"))
+        self.btn_video_call.setIcon(FluentIcon.VIDEO.icon())
+        self.btn_video_call.setIconSize(QSize(14, 14))
+        self.btn_video_call.setEnabled(False)
+        self.btn_video_call.setFixedSize(100, 32)
+        self.btn_video_call.setStyleSheet(button_stylesheet())
+        self.btn_video_call.clicked.connect(self.video_call_requested.emit)
+        row2.addWidget(self.btn_video_call)
 
         row2.addStretch(1)
 
@@ -125,11 +137,21 @@ class ConnectionBar(QFrame):
         self.btn_status.setToolTip(self.tr("Status"))
         self.btn_status.setEnabled(False)
         self._refresh_status_style(False)
+        self.btn_status.clicked.connect(self._on_status_click)
         row2.addWidget(self.btn_status)
 
-        self.btn_admin_login = PushButton(self.tr("Admin"))
-        self.btn_admin_login.setIcon(FluentIcon.PEOPLE)
+        # Server status widget (hidden by default, shown in popup)
+        self.server_status = ServerStatusWidget()
+        self.server_status.setFixedSize(280, 180)
+        self.server_status.setWindowFlags(Qt.Popup)
+        self.server_status.setVisible(False)
+
+        self.btn_admin_login = QPushButton(self.tr("管理"))
+        self.btn_admin_login.setIcon(FluentIcon.PEOPLE.icon())
+        self.btn_admin_login.setIconSize(QSize(14, 14))
         self.btn_admin_login.setEnabled(False)
+        self.btn_admin_login.setFixedSize(70, 28)
+        self.btn_admin_login.setStyleSheet(button_stylesheet())
         self.btn_admin_login.clicked.connect(self._on_admin_click)
         row2.addWidget(self.btn_admin_login)
 
@@ -162,31 +184,17 @@ class ConnectionBar(QFrame):
         pos = self.btn_admin_login.mapToGlobal(QPoint(0, -menu_height))
         menu.exec_(pos)
 
-    def _refresh_status_style(self, connected: bool):
-        if connected:
-            self.btn_status.setStyleSheet(
-                "ToolButton {"
-                "  background-color: transparent;"
-                "  border: none;"
-                "  border-radius: 6px;"
-                "}"
-                "ToolButton:hover {"
-                "  background-color: rgba(46, 204, 113, 0.15);"
-                "}"
-            )
-            self.btn_status.setIcon(FluentIcon.GLOBE)
+    def _on_status_click(self):
+        if self.server_status.isVisible():
+            self.server_status.hide()
         else:
-            self.btn_status.setStyleSheet(
-                "ToolButton {"
-                "  background-color: transparent;"
-                "  border: none;"
-                "  border-radius: 6px;"
-                "}"
-                "ToolButton:hover {"
-                "  background-color: rgba(231, 76, 60, 0.15);"
-                "}"
-            )
-            self.btn_status.setIcon(FluentIcon.GLOBE)
+            pos = self.btn_status.mapToGlobal(QPoint(0, -self.server_status.height()))
+            self.server_status.move(pos)
+            self.server_status.show()
+
+    def _refresh_status_style(self, connected: bool):
+        self.btn_status.setStyleSheet(status_hover_stylesheet(connected))
+        self.btn_status.setIcon(FluentIcon.GLOBE)
 
     def set_admin_authenticated(self, authenticated: bool):
         self._admin_authenticated = authenticated
@@ -196,12 +204,13 @@ class ConnectionBar(QFrame):
         self.btn_connect.setEnabled(not connected)
         self.btn_disconnect.setEnabled(connected)
         self.edit_host.setEnabled(not connected)
-        self.spin_port.setEnabled(not connected)
+        self.edit_port.setEnabled(not connected)
         self.edit_username.setEnabled(not connected)
         self.btn_mute.setEnabled(connected)
         self.btn_deafen.setEnabled(connected)
         self.btn_share_screen.setEnabled(connected)
         self.btn_audio_share.setEnabled(connected)
+        self.btn_video_call.setEnabled(connected)
         self.btn_status.setEnabled(True)
         self._refresh_status_style(connected)
 
@@ -247,17 +256,19 @@ class ConnectionBar(QFrame):
         self.btn_audio_share.setProperty("sharing", sharing)
         if sharing:
             self.btn_audio_share.setText(self.tr("Stop"))
+            tm = ThemeManager.instance()
+            pal = tm.palette()
             self.btn_audio_share.setStyleSheet(
-                "QPushButton { "
-                "  background-color: #e67e22; "
-                "  color: #ffffff; "
-                "  border: none; "
-                "  border-radius: 6px; "
-                "  padding-left: 20px; "
-                "} "
-                "QPushButton:hover { "
-                "  background-color: #d35400; "
-                "}"
+                f"QPushButton {{ "
+                f"  background-color: {pal['primary']}; "
+                f"  color: #ffffff; "
+                f"  border: none; "
+                f"  border-radius: 6px; "
+                f"  padding-left: 20px; "
+                f"}} "
+                f"QPushButton:hover {{ "
+                f"  background-color: {pal['primary_hover']}; "
+                f"}}"
             )
         else:
             self.btn_audio_share.setText(self.tr("Audio"))
@@ -277,7 +288,10 @@ class ConnectionBar(QFrame):
 
     def _on_connect(self):
         host = self.edit_host.text().strip() or "127.0.0.1"
-        port = self.spin_port.value()
+        try:
+            port = int(self.edit_port.text().strip())
+        except ValueError:
+            port = 24430
         username = self.edit_username.text().strip()
         if not username:
             username = "User"
@@ -287,6 +301,7 @@ class ConnectionBar(QFrame):
         self.btn_mute.setStyleSheet(button_stylesheet())
         self.btn_deafen.setStyleSheet(button_stylesheet())
         self.btn_share_screen.setStyleSheet(button_stylesheet())
+        self.btn_video_call.setStyleSheet(button_stylesheet())
         if not self.btn_audio_share.property("sharing"):
             self.btn_audio_share.setStyleSheet(button_stylesheet())
         self._refresh_status_style(self._connected)

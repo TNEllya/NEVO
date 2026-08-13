@@ -34,6 +34,7 @@
 
 #include <boost/asio.hpp>
 
+#include <memory>
 #include <unordered_map>
 #include <vector>
 #include <mutex>
@@ -149,11 +150,24 @@ public:
     /**
      * @brief 移除客户端 UDP 映射
      *
-     * 在用户断开连接时调用。
+     * 在用户断开连接时调用。若同一账号存在多个设备映射，
+     * 将移除该账号的全部映射。
      *
      * @param user_id 用户 ID
      */
     void removeClientMapping(UserId user_id);
+
+    /**
+     * @brief 移除指定 UDP 端点对应的客户端映射
+     *
+     * 用于同一账号多设备场景下，仅移除断开设备对应的端点，
+     * 不影响其他仍在线的设备。
+     *
+     * @param user_id       用户 ID
+     * @param udp_endpoint  要移除的 UDP 端点
+     */
+    void removeClientMapping(UserId user_id,
+                             const boost::asio::ip::udp::endpoint& udp_endpoint);
 
     // ============================================================
     // 配置
@@ -197,42 +211,82 @@ public:
     using SessionKeyQuery = std::function<const uint8_t*(UserId)>;
     void setSessionKeyQuery(SessionKeyQuery query);
 
+    void rotateClientKey(UserId user_id, const uint8_t* key);
+
 private:
     // ============================================================
     // 内部方法
     // ============================================================
 
     /**
-     * @brief 根据 UDP 端点查找用户 ID
+     * @brief 根据 UDP 端点查找用户 ID（加锁版本，可在未持有 mutex_ 时调用）
      * @param endpoint UDP 端点
      * @return 用户 ID，未找到返回 INVALID_USER_ID
      */
     UserId findUserByEndpoint(const boost::asio::ip::udp::endpoint& endpoint) const;
 
     /**
+     * @brief 根据 UDP 端点查找用户 ID（调用者必须已持有 mutex_）
+     * @param endpoint UDP 端点
+     * @return 用户 ID，未找到返回 INVALID_USER_ID
+     */
+    UserId findUserByEndpointLocked(const boost::asio::ip::udp::endpoint& endpoint) const;
+
+    /**
      * @brief 获取同频道内的所有其他用户的 UDP 端点
-     * @param sender_id 发送者用户 ID
-     * @param channel_id 频道 ID
+     * @param sender_id            发送者用户 ID
+     * @param channel_id           频道 ID
+     * @param sender_endpoint_key  发送者自身端点的键（用于排除自身）
      * @return 其他用户的 UDP 端点列表
      */
     std::vector<boost::asio::ip::udp::endpoint> getChannelPeers(
-        UserId sender_id, ChannelId channel_id) const;
+        UserId sender_id, ChannelId channel_id,
+        const std::string& sender_endpoint_key) const;
 
     /**
      * @brief 获取同频道内的所有其他用户的 UDP 端点（无锁版本，调用者必须已持有 mutex_）
-     * @param sender_id 发送者用户 ID
-     * @param channel_id 频道 ID
+     * @param sender_id            发送者用户 ID
+     * @param channel_id           频道 ID
+     * @param sender_endpoint_key  发送者自身端点的键（用于排除自身）
      * @return 其他用户的 UDP 端点列表
      */
     std::vector<boost::asio::ip::udp::endpoint> getChannelPeersLocked(
-        UserId sender_id, ChannelId channel_id) const;
+        UserId sender_id, ChannelId channel_id,
+        const std::string& sender_endpoint_key) const;
+
+    /**
+     * @brief 统一的语音包中继入口（供两个公开重载共用）
+     *
+     * 安全要求（fail-closed）：
+     *   - UDP 路径：发送者必须已在映射表中（认证后由 addClientMapping 建立），
+     *     不接受"任意端点自称任意用户"
+     *   - TCP 隧道路径：身份来自已认证的 TCP 会话，允许自动建立映射
+     *   - 发送者必须是所声明频道的成员（频道管理器可用时强制校验）
+     *   - 发送者/接收者缺少加密上下文时丢弃包，绝不"原样转发"
+     *
+     * @param data             原始语音包数据
+     * @param size             数据字节数
+     * @param sender_endpoint  发送者端点
+     * @param known_sender_id  已知发送者 ID（TCP 隧道）；INVALID_USER_ID 表示从端点解析
+     */
+    void relayVoicePacket(const uint8_t* data, uint32_t size,
+                          const boost::asio::ip::udp::endpoint& sender_endpoint,
+                          UserId known_sender_id);
+
+    /**
+     * @brief 获取或创建指定用户的 VoiceCrypto 实例（调用者必须已持有 mutex_）
+     * @param user_id 用户 ID
+     * @return VoiceCrypto 实例（shared_ptr，持有引用计数防止并发销毁）
+     */
+    std::shared_ptr<VoiceCrypto> getOrCreateCryptoLocked(UserId user_id);
 
     // ============================================================
     // 成员变量
     // ============================================================
 
-    /// 用户 ID -> UDP 映射
-    std::unordered_map<UserId, ClientUdpMapping> client_map_;
+    /// 用户 ID -> (端点键 -> UDP 映射)（支持同一账号多设备并存）
+    std::unordered_map<UserId,
+        std::unordered_map<std::string, ClientUdpMapping>> client_map_;
 
     /// UDP 端点 -> 用户 ID 的反向映射（用于快速查找发送者）
     std::unordered_map<std::string, UserId> endpoint_to_user_;
@@ -250,7 +304,8 @@ private:
     SessionKeyQuery session_key_query_;
 
     /// 每客户端 VoiceCrypto 实例（用于加密时的 nonce 管理）
-    std::unordered_map<UserId, std::unique_ptr<VoiceCrypto>> client_cryptos_;
+    /// 使用 shared_ptr：中继在锁外持有引用，防止用户断线时对象被并发销毁（use-after-free）
+    std::unordered_map<UserId, std::shared_ptr<VoiceCrypto>> client_cryptos_;
 
     /// 互斥锁
     mutable std::mutex mutex_;

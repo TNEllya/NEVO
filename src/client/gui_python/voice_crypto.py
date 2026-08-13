@@ -16,6 +16,9 @@ CRYPTO_KEY_SIZE = 32
 XCHACHA_NONCE_SIZE = 24
 POLY1305_TAG_SIZE = 16
 KEY_OVERLAP_SECONDS = 20
+# 每实例随机 nonce 前缀长度：nonce = 前缀(16B) + 计数器(8B)
+# 保证同一把会话密钥被多个实例共享时（同账号多设备）nonce 不碰撞（~2^-128）
+NONCE_PREFIX_SIZE = 16
 
 
 class VoiceCrypto:
@@ -24,6 +27,7 @@ class VoiceCrypto:
         self._old_key = None
         self._old_key_expiry = 0
         self._nonce_counter = 0
+        self._nonce_prefix = os.urandom(NONCE_PREFIX_SIZE)
         self._lock = threading.Lock()
 
     def set_session_key(self, key):
@@ -32,6 +36,8 @@ class VoiceCrypto:
             self._old_key = None
             self._old_key_expiry = 0
             self._nonce_counter = 0
+            # 重新生成随机前缀：即使多个实例共享同一密钥，nonce 空间互不重叠
+            self._nonce_prefix = os.urandom(NONCE_PREFIX_SIZE)
 
     def rotate_key(self, new_key):
         with self._lock:
@@ -122,10 +128,13 @@ class VoiceCrypto:
             if self._old_key is not None and time.time() >= self._old_key_expiry:
                 self._old_key = None
 
-    @staticmethod
-    def _generate_nonce(counter):
+    def _generate_nonce(self, counter):
+        # 24 字节 nonce = 随机前缀(16B) + 计数器(8B LE)
+        # 前缀保证跨实例唯一（多设备共享密钥时不会密钥流重用），
+        # 计数器保证实例内严格递增
         nonce = bytearray(XCHACHA_NONCE_SIZE)
-        struct.pack_into("<Q", nonce, 0, counter)
+        nonce[:NONCE_PREFIX_SIZE] = self._nonce_prefix
+        struct.pack_into("<Q", nonce, NONCE_PREFIX_SIZE, counter)
         return bytes(nonce)
 
     @staticmethod

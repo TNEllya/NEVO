@@ -19,31 +19,31 @@ class ChannelRepository @Inject constructor(
 ) {
     suspend fun joinChannel(channelId: Long): Result<Unit> = withContext(Dispatchers.IO) {
         val request = JoinChannelRequest(channelId = channelId)
-        val payload = ProtocolSerializer.serializeJoinChannelRequest(request)
+        val payload = ProtocolSerializer.serializeControlMessage(MessageType.JOIN_CHANNEL_REQUEST, request)
         tcpConnectionManager.sendMessage(MessageType.JOIN_CHANNEL_REQUEST.id, payload)
     }
 
-    suspend fun leaveChannel(): Result<Unit> = withContext(Dispatchers.IO) {
-        val request = LeaveChannelRequest()
-        val payload = ProtocolSerializer.serializeLeaveChannelRequest(request)
+    suspend fun leaveChannel(channelId: Long): Result<Unit> = withContext(Dispatchers.IO) {
+        val request = LeaveChannelRequest(channelId = channelId)
+        val payload = ProtocolSerializer.serializeControlMessage(MessageType.LEAVE_CHANNEL_REQUEST, request)
         tcpConnectionManager.sendMessage(MessageType.LEAVE_CHANNEL_REQUEST.id, payload)
     }
 
     suspend fun createChannel(name: String, parentId: Long): Result<Unit> = withContext(Dispatchers.IO) {
         val request = CreateChannelRequest(parentId = parentId, name = name)
-        val payload = ProtocolSerializer.serializeCreateChannelRequest(request)
+        val payload = ProtocolSerializer.serializeControlMessage(MessageType.CREATE_CHANNEL_REQUEST, request)
         tcpConnectionManager.sendMessage(MessageType.CREATE_CHANNEL_REQUEST.id, payload)
     }
 
     suspend fun deleteChannel(channelId: Long): Result<Unit> = withContext(Dispatchers.IO) {
         val request = DeleteChannelRequest(channelId = channelId)
-        val payload = ProtocolSerializer.serializeDeleteChannelRequest(request)
+        val payload = ProtocolSerializer.serializeControlMessage(MessageType.DELETE_CHANNEL_REQUEST, request)
         tcpConnectionManager.sendMessage(MessageType.DELETE_CHANNEL_REQUEST.id, payload)
     }
 
     suspend fun renameChannel(channelId: Long, newName: String): Result<Unit> = withContext(Dispatchers.IO) {
         val request = RenameChannelRequest(channelId = channelId, newName = newName)
-        val payload = ProtocolSerializer.serializeRenameChannelRequest(request)
+        val payload = ProtocolSerializer.serializeControlMessage(MessageType.RENAME_CHANNEL_REQUEST, request)
         tcpConnectionManager.sendMessage(MessageType.RENAME_CHANNEL_REQUEST.id, payload)
     }
 }

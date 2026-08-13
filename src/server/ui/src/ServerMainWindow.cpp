@@ -31,7 +31,7 @@
 #include "nevo/server/ui/ServerStatusBar.h"
 #include "nevo/server/ui/ServerLogView.h"
 #include "nevo/server/ui/ChannelPanel.h"
-#include "nevo/ui/ThemeManager.h"
+#include "nevo/server/ui/ThemeManager.h"
 #include "nevo/core/common/Logger.h"
 
 namespace nevo {

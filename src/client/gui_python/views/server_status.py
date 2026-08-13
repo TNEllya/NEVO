@@ -15,24 +15,26 @@ class _StatusBarCard(QFrame):
         self._icon = icon
         self._label_text = label_text
         self._value_text = value_text
-        self.setFixedHeight(48)
+        self.setFixedHeight(40)
+        from theme_manager import DARK_PALETTE
         self.setStyleSheet(
-            f"QFrame {{ background-color: {ThemeManager.instance().color('bg_status')}; border-radius: 8px; }}"
+            f"QFrame {{ background-color: {DARK_PALETTE['bg_status']}; border-radius: 8px; }}"
         )
         layout = QHBoxLayout(self)
         layout.setContentsMargins(14, 10, 14, 10)
         layout.setSpacing(10)
 
+        from theme_manager import DARK_PALETTE
         self.icon_lbl = QLabel(icon)
-        self.icon_lbl.setStyleSheet("color: #8b8d97; font-size: 14px;")
+        self.icon_lbl.setStyleSheet(f"color: {DARK_PALETTE['text_muted']}; font-size: 14px;")
         layout.addWidget(self.icon_lbl)
 
         self.label = QLabel(label_text)
-        self.label.setStyleSheet("color: #8b8d97; font-size: 13px;")
+        self.label.setStyleSheet(f"color: {DARK_PALETTE['text_muted']}; font-size: 13px;")
         layout.addWidget(self.label, 1)
 
         self.value = QLabel(value_text)
-        self.value.setStyleSheet("color: #dbdee1; font-size: 14px; font-weight: bold;")
+        self.value.setStyleSheet(f"color: {DARK_PALETTE['text_primary']}; font-size: 14px; font-weight: bold;")
         self.value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.value.setMinimumWidth(120)
         layout.addWidget(self.value)
@@ -43,10 +45,9 @@ class _PingBar(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._history = [0] * 40
-        self.setFixedHeight(6)
+        self.setFixedHeight(4)
         self.setStyleSheet("background: transparent;")
-        self.setFixedWidth(300)
-        self.setMinimumHeight(6)
+        self.setMinimumHeight(4)
 
     def add_value(self, value: float):
         self._history.append(value)
@@ -60,7 +61,7 @@ class _PingBar(QFrame):
         w = self.width()
         h = self.height()
         bar_count = 40
-        bar_w = int(w / bar_count - 1)
+        bar_w = max(1, int(w / bar_count - 1))
         gap = 1
         max_val = 100.0
         for i, v in enumerate(self._history):
@@ -83,10 +84,9 @@ class _LossBar(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._history = [0] * 40
-        self.setFixedHeight(6)
+        self.setFixedHeight(4)
         self.setStyleSheet("background: transparent;")
-        self.setFixedWidth(300)
-        self.setMinimumHeight(6)
+        self.setMinimumHeight(4)
 
     def add_value(self, value: float):
         self._history.append(value)
@@ -129,15 +129,22 @@ class ServerStatusWidget(QFrame):
         self._update_timer = QTimer(self)
         self._update_timer.timeout.connect(self._on_timer)
         self._connected = False
-        self.setStyleSheet(f"ServerStatusWidget {{ background-color: {ThemeManager.instance().color('bg_secondary')}; }}")
+        from theme_manager import DARK_PALETTE
+        self.setStyleSheet(
+            f"ServerStatusWidget {{"
+            f"  background-color: {DARK_PALETTE['bg_secondary']};"
+            f"  border-radius: 12px;"
+            f"}}"
+        )
 
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(16)
+        main_layout.setContentsMargins(16, 12, 16, 12)
+        main_layout.setSpacing(10)
 
+        from theme_manager import DARK_PALETTE
         title = QLabel(self.tr("Connection Status"))
-        title.setStyleSheet("color: #ffffff; font-size: 18px; font-weight: bold;")
+        title.setStyleSheet(f"color: {DARK_PALETTE['text_primary']}; font-size: 14px; font-weight: bold;")
         main_layout.addWidget(title)
 
         self.card_loss_in = _StatusBarCard("\U0001f4e5", self.tr("Packet Loss (In):"))
@@ -191,13 +198,19 @@ class ServerStatusWidget(QFrame):
         self._update_timer.stop()
 
     def refresh_theme(self):
-        self.setStyleSheet(f"ServerStatusWidget {{ background-color: {ThemeManager.instance().color('bg_secondary')}; }}")
+        from theme_manager import DARK_PALETTE
+        self.setStyleSheet(
+            f"ServerStatusWidget {{"
+            f"  background-color: {DARK_PALETTE['bg_secondary']};"
+            f"  border-radius: 12px;"
+            f"}}"
+        )
         self.card_loss_in.setStyleSheet(
-            f"QFrame {{ background-color: {ThemeManager.instance().color('bg_status')}; border-radius: 8px; }}"
+            f"QFrame {{ background-color: {DARK_PALETTE['bg_status']}; border-radius: 8px; }}"
         )
         self.card_loss_out.setStyleSheet(
-            f"QFrame {{ background-color: {ThemeManager.instance().color('bg_status')}; border-radius: 8px; }}"
+            f"QFrame {{ background-color: {DARK_PALETTE['bg_status']}; border-radius: 8px; }}"
         )
         self.card_ping.setStyleSheet(
-            f"QFrame {{ background-color: {ThemeManager.instance().color('bg_status')}; border-radius: 8px; }}"
+            f"QFrame {{ background-color: {DARK_PALETTE['bg_status']}; border-radius: 8px; }}"
         )

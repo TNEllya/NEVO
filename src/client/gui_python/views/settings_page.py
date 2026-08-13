@@ -1,5 +1,7 @@
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
-from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QFrame, QWidget, QLabel, QFileDialog, QScrollArea
+from PyQt5.QtWidgets import (
+    QVBoxLayout, QHBoxLayout, QFrame, QWidget, QLabel, QFileDialog, QScrollArea, QLineEdit,
+)
 from qfluentwidgets import (
     HeaderCardWidget, ComboBox, PushButton, Slider,
     CaptionLabel, StrongBodyLabel, SwitchButton, ProgressBar,
@@ -688,6 +690,37 @@ class SettingsPage(QFrame):
         progress_row.addWidget(self._update_progress)
         self._add_row_to_card(card, progress_row)
 
+        token_row = QHBoxLayout()
+        token_row.setContentsMargins(16, 8, 16, 0)
+        token_row.setSpacing(12)
+        token_row.addWidget(StrongBodyLabel(self.tr("GitHub Token:")))
+        self._edit_github_token = QLineEdit()
+        self._edit_github_token.setPlaceholderText(self.tr("Optional: paste GitHub token to avoid rate limit"))
+        self._edit_github_token.setEchoMode(QLineEdit.Password)
+        self._edit_github_token.setMinimumWidth(300)
+        if self._updater:
+            # 显示已保存 token 的前 4 位，避免明文暴露完整 token
+            saved = self._updater._github_token
+            if saved:
+                self._edit_github_token.setText(saved[:4] + "*" * (len(saved) - 4))
+        self._edit_github_token.textChanged.connect(self._on_github_token_text_changed)
+        token_row.addWidget(self._edit_github_token, 1)
+
+        self._btn_save_token = PushButton(self.tr("Save Token"))
+        self._btn_save_token.setIcon(FluentIcon.SAVE)
+        self._btn_save_token.clicked.connect(self._on_save_github_token)
+        self._btn_save_token.setEnabled(False)
+        token_row.addWidget(self._btn_save_token)
+        self._add_row_to_card(card, token_row)
+
+        token_desc_row = QHBoxLayout()
+        token_desc_row.setContentsMargins(16, 0, 16, 4)
+        token_desc = CaptionLabel(
+            self.tr("Setting a GitHub personal access token raises the API rate limit from 60 to 5000 requests/hour."))
+        token_desc.setWordWrap(True)
+        token_desc_row.addWidget(token_desc)
+        self._add_row_to_card(card, token_desc_row)
+
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(16, 12, 16, 8)
         btn_row.setSpacing(12)
@@ -736,7 +769,7 @@ class SettingsPage(QFrame):
         tm = ThemeManager.instance()
         pal = tm.palette()
         self._set_update_checking_ui()
-        from update_dialog import UpdateCheckThread
+        from views.update_dialog import UpdateCheckThread
         self._update_check_thread = UpdateCheckThread(self._updater, self)
         self._update_check_thread.finished.connect(self._on_check_finished)
         self._update_check_thread.error.connect(self._on_check_error)
@@ -811,7 +844,7 @@ class SettingsPage(QFrame):
         self._update_status_label.setText(self.tr("Downloading update... 0%"))
         self._update_status_label.setStyleSheet(
             f"color: {pal['text_secondary']}; font-size: 13px;")
-        from update_dialog import UpdateDownloadThread
+        from views.update_dialog import UpdateDownloadThread
         self._update_download_thread = UpdateDownloadThread(self._updater, self)
         self._update_download_thread.progress.connect(self._on_download_progress)
         self._update_download_thread.finished.connect(self._on_download_finished)
@@ -866,17 +899,58 @@ class SettingsPage(QFrame):
         self._update_status_label.setStyleSheet(
             f"color: {pal['text_warning']}; font-size: 13px;")
 
+    def _on_github_token_text_changed(self, text: str):
+        self._btn_save_token.setEnabled(True)
+
+    def _on_save_github_token(self):
+        if not self._updater:
+            return
+        text = self._edit_github_token.text().strip()
+        # 如果用户保留的是已保存 token 的掩码（如 "ghp_****"），则不更新
+        if "*" in text:
+            InfoBar.info(
+                self.tr("GitHub Token"),
+                self.tr("Token unchanged. Paste a new token to update."),
+                parent=self.window(),
+                position=InfoBarPosition.TOP,
+                duration=3000,
+            )
+            self._btn_save_token.setEnabled(False)
+            return
+
+        self._updater.set_github_token(text)
+        self._btn_save_token.setEnabled(False)
+        InfoBar.success(
+            self.tr("GitHub Token"),
+            self.tr("Token saved. Rate limit increased to 5000 requests/hour.") if text else self.tr("Token cleared."),
+            parent=self.window(),
+            position=InfoBarPosition.TOP,
+            duration=3000,
+        )
+
     def _on_install_update(self):
-        if self._downloaded_file and self._updater:
-            try:
-                self._updater.install_update(self._downloaded_file)
-            except Exception as e:
-                tm = ThemeManager.instance()
-                pal = tm.palette()
-                self._update_status_label.setText(
-                    self.tr("Installation failed: %s") % str(e))
-                self._update_status_label.setStyleSheet(
-                    f"color: {pal['text_warning']}; font-size: 13px;")
+        if not self._downloaded_file or not self._updater:
+            return
+        self._btn_install_update.setEnabled(False)
+        self._update_status_label.setText(self.tr("Installing update..."))
+        from views.update_dialog import UpdateInstallThread
+        self._update_install_thread = UpdateInstallThread(
+            self._updater, self._downloaded_file, self)
+        self._update_install_thread.finished.connect(self._on_install_finished)
+        self._update_install_thread.error.connect(self._on_install_error)
+        self._update_install_thread.start()
+
+    def _on_install_finished(self):
+        self._update_status_label.setText(self.tr("Restarting application..."))
+
+    def _on_install_error(self, error_msg: str):
+        self._btn_install_update.setEnabled(True)
+        tm = ThemeManager.instance()
+        pal = tm.palette()
+        self._update_status_label.setText(
+            self.tr("Installation failed: %s") % error_msg)
+        self._update_status_label.setStyleSheet(
+            f"color: {pal['text_warning']}; font-size: 13px;")
 
     def _on_cancel_update(self):
         if self._updater:

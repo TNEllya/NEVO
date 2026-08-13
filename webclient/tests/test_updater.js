@@ -5,6 +5,11 @@ const path = require('path');
 const fs = require('fs');
 const U = require('../electron/updater.js');
 
+// 本文件聚焦基础行为（版本比较/日志/状态机），清单签名验证见 test_updater_security.js；
+// 关闭签名强制要求以复用未签名 fixture。
+U.CFG.requireSignedManifest = false;
+const H64 = 'ab'.repeat(32); // 合法 64 位 hex sha256 占位值
+
 let pass = 0, fail = 0;
 function t(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  FAIL:', msg); } }
 
@@ -34,9 +39,9 @@ t(U.proxyGithubUrl('https://example.com/x.zip') === 'https://example.com/x.zip',
 // 清单解析
 const goodManifest = JSON.stringify({
   version: 'BETA0.0.2',
-  files: [{ path: 'app.asar', sha256: 'abc', size: 10 }],
-  full_package: { url: 'https://github.com/x/Setup.exe', size: 100, sha256: 'f' },
-  delta: { from: 'BETA0.0.1', url: 'https://github.com/x/d.zip', size: 20, sha256: 'd' },
+  files: [{ path: 'app.asar', sha256: H64, size: 10 }],
+  full_package: { url: 'https://github.com/x/Setup.exe', size: 100, sha256: H64 },
+  delta: { from: 'BETA0.0.1', url: 'https://github.com/x/d.zip', size: 20, sha256: H64 },
 });
 const m = U.parseManifest(goodManifest);
 t(m.version === 'BETA0.0.2', 'manifest version');
@@ -50,7 +55,7 @@ try { U.parseManifest('not json'); } catch (_) { threw = true; }
 t(threw, 'manifest invalid json throws');
 const noDelta = U.parseManifest(JSON.stringify({
   version: 'BETA0.0.2', files: [],
-  full_package: { url: 'https://github.com/x/Setup.exe', size: 100, sha256: 'f' },
+  full_package: { url: 'https://github.com/x/Setup.exe', size: 100, sha256: H64 },
 }));
 t(noDelta.delta === null, 'manifest without delta -> null');
 
@@ -59,8 +64,8 @@ t(U.decideMode(m, 'BETA0.0.1') === 'delta', 'small delta -> delta mode');
 t(U.decideMode(m, 'BETA0.0.9') === 'full', 'from-version mismatch -> full mode');
 const bigDelta = U.parseManifest(JSON.stringify({
   version: 'BETA0.0.2', files: [],
-  full_package: { url: 'https://github.com/x/Setup.exe', size: 100, sha256: 'f' },
-  delta: { from: 'BETA0.0.1', url: 'https://github.com/x/d.zip', size: 80, sha256: 'd' },
+  full_package: { url: 'https://github.com/x/Setup.exe', size: 100, sha256: H64 },
+  delta: { from: 'BETA0.0.1', url: 'https://github.com/x/d.zip', size: 80, sha256: H64 },
 }));
 t(U.decideMode(bigDelta, 'BETA0.0.1') === 'full', 'delta >= 50% full -> full mode');
 t(U.decideMode(noDelta, 'BETA0.0.1') === 'full', 'no delta -> full mode');
@@ -109,8 +114,8 @@ engine.onState((oldS, newS) => states.push(newS));
     if (kind === 'manifest') {
       return JSON.stringify({
         version: 'BETA0.0.2', files: [],
-        full_package: { url: 'https://github.com/x/Setup.exe', size: 1000, sha256: 'f' },
-        delta: { from: 'BETA0.0.1', url: 'https://github.com/x/d.zip', size: 10, sha256: 'd' },
+        full_package: { url: 'https://github.com/x/Setup.exe', size: 1000, sha256: H64 },
+        delta: { from: 'BETA0.0.1', url: 'https://github.com/x/d.zip', size: 10, sha256: H64 },
       });
     }
     throw new Error('unexpected fetch kind ' + kind);
@@ -135,7 +140,7 @@ engine.onState((oldS, newS) => states.push(newS));
         return { tag_name: 'BETA0.0.2', assets: [{ name: 'latest.json', browser_download_url: 'https://github.com/TNEllya/NEVO/releases/download/BETA0.0.2/latest.json' }] };
       }
       if (kind === 'manifest') {
-        return JSON.stringify({ version: 'BETA0.0.2', full_package: { url: 'https://github.com/x/Setup.exe', size: 10, sha256: 'a' } });
+        return JSON.stringify({ version: 'BETA0.0.2', full_package: { url: 'https://github.com/x/Setup.exe', size: 10, sha256: H64 } });
       }
       throw new Error('unknown');
     },
@@ -159,7 +164,7 @@ engine.onState((oldS, newS) => states.push(newS));
       }
       if (kind === 'manifest') {
         if (!url.startsWith('https://ghproxy.com/')) throw new Error('request timeout');
-        return JSON.stringify({ version: 'BETA0.0.2', full_package: { url: 'https://github.com/x/Setup.exe', size: 10, sha256: 'a' } });
+        return JSON.stringify({ version: 'BETA0.0.2', full_package: { url: 'https://github.com/x/Setup.exe', size: 10, sha256: H64 } });
       }
       throw new Error('unknown');
     },

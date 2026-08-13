@@ -355,11 +355,14 @@ public:
      *
      * @param user_id          用户 ID
      * @param client_public_key 客户端 Curve25519 公钥（32 字节）
+     * @param reuse_existing   同账号多设备场景下，若该用户已有会话密钥则复用（用于重复登录）；
+     *                         密钥轮换时需传 false 以强制生成新密钥
      * @return 加密后的会话密钥（crypto_box_seal 密文），失败返回空 vector
      */
     std::vector<uint8_t> generateSessionKeyForClient(
         UserId user_id,
-        const std::vector<uint8_t>& client_public_key);
+        const std::vector<uint8_t>& client_public_key,
+        bool reuse_existing = false);
 
     /**
      * @brief 获取指定客户端的明文会话密钥
@@ -390,6 +393,9 @@ public:
      * (create, delete, rename, user join/leave).
      */
     void broadcastChannelListUpdate();
+    void broadcastScreenShareState(UserId sharer_id, bool is_sharing,
+                                   int source_type, const std::string& source_name,
+                                   int width, int height);
 
     /**
      * @brief Update AudioRelay channel mapping for a user
@@ -481,6 +487,16 @@ public:
     Result<void> authenticateAdmin(UserId user_id, const std::string& password);
 
     /**
+     * @brief 校验管理员密码（仅哈希校验，不涉及用户会话）
+     *
+     * 供管理面（ControlServer / Web 管理端）登录使用。
+     *
+     * @param password 管理员密码
+     * @return Result<void> 成功或错误（Incorrect admin password / not set）
+     */
+    Result<void> verifyAdminPassword(const std::string& password);
+
+    /**
      * @brief 设置服务器名称
      * @param server_name 新的服务器名称
      * @return Result<void>
@@ -498,6 +514,28 @@ public:
 
     /// Check if admin password is set
     bool isAdminPasswordSet() const;
+
+    // ============================================================
+    // 管理面认证令牌（ControlServer / Web 管理端 IPC 鉴权）
+    // ============================================================
+
+    /**
+     * @brief 生成新的管理认证令牌（会使旧令牌立即失效）
+     * @return 新的令牌（hex 字符串）
+     */
+    std::string generateAdminAuthToken();
+
+    /**
+     * @brief 获取当前管理认证令牌（不存在则生成）
+     * @return 令牌（hex 字符串）
+     */
+    std::string ensureAdminAuthToken();
+
+    /// 校验管理认证令牌（常量时间比较）
+    bool verifyAdminAuthToken(const std::string& token) const;
+
+    /// 是否已存在管理认证令牌
+    bool hasAdminAuthToken() const;
 
     ServerConfig config() const;
 
@@ -609,6 +647,10 @@ private:
     std::string server_name_ = "NEVO Server";
     std::string admin_password_hash_;
 
+    /// 管理面认证令牌（ControlServer/Web 管理端 IPC 鉴权，进程内有效）
+    mutable std::mutex admin_auth_token_mutex_;
+    std::string admin_auth_token_;
+
     /// Admin password file path (derived from db_path)
     std::string password_file_path_;
 
@@ -621,6 +663,13 @@ private:
     /// Control server for Python GUI IPC
     uint16_t control_port_ = 24433;
     std::unique_ptr<ControlServer> control_server_;
+
+    /// Local addresses advertised in status snapshots
+    std::string ipv4_address_;
+    std::string ipv6_address_;
+
+    /// Detect and cache the first non-loopback IPv4/IPv6 addresses
+    void updateLocalAddresses();
 
     /// Key rotation timer
     std::unique_ptr<boost::asio::steady_timer> key_rotation_timer_;

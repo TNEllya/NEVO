@@ -3,11 +3,13 @@
 import os
 import sys
 import threading
+import logging
 import traceback
+from typing import Optional
 
 from PyQt5.QtCore import Qt, pyqtSignal, QObject
 from PyQt5.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QFrame, QSplitter, QLabel,
+    QVBoxLayout, QHBoxLayout, QFrame, QSplitter, QLabel, QInputDialog,
 )
 from qfluentwidgets import (
     FluentWindow, NavigationItemPosition, FluentIcon,
@@ -15,15 +17,17 @@ from qfluentwidgets import (
     StrongBodyLabel, Dialog, LineEdit, TextEdit, PushButton,
     HeaderCardWidget, CardWidget, RoundMenu, Action,
 )
-from views.server_status import ServerStatusWidget
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from nevo_client import NevoClient, ClientState
+from nevo_client import NevoClient, ClientState, VideoCallState
+from nevo_wire import VideoProfile
 from audio_manager import AudioManager, InputMode
 from avatar_manager import AvatarManager
 from voice_engine import VoiceEngine
 from video_engine import VideoEngine
+from video_call_engine import VideoCallEngine
+from camera_capture import CameraCapture
 from screen_share_dialog import ScreenShareDialog
 from views.channel_tree import ChannelTreeView
 from views.chat_widget import ChatWidget
@@ -32,6 +36,8 @@ from views.settings_page import SettingsPage
 from views.screen_share_view import ScreenShareView
 from views.voice_waveform import VoiceWaveformPanel
 from views.server_quick_access import ServerQuickAccessPanel
+from views.incoming_call_dialog import IncomingCallDialog
+from views.video_call_dialog import VideoCallDialog
 from per_user_volume import PerUserVolumeManager, VolumeSliderDialog
 from audio_share_engine import AudioShareEngine
 from updater import Updater, UpdateState
@@ -41,6 +47,7 @@ import i18n
 
 APP_NAME = "NEVO"
 _MAIN_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "main_debug.log")
+logger = logging.getLogger("main_window")
 
 
 def _log_main(msg: str):
@@ -68,9 +75,18 @@ class _CallbackSignalHelper(QObject):
     admin_auth_result = pyqtSignal(bool, str)   # success, message
     admin_action_result = pyqtSignal(bool, str)  # success, message
     file_upload_response = pyqtSignal(int, bool, str)  # file_id, success, message
+    file_received = pyqtSignal(int, str, str)          # file_id, cached_path, filename
+    file_error = pyqtSignal(int, str)                  # file_id, message
     vad_speaking_changed = pyqtSignal(bool)     # speaking
     latency_update = pyqtSignal(int)            # latency_ms
     video_frame = pyqtSignal(int, object, int, int)  # sender_id, frame, width, height
+
+    # 视频通话相关信号
+    video_call_incoming = pyqtSignal(int, int, str, object)  # call_id, caller_id, caller_name, profile
+    video_call_established = pyqtSignal(int, int, object)    # call_id, peer_id, profile
+    video_call_ended = pyqtSignal(int, int)                  # call_id, reason
+    video_call_error = pyqtSignal(int, str)                  # call_id, message
+    video_call_frame = pyqtSignal(int, object, int, int)     # sender_id, frame, width, height
 
 
 class AdminPasswordDialog(Dialog):
@@ -188,6 +204,14 @@ class MainWindow(FluentWindow):
         self.video_engine = VideoEngine()
         self.video_engine.on_video_frame = self._on_video_frame
         self.video_engine.on_share_state_changed = self._on_share_state_changed
+
+        # 一对一视频通话引擎
+        self.video_call_engine = VideoCallEngine()
+        self.video_call_engine.on_video_frame = self._on_video_call_frame
+        self.video_call_engine.on_error = self._on_video_call_error
+        self._video_call_dialog: Optional[VideoCallDialog] = None
+        self._incoming_call_dialog: Optional[IncomingCallDialog] = None
+
         self.audio_share_engine = AudioShareEngine()
         self.audio_share_engine.on_share_state_changed = self._on_audio_share_state_changed
         self.screen_share_view = ScreenShareView()
@@ -212,6 +236,13 @@ class MainWindow(FluentWindow):
 
     def _setup_ui(self):
         self.setWindowTitle("NEVO")
+
+        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "nevo_icon.ico")
+        if not os.path.exists(icon_path) and getattr(sys, 'frozen', False):
+            icon_path = os.path.join(sys._MEIPASS, "resources", "nevo_icon.ico")
+        if os.path.exists(icon_path):
+            from PyQt5.QtGui import QIcon
+            self.setWindowIcon(QIcon(icon_path))
 
         # Central content widget
         central = QFrame()
@@ -244,6 +275,7 @@ class MainWindow(FluentWindow):
         )
         self.channel_tree.volume_requested.connect(self._on_user_volume_requested)
         self.channel_tree.local_mute_requested.connect(self._on_user_local_mute_requested)
+        self.channel_tree.video_call_requested.connect(self._on_video_call_requested)
         channel_card.viewLayout.addWidget(self.channel_tree)
 
         # Voice waveform panel
@@ -267,6 +299,7 @@ class MainWindow(FluentWindow):
         self.chat_widget.chat_message_sent.connect(self._on_chat_send)
         self.chat_widget.file_upload_requested.connect(self._on_file_upload)
         self.chat_widget.image_upload_requested.connect(self._on_image_upload)
+        self.chat_widget.file_download_requested.connect(self._on_file_download)
         self.chat_widget.set_input_enabled(False)
         chat_card.viewLayout.addWidget(self.chat_widget)
         splitter.addWidget(chat_card)
@@ -286,6 +319,7 @@ class MainWindow(FluentWindow):
         self.connection_bar.stop_screen_share_requested.connect(self._on_stop_share_screen)
         self.connection_bar.audio_share_requested.connect(self._on_audio_share)
         self.connection_bar.stop_audio_share_requested.connect(self._on_stop_audio_share)
+        self.connection_bar.video_call_requested.connect(self._on_bottom_video_call_requested)
         central_layout.addWidget(self.connection_bar)
 
         # Use a "home" view that shows the central content
@@ -376,9 +410,18 @@ class MainWindow(FluentWindow):
         self._signals.admin_auth_result.connect(self._handle_admin_auth_result)
         self._signals.admin_action_result.connect(self._handle_admin_action_result)
         self._signals.file_upload_response.connect(self._handle_file_upload_response)
+        self._signals.file_received.connect(self._handle_file_received)
+        self._signals.file_error.connect(self._handle_file_error)
         self._signals.vad_speaking_changed.connect(self._handle_vad_speaking)
         self._signals.latency_update.connect(self._handle_latency_update)
         self._signals.video_frame.connect(self._handle_video_frame)
+
+        # 视频通话信号连接
+        self._signals.video_call_incoming.connect(self._handle_video_call_incoming)
+        self._signals.video_call_established.connect(self._handle_video_call_established)
+        self._signals.video_call_ended.connect(self._handle_video_call_ended)
+        self._signals.video_call_error.connect(self._handle_video_call_error)
+        self._signals.video_call_frame.connect(self._handle_video_call_frame)
 
         # Client callbacks -> emit signals (thread-safe bridge)
         self.client.on_latency_update = lambda ms: self._signals.latency_update.emit(ms)
@@ -387,14 +430,27 @@ class MainWindow(FluentWindow):
         self.client.on_state_changed = lambda new, old: self._signals.state_changed.emit(int(new), int(old))
         self.client.on_channel_list = lambda ch: self._signals.channel_list.emit(ch)
         self.client.on_user_joined = lambda u: self._signals.user_joined.emit(u)
-        self.client.on_user_left = lambda uid: self._signals.user_left.emit(uid)
-        self.client.on_user_speaking = lambda uid, s: self._signals.user_speaking.emit(uid, s)
+        self.client.on_user_left = lambda u: self._signals.user_left.emit(u)
+        self.client.on_user_speaking = lambda uid, spk: self._signals.user_speaking.emit(uid, spk)
         self.client.on_chat_message = lambda sid, sn, cid, txt, ts: self._signals.chat_message.emit(sid, sn, cid, txt, ts)
+        self.client.on_screen_share_state = self._on_screen_share_state_received
         self.client.on_server_message = lambda txt: self._signals.server_message.emit(txt)
         self.client.on_error = lambda code, msg: self._signals.error.emit(code, msg)
         self.client.on_admin_auth_result = lambda ok, msg: self._signals.admin_auth_result.emit(ok, msg)
         self.client.on_admin_action_result = lambda ok, msg: self._signals.admin_action_result.emit(ok, msg)
         self.client.on_file_upload_response = lambda fid, ok, msg: self._signals.file_upload_response.emit(fid, ok, msg)
+        self.client.on_file_received = lambda fid, path, name: self._signals.file_received.emit(int(fid), path, name)
+        self.client.on_file_error = lambda fid, msg: self._signals.file_error.emit(int(fid), msg)
+
+        # 视频通话回调 -> 信号（网络线程 -> UI 线程）
+        self.client.on_video_call_incoming = \
+            lambda cid, uid, name, prof: self._signals.video_call_incoming.emit(cid, uid, name, prof)
+        self.client.on_video_call_established = \
+            lambda cid, pid, prof: self._signals.video_call_established.emit(cid, pid, prof)
+        self.client.on_video_call_ended = \
+            lambda cid, reason: self._signals.video_call_ended.emit(cid, reason)
+        self.client.on_video_call_error = \
+            lambda cid, msg: self._signals.video_call_error.emit(cid, msg)
 
         # VAD callback -> signal (audio thread -> UI thread)
         self.audio_manager.on_vad_changed = lambda speaking: self._signals.vad_speaking_changed.emit(speaking)
@@ -420,13 +476,296 @@ class MainWindow(FluentWindow):
         thread.start()
 
     def _on_disconnect(self):
-        self.client.disconnect()
+        # 断开操作异步化：client.disconnect() 内部会 join 接收线程（最多 5 秒），
+        # 不能阻塞 UI 线程。状态更新由 state_changed 信号回调到 UI 线程完成。
+        def disconnect_thread():
+            try:
+                self.client.disconnect()
+            except Exception as e:
+                _log_main(f"[DISCONNECT] async disconnect failed: {e}")
+
+        thread = threading.Thread(target=disconnect_thread, daemon=True)
+        thread.start()
 
     def _on_quick_access_connect(self, host: str, port: int, username: str):
         self.connection_bar.edit_host.setText(host)
         self.connection_bar.spin_port.setValue(port)
         self.connection_bar.edit_username.setText(username)
         self._on_connect(host, port, username, "")
+
+    def _on_video_call_requested(self, user_id: int, username: str):
+        """用户从频道用户列表发起视频通话。"""
+        _log_main(f"[VIDEO_CALL] requested to user_id={user_id}, name={username}")
+        if not CameraCapture.is_available():
+            InfoBar.warning(
+                self.tr("Video Call"),
+                self.tr("OpenCV is not installed, video call is unavailable."),
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=4000,
+            )
+            return
+        if not self.client.connected:
+            InfoBar.warning(
+                self.tr("Video Call"),
+                self.tr("Please connect to a server first."),
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+            )
+            return
+        if self.client.video_call_state != VideoCallState.Idle:
+            InfoBar.warning(
+                self.tr("Video Call"),
+                self.tr("You are already in a video call."),
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+            )
+            return
+
+        profile = VideoProfile(width=640, height=480, fps=30, target_bitrate_kbps=1000)
+        if not self.client.send_video_call_request(user_id, profile):
+            InfoBar.warning(
+                self.tr("Video Call"),
+                self.tr("Failed to send video call request."),
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+            )
+        else:
+            InfoBar.info(
+                self.tr("Video Call"),
+                self.tr("Calling {}...").format(username),
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+            )
+
+    def _on_bottom_video_call_requested(self):
+        """从底部控制栏发起视频通话：选择当前频道成员后发送请求。"""
+        if not CameraCapture.is_available():
+            InfoBar.warning(
+                self.tr("Video Call"),
+                self.tr("OpenCV is not installed, video call is unavailable."),
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=4000,
+            )
+            return
+        if not self.client.connected:
+            InfoBar.warning(
+                self.tr("Video Call"),
+                self.tr("Please connect to a server first."),
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+            )
+            return
+        if self.client.video_call_state != VideoCallState.Idle:
+            InfoBar.warning(
+                self.tr("Video Call"),
+                self.tr("You are already in a video call."),
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+            )
+            return
+
+        users = [u for u in self.client.channel_users if u.get("id") != self.client.user_id]
+        _log_main(f"[VIDEO_CALL_BTN] channel_users={len(self.client.channel_users)}, user_id={self.client.user_id}, filtered={len(users)}, current_ch={self.client.current_channel_id}, in_channel={self.client.in_channel}, state={self.client.state}")
+        for u in self.client.channel_users:
+            _log_main(f"  channel_user: id={u.get('id')} name={u.get('username')}")
+        if not users:
+            if len(self.client.channel_users) == 0:
+                msg = self.tr("No channel users loaded. Please join a channel first.")
+                _log_main("[VIDEO_CALL_BTN] FAIL: channel_users is empty (sync issue)")
+            elif len(self.client.channel_users) == 1:
+                msg = self.tr("You are the only user in this channel. Invite someone else to make a video call.")
+                _log_main("[VIDEO_CALL_BTN] FAIL: only local user in channel (single-user scenario)")
+            else:
+                msg = self.tr("No other users in the current channel.")
+                _log_main("[VIDEO_CALL_BTN] FAIL: filtered out all users (user_id mismatch?)")
+            InfoBar.warning(
+                self.tr("Video Call"),
+                msg,
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=4000,
+            )
+            return
+
+        items = [f"{u.get('username', 'User')} (ID: {u.get('id', 0)})" for u in users]
+        selected, ok = QInputDialog.getItem(
+            self,
+            self.tr("Video Call"),
+            self.tr("Select a user to call:"),
+            items,
+            0,
+            False,
+        )
+        if not ok:
+            return
+
+        index = items.index(selected)
+        user = users[index]
+        user_id = user.get("id", 0)
+        username = user.get("username", "User")
+        self._on_video_call_requested(user_id, username)
+
+    def _on_video_call_frame(self, sender_id: int, frame_bgr, width: int, height: int):
+        """视频通话媒体引擎回调（非 UI 线程）：通过信号转发到 UI 线程。"""
+        try:
+            self._signals.video_call_frame.emit(sender_id, frame_bgr.copy(), width, height)
+        except Exception as e:
+            _log_main(f"[VIDEO_CALL] frame emit failed: {e}")
+
+    def _on_video_call_error(self, msg: str):
+        """视频通话媒体引擎错误回调。"""
+        _log_main(f"[VIDEO_CALL] engine error: {msg}")
+        self._signals.video_call_error.emit(0, msg)
+
+    def _handle_video_call_incoming(self, call_id: int, caller_id: int, caller_name: str, profile):
+        """UI 线程：处理来电。"""
+        _log_main(f"[VIDEO_CALL] incoming call_id={call_id} from {caller_name}({caller_id})")
+        if self._incoming_call_dialog is not None:
+            self._incoming_call_dialog.close()
+            self._incoming_call_dialog = None
+
+        dlg = IncomingCallDialog(caller_name, parent=self)
+        dlg.accepted.connect(lambda: self._accept_incoming_video_call(call_id, profile))
+        dlg.rejected.connect(lambda: self._reject_incoming_video_call(call_id))
+        self._incoming_call_dialog = dlg
+        dlg.show()
+
+    def _accept_incoming_video_call(self, call_id: int, profile):
+        """接听来电。"""
+        self._incoming_call_dialog = None
+        if not self.client.connected:
+            return
+        # 使用本地 profile 作为协商结果（简化实现）
+        local_profile = VideoProfile(width=640, height=480, fps=30, target_bitrate_kbps=1000)
+        if not self.client.send_video_call_response(call_id, True, local_profile):
+            InfoBar.warning(
+                self.tr("Video Call"),
+                self.tr("Failed to answer the call."),
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+            )
+
+    def _reject_incoming_video_call(self, call_id: int):
+        """拒绝来电。"""
+        self._incoming_call_dialog = None
+        if self.client.connected:
+            self.client.send_video_call_response(call_id, False, reason="declined")
+
+    def _handle_video_call_established(self, call_id: int, peer_id: int, profile):
+        """UI 线程：通话已建立，启动媒体引擎并显示通话窗口。"""
+        _log_main(f"[VIDEO_CALL] established call_id={call_id} peer={peer_id}")
+        if self._incoming_call_dialog is not None:
+            self._incoming_call_dialog.close()
+            self._incoming_call_dialog = None
+
+        if self._video_call_dialog is not None:
+            self._video_call_dialog.close()
+            self._video_call_dialog = None
+
+        try:
+            host = self.client._sock.getpeername()[0] if self.client._sock else "127.0.0.1"
+        except Exception:
+            host = "127.0.0.1"
+        video_port = self.client.server_video_udp_port or 5174
+        session_key = self.client.session_key or b""
+        user_id = self.client.user_id or 0
+
+        ok, err = self.video_call_engine.start_call(
+            call_id=call_id,
+            server_addr=(host, video_port),
+            user_id=user_id,
+            session_key=session_key,
+            profile=profile,
+            camera_index=0,
+        )
+        if not ok:
+            InfoBar.warning(
+                self.tr("Video Call"),
+                self.tr("Failed to start video call engine: {}").format(err),
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=4000,
+            )
+            self.client.send_video_call_hangup(call_id, reason=1)
+            return
+
+        peer_name = f"User {peer_id}"
+        for u in self.client.channel_users:
+            if u.get("id") == peer_id:
+                peer_name = u.get("username", peer_name)
+                break
+
+        dlg = VideoCallDialog(peer_name, parent=self)
+        dlg.set_local_user_id(user_id)
+        dlg.set_camera_devices(CameraCapture.enumerate_devices())
+        dlg.hangup_requested.connect(lambda: self._hangup_video_call(call_id))
+        dlg.video_mute_toggled.connect(lambda muted: self.video_call_engine.set_muted_video(muted))
+        dlg.camera_changed.connect(lambda idx: self.video_call_engine.set_camera_device(idx))
+        self._video_call_dialog = dlg
+        dlg.show()
+
+    def _hangup_video_call(self, call_id: int):
+        """挂断视频通话。"""
+        _log_main(f"[VIDEO_CALL] hangup call_id={call_id}")
+        self.client.send_video_call_hangup(call_id)
+        self._cleanup_video_call_ui()
+
+    def _handle_video_call_ended(self, call_id: int, reason: int):
+        """UI 线程：通话结束，清理资源。"""
+        _log_main(f"[VIDEO_CALL] ended call_id={call_id} reason={reason}")
+        self._cleanup_video_call_ui()
+        InfoBar.info(
+            self.tr("Video Call"),
+            self.tr("Video call ended."),
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=3000,
+        )
+
+    def _handle_video_call_error(self, call_id: int, msg: str):
+        """UI 线程：显示视频通话错误并清理。"""
+        _log_main(f"[VIDEO_CALL] error call_id={call_id}: {msg}")
+        self._cleanup_video_call_ui()
+        InfoBar.warning(
+            self.tr("Video Call"),
+            self.tr("Video call error: {}").format(msg),
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=4000,
+        )
+
+    def _cleanup_video_call_ui(self):
+        """停止引擎并关闭视频通话相关窗口。"""
+        try:
+            self.video_call_engine.stop_call()
+        except Exception as e:
+            _log_main(f"[VIDEO_CALL] stop_call error: {e}")
+        if self._video_call_dialog is not None:
+            try:
+                self._video_call_dialog.close()
+            except Exception:
+                pass
+            self._video_call_dialog = None
+        if self._incoming_call_dialog is not None:
+            try:
+                self._incoming_call_dialog.close()
+            except Exception:
+                pass
+            self._incoming_call_dialog = None
+
+    def _handle_video_call_frame(self, sender_id: int, frame_bgr, width: int, height: int):
+        """UI 线程：更新视频通话画面。"""
+        if self._video_call_dialog is not None:
+            self._video_call_dialog.on_video_frame(sender_id, frame_bgr, width, height)
 
     def _on_join_channel(self, channel_id: int):
         if not self.client.join_channel(channel_id):
@@ -539,9 +878,11 @@ class MainWindow(FluentWindow):
                     self.connection_bar.set_sharing(False)
                 else:
                     _log_main("[SHARE_SCREEN] start_share SUCCESS")
+                    self._send_screen_share_start(config)
 
     def _on_stop_share_screen(self):
         self.video_engine.stop_share()
+        self._send_screen_share_stop()
 
     def _on_share_state_changed(self, sharing):
         from PyQt5.QtCore import QMetaObject, Qt, Q_ARG
@@ -550,6 +891,46 @@ class MainWindow(FluentWindow):
             Qt.QueuedConnection,
             Q_ARG(bool, sharing)
         )
+
+    def _send_screen_share_start(self, config):
+        if not self.client or not self.client.connected:
+            return
+        source_name = config.get("source_name", "")
+        try:
+            self.client.send_screen_share_start(
+                channel_id=self.client.current_channel_id,
+                source_type=config.get("source_type", 0),
+                source_name=source_name,
+                width=config.get("width", 1920),
+                height=config.get("height", 1080),
+                fps=config.get("fps", 15),
+            )
+        except Exception as e:
+            _log_main(f"[SHARE_SCREEN] send_screen_share_start failed: {e}")
+
+    def _send_screen_share_stop(self):
+        if not self.client or not self.client.connected:
+            return
+        try:
+            self.client.send_screen_share_stop(
+                self.client.current_channel_id
+            )
+        except Exception as e:
+            _log_main(f"[SHARE_SCREEN] send_screen_share_stop failed: {e}")
+
+    def _on_screen_share_state_received(self, user_id: int, sharing: bool,
+                                         source_type: int, source_name: str,
+                                         width: int, height: int):
+        _log_main(f"[SHARE_SCREEN] State received: user={user_id} sharing={sharing} {source_name} {width}x{height}")
+        if sharing and user_id != self.client.user_id:
+            InfoBar.info(
+                self.tr("Screen Share"),
+                self.tr("{} is sharing their screen ({})").format(
+                    source_name or f"User {user_id}", f"{width}x{height}"),
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=5000,
+            )
 
     def _on_audio_share(self, source_type):
         _log_main(f"[AUDIO_SHARE] source_type={source_type}")
@@ -581,13 +962,22 @@ class MainWindow(FluentWindow):
             )
         else:
             source_label = self.tr("Application Audio") if source_type == "app" else self.tr("System Audio")
-            InfoBar.success(
-                self.tr("Audio Share"),
-                self.tr("Sharing {}").format(source_label),
-                parent=self,
-                position=InfoBarPosition.TOP,
-                duration=2000,
-            )
+            if error_msg:
+                InfoBar.warning(
+                    self.tr("Audio Share"),
+                    self.tr("Sharing {} ({}).").format(source_label, error_msg),
+                    parent=self,
+                    position=InfoBarPosition.TOP,
+                    duration=4000,
+                )
+            else:
+                InfoBar.success(
+                    self.tr("Audio Share"),
+                    self.tr("Sharing {}").format(source_label),
+                    parent=self,
+                    position=InfoBarPosition.TOP,
+                    duration=2000,
+                )
 
     def _on_stop_audio_share(self):
         self.audio_share_engine.stop_share()
@@ -630,8 +1020,8 @@ class MainWindow(FluentWindow):
             self.chat_widget.set_input_enabled(False)
             self.connection_bar.btn_admin_login.setEnabled(True)
             self.channel_tree.set_user_info(self.client.user_id, self.client.is_admin)
-            self.server_status.set_connected(True)
-            self.server_status.start_monitoring()
+            self.connection_bar.server_status.set_connected(True)
+            self.connection_bar.server_status.start_monitoring()
             if hasattr(self, '_last_connect_params'):
                 self.quick_access.add_recent(*self._last_connect_params)
             try:
@@ -697,8 +1087,8 @@ class MainWindow(FluentWindow):
             self.connection_bar.btn_mute.setText(self.tr("闭麦"))
             self.connection_bar.btn_deafen.setText(self.tr("禁言"))
             self.connection_bar.btn_admin_login.setEnabled(False)
-            self.server_status.set_connected(False)
-            self.server_status.stop_monitoring()
+            self.connection_bar.server_status.set_connected(False)
+            self.connection_bar.server_status.stop_monitoring()
             try:
                 self.video_engine.stop_share()
                 self.video_engine.stop_receive()
@@ -807,7 +1197,8 @@ class MainWindow(FluentWindow):
         )
 
     def _handle_admin_auth_result(self, success: bool, message: str):
-        print(f"[DEBUG] _handle_admin_auth_result: success={success}, message={message}")
+        logger.debug("[ADMIN] _handle_admin_auth_result: success=%s, message=%s",
+                     success, message)
         try:
             if success:
                 self.connection_bar.set_admin_authenticated(True)
@@ -827,9 +1218,7 @@ class MainWindow(FluentWindow):
                     duration=3000,
                 )
         except Exception as e:
-            print(f"[ERROR] _handle_admin_auth_result exception: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.debug("[ADMIN] _handle_admin_auth_result exception: %s", e, exc_info=True)
 
     def _handle_admin_action_result(self, success: bool, message: str):
         if success:
@@ -963,20 +1352,39 @@ class MainWindow(FluentWindow):
             src_path, filename, is_image = self._pending_file_upload
             from views.chat_widget import _ImageLabel
             try:
+                # 本地即时显示（上传者本机可见）
                 _ImageLabel.cache_image(str(file_id), src_path)
             except Exception:
                 pass
+            # 登记为文件所有者：缓存 + 响应频道内其他客户端的取回请求
+            self.client.register_owned_file(file_id, src_path, filename)
+            # 发送 [IMG:id] / [FILE:id:name] 聊天标记（既有机制）
             self.chat_widget.handle_upload_response(str(file_id), filename, is_image)
+            # 真实数据通道：向频道广播文件字节分片（后台线程）
+            self.client.upload_file_data(file_id, src_path, filename)
             del self._pending_file_upload
         elif not success:
             self.chat_widget.add_system_message(self.tr("Upload failed: {}").format(message))
 
-    def _on_rename_channel(self, channel_id: int, old_name: str):
-        _logf = r"C:\Users\yzd20\Desktop\NEVO\rename_debug.log"
+    def _on_file_download(self, file_id: str):
+        """点击图片/文件卡片且本地无数据时：请求取回真实字节流。"""
         try:
-            with open(_logf, "a", encoding="utf-8") as _f:
-                _f.write(f"[RENAME_SLOT] ENTER cid={channel_id} name='{old_name}'\n")
-            print(f"[DEBUG] _on_rename_channel called: channel_id={channel_id}, old_name='{old_name}'")
+            self.chat_widget.add_system_message(self.tr("Fetching file..."))
+            self.client.download_file(int(file_id))
+        except Exception as e:
+            logger.debug("[FILE] download_file failed: %s", e, exc_info=True)
+
+    def _handle_file_received(self, file_id: int, path: str, filename: str):
+        """文件字节流重组完成并写盘：刷新聊天区中的图片/文件卡片。"""
+        self.chat_widget.on_file_cached(str(file_id))
+
+    def _handle_file_error(self, file_id: int, message: str):
+        self.chat_widget.add_system_message(self.tr("File unavailable: {}").format(message))
+
+    def _on_rename_channel(self, channel_id: int, old_name: str):
+        logger.debug("[RENAME] _on_rename_channel called: channel_id=%s, old_name='%s'",
+                     channel_id, old_name)
+        try:
             from PyQt5.QtWidgets import QInputDialog, QLineEdit
             new_name, ok = QInputDialog.getText(
                 self,
@@ -985,26 +1393,15 @@ class MainWindow(FluentWindow):
                 QLineEdit.Normal,
                 old_name,
             )
-            with open(_logf, "a", encoding="utf-8") as _f:
-                _f.write(f"[RENAME_SLOT] QInputDialog returned ok={ok} name='{new_name}'\n")
-            print(f"[DEBUG] _on_rename_channel: ok={ok}, new_name='{new_name}'")
+            logger.debug("[RENAME] _on_rename_channel: ok=%s, new_name='%s'", ok, new_name)
             if ok and new_name.strip() and new_name.strip() != old_name:
-                print(f"[DEBUG] _on_rename_channel: calling send_rename_channel")
+                logger.debug("[RENAME] _on_rename_channel: calling send_rename_channel")
                 self.client.send_rename_channel(channel_id, new_name.strip())
-                with open(_logf, "a", encoding="utf-8") as _f:
-                    _f.write("[RENAME_SLOT] send_rename_channel called\n")
         except Exception as e:
-            with open(_logf, "a", encoding="utf-8") as _f:
-                _f.write(f"[RENAME_SLOT] EXCEPTION: {e}\n")
-            print(f"[ERROR] _on_rename_channel exception: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.debug("[RENAME] _on_rename_channel exception: %s", e, exc_info=True)
 
     def _on_add_subchannel(self, parent_id: int):
-        _logf = r"C:\Users\yzd20\Desktop\NEVO\rename_debug.log"
         try:
-            with open(_logf, "a", encoding="utf-8") as _f:
-                _f.write(f"[ADD_SUB_SLOT] ENTER pid={parent_id}\n")
             from PyQt5.QtWidgets import QInputDialog, QLineEdit
             name, ok = QInputDialog.getText(
                 self,
@@ -1013,17 +1410,10 @@ class MainWindow(FluentWindow):
                 QLineEdit.Normal,
                 "",
             )
-            with open(_logf, "a", encoding="utf-8") as _f:
-                _f.write(f"[ADD_SUB_SLOT] QInputDialog returned ok={ok} name='{name}'\n")
             if ok and name.strip():
                 self.client.send_create_channel(name.strip(), parent_id=parent_id)
-                with open(_logf, "a", encoding="utf-8") as _f:
-                    _f.write("[ADD_SUB_SLOT] send_create_channel called\n")
         except Exception as e:
-            with open(_logf, "a", encoding="utf-8") as _f:
-                _f.write(f"[ADD_SUB_SLOT] EXCEPTION: {e}\n")
-            import traceback
-            traceback.print_exc()
+            logger.debug("[ADD_SUB] _on_add_subchannel exception: %s", e, exc_info=True)
 
     def _on_delete_channel(self, channel_id: int):
         dialog = Dialog(
@@ -1037,21 +1427,21 @@ class MainWindow(FluentWindow):
             self.client.send_delete_channel(channel_id)
 
     def _on_admin_action(self, action: str):
-        print(f"[DEBUG] _on_admin_action called: action={action}")
+        logger.debug("[ADMIN] _on_admin_action called: action=%s", action)
         try:
             if action == "login":
-                print(f"[DEBUG] Creating AdminPasswordDialog...")
+                logger.debug("[ADMIN] Creating AdminPasswordDialog...")
                 dialog = AdminPasswordDialog(self)
-                print(f"[DEBUG] Showing dialog (exec_)...")
+                logger.debug("[ADMIN] Showing dialog (exec_)...")
                 result = dialog.exec_()
-                print(f"[DEBUG] Dialog closed with result={result}")
+                logger.debug("[ADMIN] Dialog closed with result=%s", result)
                 if result:
                     pwd = dialog.get_password()
-                    print(f"[DEBUG] Password entered, length={len(pwd) if pwd else 0}")
+                    logger.debug("[ADMIN] Password entered, length=%s", len(pwd) if pwd else 0)
                     if pwd:
-                        print(f"[DEBUG] Calling send_admin_auth...")
+                        logger.debug("[ADMIN] Calling send_admin_auth...")
                         self.client.send_admin_auth(pwd)
-                        print(f"[DEBUG] send_admin_auth returned")
+                        logger.debug("[ADMIN] send_admin_auth returned")
             elif action == "create_channel":
                 dialog = Dialog(
                     self.tr("Create Channel"),
@@ -1089,9 +1479,7 @@ class MainWindow(FluentWindow):
                     if name:
                         self.client.send_set_server_name(name)
         except Exception as e:
-            print(f"[ERROR] _on_admin_action exception: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.debug("[ADMIN] _on_admin_action exception: %s", e, exc_info=True)
 
     # ---- PTT / VAD ----
 
@@ -1193,7 +1581,7 @@ class MainWindow(FluentWindow):
             if info:
                 InfoBar.info(
                     self.tr("Update Available"),
-                    self.tr("NEVO v{} is available. Go to Settings → Software Update to download.").format(info.version),
+                    self.tr("NEVO v%s is available. Click 'Check Update' to download.") % info.version,
                     parent=self,
                     position=InfoBarPosition.TOP,
                     duration=5000,
@@ -1213,7 +1601,7 @@ class MainWindow(FluentWindow):
         self.connection_bar.refresh_theme()
         self.chat_widget.refresh_theme()
         self.screen_share_view.refresh_theme()
-        self.server_status.refresh_theme()
+        self.connection_bar.server_status.refresh_theme()
         self.waveform_panel.refresh_theme()
 
     def closeEvent(self, event):

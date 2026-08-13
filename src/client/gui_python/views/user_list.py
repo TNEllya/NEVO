@@ -7,8 +7,8 @@ from PyQt5.QtWidgets import (
     QScrollArea, QSizePolicy,
 )
 
-_COLOR_SPEAKING = QColor(255, 193, 7)
-_COLOR_OFF = QColor(60, 60, 60)
+_COLOR_SPEAKING = QColor("#2DD4A8")
+_COLOR_OFF = QColor("#3D4250")
 _AVATAR_SIZE = 36
 _LIGHT_BAR_WIDTH = 4
 _ROW_HEIGHT = 52
@@ -91,7 +91,10 @@ class _UserRow(QWidget):
 
         self._name_label = QLabel(self._username)
         self._name_label.setFont(QFont("Segoe UI", 9))
-        self._name_label.setStyleSheet("color: white; background: transparent;")
+        from theme_manager import ThemeManager
+        tm = ThemeManager.instance()
+        pal = tm.palette()
+        self._name_label.setStyleSheet(f"color: {pal['text_primary']}; background: transparent;")
         self._name_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         layout.addWidget(self._name_label, 1)
 
@@ -105,19 +108,22 @@ class _UserRow(QWidget):
         status_text = " ".join(status_parts)
         self._status_label = QLabel(status_text)
         self._status_label.setFont(QFont("Segoe UI", 8))
-        self._status_label.setStyleSheet("color: #a0a0a0; background: transparent;")
+        self._status_label.setStyleSheet(f"color: {pal['text_muted']}; background: transparent;")
         layout.addWidget(self._status_label)
 
     @staticmethod
     def _default_avatar():
+        from theme_manager import ThemeManager
+        tm = ThemeManager.instance()
+        pal = tm.palette()
         pix = QPixmap(_AVATAR_SIZE, _AVATAR_SIZE)
-        pix.fill(QColor("#5B5B5B"))
+        pix.fill(QColor(pal["voice_idle"]))
         p = QPainter(pix)
         p.setRenderHint(QPainter.Antialiasing)
         path = QPainterPath()
         path.addEllipse(0, 0, _AVATAR_SIZE, _AVATAR_SIZE)
         p.setClipPath(path)
-        p.setBrush(QColor("#808080"))
+        p.setBrush(QColor(pal["text_muted"]))
         p.setPen(Qt.NoPen)
         p.drawEllipse(2, 2, _AVATAR_SIZE - 4, _AVATAR_SIZE - 4)
         p.setBrush(Qt.white)
@@ -172,28 +178,28 @@ class UserListView(QFrame):
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        from theme_manager import ThemeManager
+        tm = ThemeManager.instance()
+        pal = tm.palette()
         self._scroll.setStyleSheet(
-            "QScrollArea { border: none; background-color: #2b2d31; }"
+            f"QScrollArea {{ border: none; background-color: {pal['bg_primary']}; }}"
             "QScrollBar:vertical {"
             "  width: 6px; background: transparent; border-radius: 3px;"
             "}"
-            "QScrollBar::handle:vertical {"
-            "  background: #4f545c; border-radius: 3px; min-height: 16px;"
-            "}"
-            "QScrollBar::handle:vertical:hover { background: #686d75; }"
-            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+            f"QScrollBar::handle:vertical {{ background: {pal['scrollbar_handle']}; border-radius: 3px; min-height: 16px; }}"
+            f"QScrollBar::handle:vertical:hover {{ background: {pal['text_muted']}; }}"
             "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }"
         )
 
         self._container = QWidget()
-        self._container.setStyleSheet("background-color: #2b2d31;")
+        self._container.setStyleSheet(f"background-color: {pal['bg_primary']};")
         self._content_layout = QVBoxLayout(self._container)
         self._content_layout.setContentsMargins(6, 8, 6, 8)
         self._content_layout.setSpacing(2)
 
         self.channel_label = QLabel(self.tr("Not in a channel"))
         self.channel_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        self.channel_label.setStyleSheet("color: white; background: transparent; padding: 0 0 4px 0;")
+        self.channel_label.setStyleSheet(f"color: {pal['text_primary']}; background: transparent; padding: 0 0 4px 0;")
         self._content_layout.addWidget(self.channel_label)
 
         self._content_layout.addStretch()

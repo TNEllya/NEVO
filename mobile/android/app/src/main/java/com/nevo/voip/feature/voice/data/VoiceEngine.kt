@@ -42,6 +42,20 @@ class VoiceEngine @Inject constructor(
         private const val FRAME_SAMPLES = 1920
         private const val BYTES_PER_SAMPLE = 2
         private const val FRAME_SIZE_BYTES = FRAME_SAMPLES * BYTES_PER_SAMPLE
+
+        /**
+         * NevoAudioService 是普通 Service（非 Hilt 注入），
+         * 通过该静态引用访问引擎实例，用于服务销毁时停止语音采集/播放。
+         * 与 NevoApplication.instance 的既有模式保持一致。
+         */
+        @Volatile
+        private var instance: VoiceEngine? = null
+
+        fun getInstance(): VoiceEngine? = instance
+    }
+
+    init {
+        instance = this
     }
 
     private val nativeAudioEngine = NativeAudioEngine()
@@ -61,15 +75,17 @@ class VoiceEngine @Inject constructor(
     private var nativeInitialized = false
     private var udpSocketCreated = false
 
-    fun init() {
+    fun init(): Boolean {
         if (!nativeInitialized) {
-            nativeAudioEngine.initAudio(SAMPLE_RATE, CHANNEL_COUNT)
-            nativeInitialized = true
+            nativeInitialized = nativeAudioEngine.initAudio(SAMPLE_RATE, CHANNEL_COUNT)
         }
+        return nativeInitialized
     }
 
     suspend fun startMicrophone(): Result<Unit> = withContext(Dispatchers.IO) {
-        init()
+        if (!init()) {
+            return@withContext Result.failure(IllegalStateException("Native audio engine is unavailable"))
+        }
 
         if (ContextCompat.checkSelfPermission(
                 applicationContext,
@@ -134,8 +150,11 @@ class VoiceEngine @Inject constructor(
                 val encrypted = cryptoManager.voiceEncrypt(key, nonce, opusData)
                 if (encrypted.isEmpty()) continue
 
+                // Prepend nonce to encrypted payload for receiver to extract
+                val packet = nonce + encrypted
+
                 val addr = serverAddress ?: continue
-                udpSocketManager.sendTo(addr, encrypted)
+                udpSocketManager.sendTo(addr, packet)
             }
         }
 
@@ -143,7 +162,12 @@ class VoiceEngine @Inject constructor(
     }
 
     suspend fun startSpeaker(serverUdpPort: Int): Result<Unit> = withContext(Dispatchers.IO) {
-        init()
+        if (serverUdpPort <= 0) {
+            return@withContext Result.failure(IllegalArgumentException("Invalid server UDP port: $serverUdpPort"))
+        }
+        if (!init()) {
+            return@withContext Result.failure(IllegalStateException("Native audio engine is unavailable"))
+        }
         ensureUdpSocket()
 
         val minBufferSize = AudioTrack.getMinBufferSize(
@@ -194,9 +218,14 @@ class VoiceEngine @Inject constructor(
 
                 if (isDeafened.get()) continue
 
+                // Extract nonce from the first 24 bytes of the packet
+                if (data.size < 24) continue
+                val nonce = data.copyOfRange(0, 24)
+                val ciphertext = data.copyOfRange(24, data.size)
+
                 var decrypted: ByteArray? = null
                 for (key in voiceCryptoState.getKeysToTry()) {
-                    val candidate = cryptoManager.voiceDecrypt(key, ByteArray(24), data)
+                    val candidate = cryptoManager.voiceDecrypt(key, nonce, ciphertext)
                     if (candidate != null && candidate.isNotEmpty()) {
                         decrypted = candidate
                         break

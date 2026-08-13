@@ -1,13 +1,9 @@
 package com.nevo.voip.feature.connection.data
 
-import android.content.Context
+import android.util.Log
 import com.nevo.voip.core.crypto.CryptoManager
-import com.nevo.voip.core.database.dao.ServerHistoryDao
-import com.nevo.voip.core.database.entity.ServerHistoryEntity
-import com.nevo.voip.core.datastore.NevoPreferences
 import com.nevo.voip.core.model.ChannelListUpdate
 import com.nevo.voip.core.model.ChatBroadcast
-import com.nevo.voip.core.model.LoginRequest
 import com.nevo.voip.core.model.LoginResponse
 import com.nevo.voip.core.model.ServerMessage
 import com.nevo.voip.core.model.UserJoinedChannel
@@ -16,21 +12,15 @@ import com.nevo.voip.core.model.UserSpeaking
 import com.nevo.voip.core.network.ConnectionState
 import com.nevo.voip.core.network.NetworkMonitor
 import com.nevo.voip.core.network.TcpConnectionManager
-import com.nevo.voip.core.protocol.MessageType
-import com.nevo.voip.core.protocol.ProtocolSerializer
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -40,33 +30,33 @@ import javax.inject.Singleton
 class ConnectionRepository @Inject constructor(
     private val tcpConnectionManager: TcpConnectionManager,
     private val cryptoManager: CryptoManager,
-    private val serverHistoryDao: ServerHistoryDao,
+    private val authenticationManager: AuthenticationManager,
+    private val messageDispatcher: MessageDispatcher,
+    private val connectionStateManager: ConnectionStateManager,
+    private val connectionHistoryManager: ConnectionHistoryManager,
+    private val reconnectStrategy: ReconnectStrategy,
     private val networkMonitor: NetworkMonitor,
-    @ApplicationContext private val context: Context
+    private val _channelListUpdates: MutableSharedFlow<ChannelListUpdate>,
+    private val _userJoinedChannel: MutableSharedFlow<UserJoinedChannel>,
+    private val _userLeftChannel: MutableSharedFlow<UserLeftChannel>,
+    private val _userSpeaking: MutableSharedFlow<UserSpeaking>,
+    private val _chatMessages: MutableSharedFlow<ChatBroadcast>,
+    private val _serverMessages: MutableSharedFlow<ServerMessage>
 ) {
-    private val preferences = NevoPreferences(context)
+    companion object {
+        private const val TAG = "ConnRepo"
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
-    val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
-
-    private val _channelListUpdates = MutableSharedFlow<ChannelListUpdate>(extraBufferCapacity = 16)
     val channelListUpdates: SharedFlow<ChannelListUpdate> = _channelListUpdates.asSharedFlow()
-
-    private val _userJoinedChannel = MutableSharedFlow<UserJoinedChannel>(extraBufferCapacity = 16)
     val userJoinedChannel: SharedFlow<UserJoinedChannel> = _userJoinedChannel.asSharedFlow()
-
-    private val _userLeftChannel = MutableSharedFlow<UserLeftChannel>(extraBufferCapacity = 16)
     val userLeftChannel: SharedFlow<UserLeftChannel> = _userLeftChannel.asSharedFlow()
-
-    private val _userSpeaking = MutableSharedFlow<UserSpeaking>(extraBufferCapacity = 16)
     val userSpeaking: SharedFlow<UserSpeaking> = _userSpeaking.asSharedFlow()
-
-    private val _chatMessages = MutableSharedFlow<ChatBroadcast>(extraBufferCapacity = 64)
     val chatMessages: SharedFlow<ChatBroadcast> = _chatMessages.asSharedFlow()
-
-    private val _serverMessages = MutableSharedFlow<ServerMessage>(extraBufferCapacity = 16)
     val serverMessages: SharedFlow<ServerMessage> = _serverMessages.asSharedFlow()
+
+    val connectionState: StateFlow<ConnectionState> = connectionStateManager.connectionState
 
     private var receiveJob: Job? = null
     private var reconnectJob: Job? = null
@@ -75,12 +65,13 @@ class ConnectionRepository @Inject constructor(
     private var currentPrivateKey: ByteArray = ByteArray(0)
 
     @Volatile
-    private var sessionToken: String = ""
+    private var currentSessionKey: ByteArray = ByteArray(0)
 
     @Volatile
-    private var currentUserId: Long = 0
+    private var currentServerUdpPort: Int = 0
 
-    private var lastServerName: String? = null
+    @Volatile
+    private var lastPassword: String = ""
 
     suspend fun connect(
         host: String,
@@ -88,113 +79,56 @@ class ConnectionRepository @Inject constructor(
         username: String,
         password: String
     ): Result<LoginResponse> {
-        _connectionState.value = ConnectionState.Connecting
+        connectionStateManager.updateState(ConnectionState.Connecting, "Starting connection")
 
+        // TCP connection
         val tcpResult = tcpConnectionManager.connect(host, port)
         if (tcpResult.isFailure) {
             val error = tcpResult.exceptionOrNull()?.message ?: "TCP connection failed"
-            _connectionState.value = ConnectionState.Error(error)
+            connectionStateManager.updateState(ConnectionState.Error(error), "TCP connection failed")
             return Result.failure(tcpResult.exceptionOrNull() ?: Exception(error))
         }
 
-        val (publicKey, privateKey) = cryptoManager.generateKeyPair()
-        currentPrivateKey = privateKey
-
-        val authCredential = password.toByteArray(Charsets.UTF_8)
-        val loginRequest = LoginRequest(
-            username = username,
-            authCredential = authCredential,
-            keyExchangeMethods = listOf("X25519+crypto_box_seal", "X25519"),
-            clientPublicKey = publicKey,
-            clientUdpPort = 0,
-            clientVideoUdpPort = 0
-        )
-
-        val serialized = ProtocolSerializer.serializeLoginRequest(loginRequest)
-        val sendResult = tcpConnectionManager.sendMessage(
-            MessageType.LOGIN_REQUEST.id,
-            serialized
-        )
-        if (sendResult.isFailure) {
-            val error = sendResult.exceptionOrNull()?.message ?: "Failed to send login request"
-            _connectionState.value = ConnectionState.Error(error)
+        // Authentication
+        val authResult = authenticationManager.authenticate(username, password, host, port, tcpConnectionManager)
+        if (authResult.isFailure) {
+            val error = authResult.exceptionOrNull()?.message ?: "Authentication failed"
+            connectionStateManager.updateState(ConnectionState.Error(error), "Authentication failed")
             disconnect()
-            return Result.failure(sendResult.exceptionOrNull() ?: Exception(error))
+            return Result.failure(authResult.exceptionOrNull() ?: Exception(error))
         }
 
-        val readResult = tcpConnectionManager.readMessage()
-        if (readResult.isFailure) {
-            val error = readResult.exceptionOrNull()?.message ?: "Failed to read login response"
-            _connectionState.value = ConnectionState.Error(error)
-            disconnect()
-            return Result.failure(readResult.exceptionOrNull() ?: Exception(error))
-        }
+        val authData = authResult.getOrThrow()
 
-        val (messageType, payload) = readResult.getOrThrow()
-        if (messageType != MessageType.LOGIN_RESPONSE.id) {
-            val error = "Unexpected message type: $messageType"
-            _connectionState.value = ConnectionState.Error(error)
-            disconnect()
-            return Result.failure(Exception(error))
-        }
+        // Save session data
+        currentPrivateKey = authData.privateKey
+        currentSessionKey = authData.sessionKey
+        currentServerUdpPort = authData.serverUdpPort
+        lastPassword = password
 
-        val loginResponse = ProtocolSerializer.deserializeLoginResponse(payload)
+        // Save connection history
+        connectionHistoryManager.saveConnectionHistory(host, port, username, authData.serverName)
 
-        if (loginResponse.result != 0) {
-            val error = "Login failed with result code: ${loginResponse.result}"
-            _connectionState.value = ConnectionState.Error(error)
-            disconnect()
-            return Result.failure(Exception(error))
-        }
-
-        val sessionKey = decryptSessionKey(loginResponse)
-
-        sessionToken = loginResponse.sessionToken
-        currentUserId = loginResponse.userInfo?.id ?: 0
-
-        preferences.setLastConnectedHost(host)
-        preferences.setLastConnectedPort(port)
-        preferences.setLastUsername(username)
-
-        val serverName = loginResponse.userInfo?.username?.let {
-            if (it.isNotBlank()) it else host
-        } ?: host
-        lastServerName = serverName
-
-        val historyEntity = ServerHistoryEntity(
-            host = host,
-            port = port,
-            username = username,
-            lastConnectedAt = System.currentTimeMillis(),
-            serverName = serverName
-        )
-        serverHistoryDao.insertOrUpdate(historyEntity)
-
-        _connectionState.value = ConnectionState.Connected(
-            serverName = serverName,
-            userId = currentUserId,
-            sessionId = 0L
+        // Update state
+        connectionStateManager.updateState(
+            ConnectionState.Connected(
+                serverName = authData.serverName,
+                userId = authData.userId,
+                sessionId = 0L
+            ),
+            "Connection established"
         )
 
+        // Start receive loop and network monitor
         startReceiveLoop()
         startNetworkMonitor()
 
-        return Result.success(loginResponse)
+        return Result.success(authData.loginResponse)
     }
 
-    private fun decryptSessionKey(loginResponse: LoginResponse): ByteArray {
-        val encryptedSessionKey = loginResponse.encryptedSessionKey
-        var sessionKey = cryptoManager.decryptSealed(encryptedSessionKey, currentPrivateKey)
+    fun getCurrentSessionKey(): ByteArray = currentSessionKey.copyOf()
 
-        if (sessionKey == null) {
-            val fallbackKey = loginResponse.serverPublicKey.takeLast(32).toByteArray()
-            if (fallbackKey.size == 32) {
-                sessionKey = cryptoManager.decryptSealed(encryptedSessionKey, fallbackKey)
-            }
-        }
-
-        return sessionKey ?: encryptedSessionKey
-    }
+    fun getCurrentServerUdpPort(): Int = currentServerUdpPort
 
     suspend fun disconnect() {
         reconnectJob?.cancel()
@@ -202,18 +136,22 @@ class ConnectionRepository @Inject constructor(
         receiveJob?.cancel()
         receiveJob = null
         tcpConnectionManager.disconnect()
-        _connectionState.value = ConnectionState.Disconnected
+        connectionStateManager.updateState(ConnectionState.Disconnected, "Disconnected by user")
     }
 
     private fun startReceiveLoop() {
         receiveJob?.cancel()
+        Log.d(TAG, "Starting receive loop")
         receiveJob = scope.launch {
             while (isActive && tcpConnectionManager.isConnected) {
+                Log.d(TAG, "Receive loop: waiting for message...")
                 val result = tcpConnectionManager.readMessage()
                 if (result.isFailure) {
+                    Log.e(TAG, "Receive loop: read failed: ${result.exceptionOrNull()?.message}")
                     if (isActive) {
-                        _connectionState.value = ConnectionState.Error(
-                            result.exceptionOrNull()?.message ?: "Connection lost"
+                        connectionStateManager.updateState(
+                            ConnectionState.Error(result.exceptionOrNull()?.message ?: "Connection lost"),
+                            "Connection lost"
                         )
                         attemptReconnect()
                     }
@@ -221,99 +159,35 @@ class ConnectionRepository @Inject constructor(
                 }
 
                 val (messageType, payload) = result.getOrThrow()
-                dispatchMessage(messageType, payload)
-            }
-        }
-    }
+                Log.d(TAG, "Receive loop: got msgType=$messageType, payload=${payload.size}B")
 
-    private fun dispatchMessage(messageTypeId: Int, payload: ByteArray) {
-        val msgType = MessageType.fromId(messageTypeId)
-        when (msgType) {
-            MessageType.CHANNEL_LIST_UPDATE -> {
-                val update = ProtocolSerializer.deserializeChannelListUpdate(payload)
-                handleChannelListUpdate(update)
-            }
-            MessageType.USER_JOINED_CHANNEL -> {
-                val event = ProtocolSerializer.deserializeUserJoinedChannel(payload)
-                handleUserJoined(event)
-            }
-            MessageType.USER_LEFT_CHANNEL -> {
-                val event = ProtocolSerializer.deserializeUserLeftChannel(payload)
-                handleUserLeft(event)
-            }
-            MessageType.USER_SPEAKING -> {
-                val event = ProtocolSerializer.deserializeUserSpeaking(payload)
-                handleUserSpeaking(event)
-            }
-            MessageType.CHAT_BROADCAST -> {
-                val event = ProtocolSerializer.deserializeChatBroadcast(payload)
-                handleChatBroadcast(event)
-            }
-            MessageType.SERVER_MESSAGE -> {
-                val event = ProtocolSerializer.deserializeServerMessage(payload)
-                handleServerMessage(event)
-            }
-            MessageType.KEY_ROTATION_REQUEST -> {
-                val event = ProtocolSerializer.deserializeKeyRotationRequest(payload)
-                handleKeyRotation(event)
-            }
-            MessageType.SPEAKING_STATE -> Unit
-            else -> Unit
-        }
-    }
-
-    private fun handleChannelListUpdate(update: ChannelListUpdate) {
-        _channelListUpdates.tryEmit(update)
-    }
-
-    private fun handleUserJoined(event: UserJoinedChannel) {
-        _userJoinedChannel.tryEmit(event)
-    }
-
-    private fun handleUserLeft(event: UserLeftChannel) {
-        _userLeftChannel.tryEmit(event)
-    }
-
-    private fun handleUserSpeaking(event: UserSpeaking) {
-        _userSpeaking.tryEmit(event)
-    }
-
-    private fun handleChatBroadcast(event: ChatBroadcast) {
-        _chatMessages.tryEmit(event)
-    }
-
-    private fun handleServerMessage(event: ServerMessage) {
-        _serverMessages.tryEmit(event)
-    }
-
-    private fun handleKeyRotation(event: com.nevo.voip.core.model.KeyRotationRequest) {
-        val decrypted = cryptoManager.decryptSealed(
-            event.encryptedSessionKey,
-            currentPrivateKey
-        )
-        if (decrypted != null) {
-            scope.launch {
-                val newKeyPair = cryptoManager.generateKeyPair()
-                val response = com.nevo.voip.core.model.KeyRotationResponse(
-                    newClientPublicKey = newKeyPair.first,
-                    keyEpoch = event.keyEpoch
+                val context = MessageContext(
+                    tcpConnectionManager = tcpConnectionManager,
+                    cryptoManager = cryptoManager,
+                    currentPrivateKey = currentPrivateKey,
+                    scope = scope,
+                    onKeysRotated = { newPrivateKey, newSessionKey ->
+                        // 密钥轮换回写：替换本地私钥与会话密钥
+                        currentPrivateKey = newPrivateKey
+                        currentSessionKey = newSessionKey
+                        Log.d(TAG, "Key rotation applied: privateKey=${newPrivateKey.size}B, sessionKey=${newSessionKey.size}B")
+                    }
                 )
-                currentPrivateKey = newKeyPair.second
-                val serialized = ProtocolSerializer.serializeKeyRotationResponse(response)
-                tcpConnectionManager.sendMessage(
-                    MessageType.KEY_ROTATION_RESPONSE.id,
-                    serialized
-                )
+                messageDispatcher.dispatch(messageType, payload, context)
             }
+            Log.d(TAG, "Receive loop exited: isActive=$isActive, isConnected=${tcpConnectionManager.isConnected}")
         }
     }
 
     private fun startNetworkMonitor() {
         scope.launch {
             networkMonitor.isNetworkAvailable.collect { available ->
-                if (!available && _connectionState.value is ConnectionState.Connected) {
-                    _connectionState.value = ConnectionState.Error("Network unavailable")
-                } else if (available && _connectionState.value is ConnectionState.Error) {
+                if (!available && connectionStateManager.isConnected()) {
+                    connectionStateManager.updateState(
+                        ConnectionState.Error("Network unavailable"),
+                        "Network unavailable"
+                    )
+                } else if (available && connectionStateManager.isError()) {
                     attemptReconnect()
                 }
             }
@@ -324,28 +198,36 @@ class ConnectionRepository @Inject constructor(
         if (reconnectJob?.isActive == true) return
         reconnectJob = scope.launch {
             var attempt = 0
-            val maxAttempts = 5
-            val baseDelay = 2000L
 
-            while (isActive && attempt < maxAttempts) {
+            while (isActive && reconnectStrategy.shouldReconnect(attempt)) {
                 attempt++
-                delay(baseDelay * attempt.coerceAtMost(5))
+                delay(reconnectStrategy.getDelay(attempt))
 
-                val host = preferences.lastConnectedHost.firstOrNull() ?: break
-                val port = preferences.lastConnectedPort.firstOrNull() ?: break
-                val username = preferences.lastUsername.firstOrNull() ?: break
+                val credentials = connectionHistoryManager.getLastConnection()
+                if (credentials == null || lastPassword.isBlank()) {
+                    connectionStateManager.updateState(
+                        ConnectionState.Disconnected,
+                        "No valid credentials for reconnect"
+                    )
+                    break
+                }
 
-                if (host.isBlank() || port == 0) break
-
-                val result = tcpConnectionManager.connect(host, port)
+                val result = connect(
+                    credentials.host,
+                    credentials.port,
+                    credentials.username,
+                    lastPassword
+                )
                 if (result.isSuccess) {
-                    startReceiveLoop()
                     break
                 }
             }
 
-            if (attempt >= maxAttempts) {
-                _connectionState.value = ConnectionState.Disconnected
+            if (attempt >= reconnectStrategy.getMaxAttempts()) {
+                connectionStateManager.updateState(
+                    ConnectionState.Disconnected,
+                    "Max reconnect attempts reached"
+                )
             }
         }
     }

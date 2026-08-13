@@ -340,6 +340,25 @@ ControlJson ControlServer::handleCommand(const ControlJson& request) {
     ControlJson response = ControlJson::make_obj();
     response.obj_val["id"] = ControlJson::make_num(id);
 
+    // ---- 管理面鉴权（fail-closed）----
+    // 敏感写操作必须携带有效的 auth_token。
+    // 例外：set_admin_password 在"尚未设置过任何令牌"的引导阶段允许匿名执行
+    //（首次配置管理员密码），一旦令牌存在则同样要求携带。
+    if (isSensitiveCommand(command)) {
+        bool bootstrap = (command == "set_admin_password") && !core_->hasAdminAuthToken();
+        if (!bootstrap) {
+            std::string token = params.str("auth_token", "");
+            if (token.empty() || !core_->verifyAdminAuthToken(token)) {
+                response.obj_val["status"] = ControlJson::make_str("error");
+                ControlJson errData = ControlJson::make_obj();
+                errData.obj_val["message"] = ControlJson::make_str(
+                    "AUTH_REQUIRED: valid auth_token required for command '" + command + "'");
+                response.obj_val["data"] = errData;
+                return response;
+            }
+        }
+    }
+
     ControlJson result;
 
     if (command == "get_status") {
@@ -358,6 +377,10 @@ ControlJson ControlServer::handleCommand(const ControlJson& request) {
         result = cmdGetConfig(params);
     } else if (command == "ban_user") {
         result = cmdBanUser(params);
+    } else if (command == "admin_login") {
+        result = cmdAdminLogin(params);
+    } else if (command == "set_admin_password") {
+        result = cmdSetAdminPassword(params);
     } else if (command == "set_config") {
         result = cmdSetConfig(params);
     } else if (command == "configure_ssl") {
@@ -381,6 +404,16 @@ ControlJson ControlServer::handleCommand(const ControlJson& request) {
     response.obj_val["status"] = ControlJson::make_str("ok");
     response.obj_val["data"] = result;
     return response;
+}
+
+bool ControlServer::isSensitiveCommand(const std::string& command) {
+    // 只读命令（get_*）无需令牌；其余写操作一律需要
+    return command == "kick_user" || command == "disconnect_all" ||
+           command == "shutdown" || command == "ban_user" ||
+           command == "set_config" || command == "configure_ssl" ||
+           command == "create_channel" || command == "delete_channel" ||
+           command == "update_channel" || command == "reorder_channels" ||
+           command == "set_admin_password";
 }
 
 ControlJson ControlServer::cmdGetStatus(const ControlJson& /*params*/) {
@@ -552,6 +585,32 @@ ControlJson ControlServer::cmdBanUser(const ControlJson& params) {
     return result;
 }
 
+ControlJson ControlServer::cmdAdminLogin(const ControlJson& params) {
+    std::string password = params.str("password", "");
+
+    auto result = ControlJson::make_obj();
+    if (password.empty()) {
+        result.obj_val["authenticated"] = ControlJson::make_bool(false);
+        result.obj_val["message"] = ControlJson::make_str("Password is empty");
+        return result;
+    }
+
+    // 用 Argon2id 哈希校验管理员密码（仅哈希校验，不涉及用户会话）
+    auto verify = core_->verifyAdminPassword(password);
+    if (!verify) {
+        result.obj_val["authenticated"] = ControlJson::make_bool(false);
+        result.obj_val["message"] = ControlJson::make_str(verify.error().message());
+        return result;
+    }
+
+    // 返回当前管理认证令牌（不存在则生成）
+    std::string token = core_->ensureAdminAuthToken();
+    result.obj_val["authenticated"] = ControlJson::make_bool(true);
+    result.obj_val["auth_token"] = ControlJson::make_str(token);
+    NEVO_LOG_INFO("control", "Admin login successful via IPC");
+    return result;
+}
+
 ControlJson ControlServer::cmdSetAdminPassword(const ControlJson& params) {
     std::string password = params.str("password", "");
 
@@ -561,9 +620,12 @@ ControlJson ControlServer::cmdSetAdminPassword(const ControlJson& params) {
         result.obj_val["message"] = ControlJson::make_str("Password is empty");
     } else {
         core_->setAdminPassword(password);
+        // 密码变更后重新生成令牌，旧令牌立即失效
+        std::string token = core_->generateAdminAuthToken();
         result.obj_val["success"] = ControlJson::make_bool(true);
+        result.obj_val["auth_token"] = ControlJson::make_str(token);
         result.obj_val["message"] = ControlJson::make_str("Admin password set successfully");
-        NEVO_LOG_INFO("control", "Admin password updated via IPC");
+        NEVO_LOG_INFO("control", "Admin password updated via IPC, auth token rotated");
     }
     return result;
 }
@@ -603,7 +665,12 @@ ControlJson ControlServer::cmdSetConfig(const ControlJson& params) {
     if (params.has("admin_password")) {
         std::string pwd = params.str("admin_password", "");
         core_->setAdminPassword(pwd);
+        // 密码变更后重新生成令牌，旧令牌立即失效
+        std::string token = core_->generateAdminAuthToken();
         result.obj_val["admin_password_set"] = ControlJson::make_bool(!pwd.empty());
+        if (!pwd.empty()) {
+            result.obj_val["auth_token"] = ControlJson::make_str(token);
+        }
         changed = true;
     }
 

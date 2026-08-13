@@ -119,6 +119,7 @@ private:
     ControlJson cmdShutdown(const ControlJson& params);
     ControlJson cmdGetConfig(const ControlJson& params);
     ControlJson cmdBanUser(const ControlJson& params);
+    ControlJson cmdAdminLogin(const ControlJson& params);
     ControlJson cmdSetAdminPassword(const ControlJson& params);
     ControlJson cmdSetConfig(const ControlJson& params);
     ControlJson cmdConfigureSsl(const ControlJson& params);
@@ -126,6 +127,9 @@ private:
     ControlJson cmdDeleteChannel(const ControlJson& params);
     ControlJson cmdUpdateChannel(const ControlJson& params);
     ControlJson cmdReorderChannels(const ControlJson& params);
+
+    /// 判断命令是否需要管理认证令牌（敏感写操作需要，只读命令不需要）
+    static bool isSensitiveCommand(const std::string& command);
 
     boost::asio::io_context& io_ctx_;
     Tcp::acceptor acceptor_;

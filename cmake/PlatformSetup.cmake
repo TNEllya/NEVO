@@ -12,6 +12,8 @@ function(nevo_platform_setup target)
         if(MSVC)
             target_compile_options(${target} PRIVATE /Zc:__cplusplus)
         endif()
+        # 暴露数学常量（如 M_PI），跨平台兼容
+        target_compile_definitions(${target} PRIVATE _USE_MATH_DEFINES)
         # 链接 Winsock（网络模块需要）+ mswsock（AcceptEx 等扩展函数）
         target_link_libraries(${target} PRIVATE ws2_32 mswsock)
     endif()

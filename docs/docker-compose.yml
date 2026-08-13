@@ -1,0 +1,103 @@
+# ============================================================
+# NEVO VoIP Server - Docker Compose (Production)
+# ============================================================
+#
+# Quick start:
+#   1. Copy .env.example to .env and edit settings
+#   2. docker compose up -d --build
+#   3. docker compose logs -f
+#
+# Management:
+#   docker compose up -d        Start
+#   docker compose down         Stop
+#   docker compose restart      Restart
+#   docker compose ps           Status
+#   docker compose logs -f      View logs
+#   docker compose pull         Update image from registry
+#   docker compose up -d        Recreate containers after update
+# ============================================================
+
+version: "3.8"
+
+services:
+  nevo-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nevo-server:latest
+    container_name: nevo-server
+    restart: unless-stopped
+
+    ports:
+      - "${NEVO_TCP_PORT:-24430}:24430/tcp"          # Client control / signalling
+      - "${NEVO_UDP_PORT:-24431}:24431/udp"          # Voice media (RTP/Opus)
+      - "${NEVO_VIDEO_UDP_PORT:-24432}:24432/udp"    # Video/screen-share media
+      - "${NEVO_CONTROL_PORT:-24433}:24433/tcp"      # Management JSON-over-TCP
+      - "${NEVO_WEB_PORT:-8090}:8090/tcp"            # Web management UI
+
+    volumes:
+      - nevo_data:/var/lib/nevo                       # SQLite DB and uploads
+      - nevo_config:/etc/nevo                         # Runtime config
+      - ./server_config.json:/etc/nevo/server_config.json:ro  # Optional host config
+
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+      - NEVO_SERVER_NAME=${NEVO_SERVER_NAME:-NEVO Server}
+      - NEVO_TCP_PORT=${NEVO_TCP_PORT:-24430}
+      - NEVO_UDP_PORT=${NEVO_UDP_PORT:-24431}
+      - NEVO_VIDEO_UDP_PORT=${NEVO_VIDEO_UDP_PORT:-24432}
+      - NEVO_CONTROL_PORT=${NEVO_CONTROL_PORT:-24433}
+      - NEVO_WEB_HOST=0.0.0.0
+      - NEVO_WEB_PORT=${NEVO_WEB_PORT:-8090}
+      - NEVO_MAX_USERS=${NEVO_MAX_USERS:-100}
+      - NEVO_LOG_LEVEL=${NEVO_LOG_LEVEL:-info}
+      - NEVO_THREADS=${NEVO_THREADS:-4}
+
+    deploy:
+      resources:
+        limits:
+          cpus: "${NEVO_CPU_LIMIT:-2}"
+          memory: "${NEVO_MEMORY_LIMIT:-512M}"
+        reservations:
+          cpus: "0.5"
+          memory: "128M"
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+        labels: "service"
+        env: "NEVO_SERVER_NAME,NEVO_TCP_PORT,NEVO_UDP_PORT"
+
+    healthcheck:
+      test: ["CMD", "nc", "-z", "-w3", "127.0.0.1", "24430"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+    networks:
+      - nevo-network
+
+    security_opt:
+      - no-new-privileges:true
+
+    cap_drop:
+      - ALL
+
+    cap_add:
+      - NET_BIND_SERVICE
+
+networks:
+  nevo-network:
+    name: nevo-network
+    driver: bridge
+
+volumes:
+  nevo_data:
+    name: nevo_data
+    driver: local
+  nevo_config:
+    name: nevo_config
+    driver: local

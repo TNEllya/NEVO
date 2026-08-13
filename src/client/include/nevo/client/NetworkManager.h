@@ -50,6 +50,7 @@
 #include "nevo/core/common/Result.h"
 #include "nevo/core/common/Types.h"
 #include "nevo/core/protocol/PacketTypes.h"
+#include "nevo/core/video/VideoTypes.h"
 #include "nevo/network/TcpConnection.h"
 #include "nevo/network/UdpSocket.h"
 #include "nevo/network/NatTraversal.h"
@@ -110,6 +111,15 @@ using VoicePacketCallback = std::function<void(
     uint32_t size,
     UserId sender_id)>;
 
+/// 视频包回调（原始 UDP 数据，含加密帧）
+/// @param data   完整 UDP 视频包数据指针
+/// @param size   数据大小
+/// @param sender 发送方端点
+using VideoPacketCallback = std::function<void(
+    const uint8_t* data,
+    uint32_t size,
+    const boost::asio::ip::udp::endpoint& sender)>;
+
 /// 断开连接回调
 using DisconnectedCallback = std::function<void()>;
 
@@ -141,6 +151,10 @@ struct NetworkManagerConfig {
 
     /// UDP 语音远端端点（服务器语音端口，由服务器在登录响应中告知）
     boost::asio::ip::udp::endpoint voice_server_endpoint;
+
+    /// UDP 视频远端端点（服务器视频端口，由服务器在登录响应中告知）
+    /// 若未设置，sendVideoPacket 将回退到 voice_server_endpoint
+    boost::asio::ip::udp::endpoint video_server_endpoint;
 
     /// 是否跳过 TLS 证书验证（仅开发环境使用）
     bool skip_tls_verify = false;
@@ -275,6 +289,32 @@ public:
         const uint8_t* data,
         uint32_t size);
 
+    /**
+     * @brief 发送视频数据包
+     *
+     * 视频包格式与语音包相同：
+     *   [2-byte header length][VideoPacketHeader protobuf][encrypted payload]
+     * 通过独立的 video_server_endpoint 发送到服务器 VideoRelay。
+     *
+     * @param data       编码后的视频帧数据（明文 NAL 单元）
+     * @param size       数据大小
+     * @param call_id    当前通话 ID（用于服务器按 call_id 转发）
+     * @param frame_type 帧类型（关键帧/增量帧）
+     * @param timestamp_us 帧时间戳（微秒）
+     * @return awaitable<Result<void>> 发送结果
+     */
+    boost::asio::awaitable<Result<void>> sendVideoPacket(
+        const uint8_t* data,
+        uint32_t size,
+        video::VideoCallId call_id,
+        video::VideoFrameType frame_type,
+        uint64_t timestamp_us,
+        uint32_t fragment_index = 0,
+        uint32_t fragment_total = 1,
+        uint32_t width = 0,
+        uint32_t height = 0,
+        uint32_t fps = 0);
+
     // ============================================================
     // 密钥管理
     // ============================================================
@@ -350,6 +390,10 @@ public:
     /// 使用 TCP 连接的远端 IP + 指定 UDP 端口构造 voice_server_endpoint
     void setVoiceServerUdpPort(uint16_t udp_port);
 
+    /// 设置服务器视频 UDP 端口（登录成功后由 ClientCore 调用）
+    /// 使用 TCP 连接的远端 IP + 指定 UDP 端口构造 video_server_endpoint
+    void setVideoServerUdpPort(uint16_t udp_port);
+
     /// 发送 UDP 注册包到服务器语音端点
     /// 在 UDP 通道建立后调用，使服务端 AudioRelay 注册客户端的 UDP 端点
     boost::asio::awaitable<void> sendUdpRegistrationPacket();
@@ -363,6 +407,9 @@ public:
 
     /// 语音包到达回调（已解密）
     VoicePacketCallback onVoicePacket;
+
+    /// 视频包到达回调（原始 UDP 数据，由 VideoCallManager 进一步解析）
+    VideoPacketCallback onVideoPacket;
 
     /// 断开连接回调
     DisconnectedCallback onDisconnected;
@@ -434,6 +481,10 @@ private:
                                       const uint8_t* header_aad, uint32_t aad_size,
                                       UserId sender_id);
 
+    /// 处理视频 UDP 包（识别后触发 onVideoPacket 回调）
+    void handleVideoPacket(const uint8_t* data, uint32_t size,
+                           const boost::asio::ip::udp::endpoint& sender);
+
     /// 启动 UDP 接收循环协程
     boost::asio::awaitable<void> udpReceiveLoop();
 
@@ -475,6 +526,7 @@ private:
 
     // --- 语音包序列 ---
     std::atomic<uint32_t> voice_sequence_{0};            ///< 语音包序列号计数器
+    std::atomic<uint32_t> video_sequence_{0};            ///< 视频包序列号计数器
     UserId local_user_id_;                               ///< 本地用户 ID（登录后设置）
     ChannelId current_channel_id_;                       ///< 当前频道 ID（加入频道后设置）
 };

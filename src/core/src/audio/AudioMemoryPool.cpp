@@ -60,7 +60,10 @@ void AudioMemoryPool::release(uint8_t* block) noexcept {
            block < storage_.data() + storage_.size());
 
     // 原子地将块压回栈中
-    // 先通过 CAS 保留槽位，成功后再写入，避免并发写入同一槽位
+    // 先通过 CAS 保留槽位（获得槽位独占权），再写入块指针，
+    // 最后以 release fence 发布。acquire 侧通过 top 的 acquire 语义
+    // 与该 fence 建立同步关系，保证读到的是已完成的槽位写入。
+    // （若先写槽位再 CAS，两个并发 release 可能互相覆盖同一槽位）
     uint32_t current_top = stack_top_.load(std::memory_order_acquire);
 
     while (true) {
@@ -72,8 +75,11 @@ void AudioMemoryPool::release(uint8_t* block) noexcept {
         if (stack_top_.compare_exchange_weak(current_top, current_top + 1,
                                               std::memory_order_acq_rel,
                                               std::memory_order_acquire)) {
-            // CAS 成功，安全写入（此槽位已由此线程独占）
+            // CAS 成功，此槽位已由此线程独占，写入块指针
             free_stack_[current_top] = block;
+            // release fence：确保槽位写入对任何随后通过 acquire 读取
+            // top 值（本 CAS 的结果）的线程可见
+            std::atomic_thread_fence(std::memory_order_release);
             return;
         }
     }

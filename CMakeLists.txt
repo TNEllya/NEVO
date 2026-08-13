@@ -1,309 +1,239 @@
+# ============================================================
+# NEVO VoIP System - 顶层 CMake 构建配置
+# 依赖: vcpkg (Boost, SQLite3, libsodium, Opus, Protobuf, OpenSSL)
+# 构建: cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+# ============================================================
 cmake_minimum_required(VERSION 3.21)
-project(NEVO VERSION 0.1.0 LANGUAGES C CXX)
 
+project(NEVO
+    VERSION 0.1.0
+    DESCRIPTION "NEVO VoIP communication system"
+    LANGUAGES C CXX
+)
+
+# C++20 标准
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# 输出目录统一
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
-list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
-include(CompilerWarnings)
-include(PlatformSetup)
-
 # ============================================================
-# 1. miniaudio: 单头文件 (embedded in nevo_core include)
+# 依赖检测（通过 vcpkg）
 # ============================================================
-add_library(miniaudio
-    ${CMAKE_SOURCE_DIR}/3rdparty/miniaudio.c
-)
-target_include_directories(miniaudio PUBLIC
-    ${CMAKE_SOURCE_DIR}/3rdparty
-)
-target_compile_definitions(miniaudio PRIVATE MINIAUDIO_IMPLEMENTATION)
-
-# ============================================================
-# 2. spdlog: 高性能日志 (embedded in nevo_core include)
-# ============================================================
-add_library(spdlog_stub INTERFACE)
-add_library(spdlog::spdlog ALIAS spdlog_stub)
-set(spdlog_FOUND ON)
-
-# ============================================================
-# 3. Google Test (可选 FetchContent)
-# ============================================================
-option(BUILD_TESTING "Build tests" OFF)
-if(BUILD_TESTING)
-    find_package(GTest CONFIG QUIET)
-    if(NOT GTest_FOUND)
-        include(FetchContent)
-        FetchContent_Declare(googletest
-            GIT_REPOSITORY https://github.com/google/googletest.git
-            GIT_TAG v1.14.0)
-        set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-        FetchContent_MakeAvailable(googletest)
-    endif()
+# Boost CMP0167 策略（vcpkg wrapper 兼容；CMake < 3.30 无此策略）
+if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 OLD)
 endif()
-
-# ============================================================
-# 4. Protobuf - 使用预生成的轻量级头文件 (proto/generated/)
-# ============================================================
-find_package(Protobuf QUIET)
-if(Protobuf_FOUND)
-    set(NEVO_HAS_PROTOBUF ON)
-    message(STATUS "Protobuf found: ${Protobuf_VERSION}")
-else()
-    # Try vcpkg CONFIG mode
-    find_package(protobuf CONFIG QUIET)
-    if(protobuf_FOUND)
-        set(NEVO_HAS_PROTOBUF ON)
-        message(STATUS "Protobuf found (vcpkg CONFIG)")
-    else()
-        set(NEVO_HAS_PROTOBUF OFF)
-        message(STATUS "Protobuf not found. Protocol uses stubs.")
-    endif()
+find_package(Boost REQUIRED COMPONENTS system)
+find_package(SQLite3 REQUIRED)
+# vcpkg 提供 SQLite3::SQLite3；系统 FindSQLite3 模块提供 SQLite::SQLite3，统一为 SQLite3::SQLite3
+if(NOT TARGET SQLite3::SQLite3 AND TARGET SQLite::SQLite3)
+    add_library(SQLite3::SQLite3 INTERFACE IMPORTED)
+    set_target_properties(SQLite3::SQLite3 PROPERTIES
+        INTERFACE_LINK_LIBRARIES SQLite::SQLite3)
 endif()
-
-# ============================================================
-# 5. Boost
-# ============================================================
-cmake_policy(SET CMP0167 OLD)
-find_package(Boost QUIET COMPONENTS system lockfree endian)
-if(Boost_FOUND)
-    find_path(BOOST_LOCKFREE_INCLUDE boost/lockfree/spsc_queue.hpp HINTS ${Boost_INCLUDE_DIRS})
-    set(NEVO_HAS_BOOST ON)
-    if(BOOST_LOCKFREE_INCLUDE)
-        set(NEVO_HAS_BOOST_LOCKFREE ON)
-    else()
-        set(NEVO_HAS_BOOST_LOCKFREE OFF)
-    endif()
-    message(STATUS "Boost found: ${Boost_VERSION} (lockfree: ${NEVO_HAS_BOOST_LOCKFREE})")
-else()
-    set(NEVO_HAS_BOOST OFF)
-    set(NEVO_HAS_BOOST_LOCKFREE OFF)
-    message(STATUS "Boost not found. Network module skipped.")
-endif()
-
-# ============================================================
-# 6. OpenSSL
-# ============================================================
-find_package(OpenSSL QUIET)
-if(OpenSSL_FOUND)
-    set(NEVO_HAS_OPENSSL ON)
-    message(STATUS "OpenSSL found: ${OpenSSL_VERSION}")
-else()
-    set(NEVO_HAS_OPENSSL OFF)
-    message(STATUS "OpenSSL not found.")
-endif()
-
-# ============================================================
-# 7. Opus Codec
-# ============================================================
-find_package(opus CONFIG QUIET)
-if(opus_FOUND)
-    set(NEVO_HAS_OPUS ON)
-    if(NOT TARGET Opus::Opus)
-        if(TARGET Opus::opus)
-            add_library(Opus::Opus ALIAS Opus::opus)
-        elseif(TARGET opus::opus)
-            add_library(Opus::Opus ALIAS opus::opus)
-        endif()
-    endif()
-    message(STATUS "Opus found")
-else()
-    find_package(PkgConfig QUIET)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(OPUS QUIET opus)
-    endif()
-    if(OPUS_FOUND)
-        add_library(Opus::Opus SHARED IMPORTED)
-        set_target_properties(Opus::Opus PROPERTIES
-            IMPORTED_LOCATION ${OPUS_LINK_LIBRARIES}
-            INTERFACE_INCLUDE_DIRECTORIES ${OPUS_INCLUDE_DIRS})
-        set(NEVO_HAS_OPUS ON)
-    else()
-        set(NEVO_HAS_OPUS OFF)
-        message(STATUS "Opus not found. Audio codec uses stubs.")
-    endif()
-endif()
-
-# ============================================================
-# 8. libsodium
-# ============================================================
+# libsodium：优先 vcpkg 的 unofficial-sodium 配置，否则回退系统 pkg-config
 find_package(unofficial-sodium CONFIG QUIET)
-if(unofficial-sodium_FOUND)
-    set(NEVO_HAS_SODIUM ON)
-    if(NOT TARGET sodium::sodium)
-        add_library(sodium::sodium ALIAS unofficial-sodium::sodium)
-    endif()
-    message(STATUS "libsodium found")
-else()
-    find_package(PkgConfig QUIET)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(SODIUM QUIET libsodium)
-    endif()
-    if(SODIUM_FOUND)
-        add_library(sodium::sodium SHARED IMPORTED)
-        set_target_properties(sodium::sodium PROPERTIES
-            IMPORTED_LOCATION ${SODIUM_LINK_LIBRARIES}
-            INTERFACE_INCLUDE_DIRECTORIES ${SODIUM_INCLUDE_DIRS})
-        set(NEVO_HAS_SODIUM ON)
-    else()
-        set(NEVO_HAS_SODIUM OFF)
-        message(STATUS "libsodium not found. Encryption uses stubs.")
-    endif()
+if(NOT TARGET unofficial-sodium::sodium)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium)
+    add_library(unofficial-sodium::sodium INTERFACE IMPORTED)
+    set_target_properties(unofficial-sodium::sodium PROPERTIES
+        INTERFACE_LINK_LIBRARIES PkgConfig::SODIUM)
 endif()
-
-# ============================================================
-# 9. SQLite3
-# ============================================================
-find_package(SQLite3 QUIET)
-if(SQLite3_FOUND)
-    set(NEVO_HAS_SQLITE ON)
-    message(STATUS "SQLite3 found: ${SQLite3_VERSION}")
-else()
-    set(NEVO_HAS_SQLITE OFF)
-    message(STATUS "SQLite3 not found. Server DB uses stubs.")
+# 代码引用 sodium::sodium，创建别名指向 unofficial-sodium::sodium
+if(TARGET unofficial-sodium::sodium AND NOT TARGET sodium::sodium)
+    add_library(sodium::sodium INTERFACE IMPORTED)
+    set_target_properties(sodium::sodium PROPERTIES
+        INTERFACE_LINK_LIBRARIES unofficial-sodium::sodium)
 endif()
+# Opus：优先 vcpkg 的 Opus 配置，否则回退系统 pkg-config
+find_package(Opus CONFIG QUIET)
+if(NOT TARGET Opus::opus)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(OPUS REQUIRED IMPORTED_TARGET opus)
+    add_library(Opus::opus INTERFACE IMPORTED)
+    set_target_properties(Opus::opus PROPERTIES
+        INTERFACE_LINK_LIBRARIES PkgConfig::OPUS)
+endif()
+# vcpkg 提供 Opus::opus（小写），代码引用 Opus::Opus（大写），创建别名
+if(TARGET Opus::opus AND NOT TARGET Opus::Opus)
+    add_library(Opus::Opus INTERFACE IMPORTED)
+    set_target_properties(Opus::Opus PROPERTIES
+        INTERFACE_LINK_LIBRARIES Opus::opus)
+endif()
+# Protobuf：优先 CONFIG 模式（vcpkg 提供），否则回退 CMake 模块模式（系统 libprotobuf-dev）
+find_package(Protobuf CONFIG QUIET)
+if(NOT TARGET protobuf::libprotobuf)
+    find_package(Protobuf REQUIRED)
+endif()
+find_package(OpenSSL REQUIRED)
 
-# ============================================================
-# 10. Qt 6
-# ============================================================
-find_package(Qt6 COMPONENTS Core Widgets QUIET)
+# 设置 NEVO_HAS_* 变量供子目录使用
+set(NEVO_HAS_BOOST ON)
+set(NEVO_HAS_BOOST_LOCKFREE ON)
+set(NEVO_HAS_SQLITE ON)
+set(NEVO_HAS_SODIUM ON)
+set(NEVO_HAS_OPUS ON)
+set(NEVO_HAS_PROTOBUF ON)
+set(NEVO_HAS_OPENSSL ON)
+
+# Qt6 可选（服务端管理 GUI 需要）
+find_package(Qt6 COMPONENTS Widgets QUIET)
 if(Qt6_FOUND)
     set(NEVO_HAS_QT ON)
-    message(STATUS "Qt6 found")
+    message(STATUS "Qt6 found - server GUI enabled")
 else()
-    set(NEVO_HAS_QT OFF)
-    message(STATUS "Qt6 not found. UI module skipped.")
+    message(STATUS "Qt6 not found - server GUI disabled (nevo_server core still builds)")
+endif()
+
+# vcpkg 安装目录（供服务端 POST_BUILD 复制 DLL 用）
+if(DEFINED ENV{VCPKG_ROOT})
+    set(_VCPKG_INSTALLED_DIR "$ENV{VCPKG_ROOT}/installed" CACHE PATH "vcpkg installed dir")
+elseif(EXISTS "C:/vcpkg/installed")
+    set(_VCPKG_INSTALLED_DIR "C:/vcpkg/installed" CACHE PATH "vcpkg installed dir")
+endif()
+if(NOT VCPKG_TARGET_TRIPLET)
+    set(VCPKG_TARGET_TRIPLET "x64-windows" CACHE STRING "vcpkg triplet")
 endif()
 
 # ============================================================
-# 汇总
-# ============================================================
-message(STATUS "")
-message(STATUS "=== NEVO Dependency Status ===")
-message(STATUS "  miniaudio:    ON (local)")
-message(STATUS "  spdlog:       ON (local stub)")
-message(STATUS "  Boost:        ${NEVO_HAS_BOOST} (lockfree: ${NEVO_HAS_BOOST_LOCKFREE})")
-message(STATUS "  OpenSSL:      ${NEVO_HAS_OPENSSL}")
-message(STATUS "  Opus:         ${NEVO_HAS_OPUS}")
-message(STATUS "  libsodium:    ${NEVO_HAS_SODIUM}")
-message(STATUS "  SQLite3:      ${NEVO_HAS_SQLITE}")
-message(STATUS "  Qt6:          ${NEVO_HAS_QT}")
-message(STATUS "==============================")
-message(STATUS "")
-
-# ============================================================
-# 编译定义
+# nevo_config — 编译定义接口库
 # ============================================================
 add_library(nevo_config INTERFACE)
-if(NEVO_HAS_BOOST)
-    target_compile_definitions(nevo_config INTERFACE NEVO_HAS_BOOST)
-endif()
-if(NEVO_HAS_BOOST_LOCKFREE)
-    target_compile_definitions(nevo_config INTERFACE NEVO_HAS_BOOST_LOCKFREE)
-endif()
-if(NEVO_HAS_OPUS)
-    target_compile_definitions(nevo_config INTERFACE NEVO_HAS_OPUS)
-endif()
-if(NEVO_HAS_SODIUM)
-    target_compile_definitions(nevo_config INTERFACE NEVO_HAS_SODIUM)
-endif()
-if(NEVO_HAS_SQLITE)
-    target_compile_definitions(nevo_config INTERFACE NEVO_HAS_SQLITE)
-endif()
-if(NEVO_HAS_OPENSSL)
-    target_compile_definitions(nevo_config INTERFACE NEVO_HAS_OPENSSL)
-endif()
+target_compile_definitions(nevo_config INTERFACE
+    NEVO_HAS_OPUS
+    NEVO_HAS_SODIUM
+    NEVO_HAS_PROTOBUF
+    NEVO_HAS_SQLITE
+    NEVO_HAS_BOOST
+    NEVO_HAS_BOOST_LOCKFREE
+    NEVO_HAS_OPENSSL
+    SPDLOG_HEADER_ONLY
+)
 
+# ============================================================
+# miniaudio — 单头文件音频库（需在一个 TU 中定义 IMPLEMENTATION）
+# ============================================================
+set(MINIAUDIO_IMPL ${CMAKE_BINARY_DIR}/generated/miniaudio_impl.c)
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/generated)
+file(WRITE ${MINIAUDIO_IMPL}
+    "/* 自动生成 - miniaudio 实现单元 */\n"
+    "#define MINIAUDIO_IMPLEMENTATION\n"
+    "#include \"miniaudio.h\"\n"
+)
+add_library(miniaudio STATIC ${MINIAUDIO_IMPL})
+target_include_directories(miniaudio PUBLIC ${CMAKE_SOURCE_DIR}/src/core/include)
+
+# ============================================================
+# spdlog — 头文件库（已内嵌在 src/core/include/spdlog/）
+# ============================================================
+add_library(spdlog INTERFACE)
+target_include_directories(spdlog INTERFACE ${CMAKE_SOURCE_DIR}/src/core/include)
+target_compile_definitions(spdlog INTERFACE SPDLOG_HEADER_ONLY)
+# 创建 spdlog::spdlog 别名供子目录引用
+add_library(spdlog::spdlog ALIAS spdlog)
+
+# ============================================================
+# Protobuf 代码生成（生成到 proto/generated/）
+# ============================================================
+set(PROTO_GEN_DIR ${CMAKE_SOURCE_DIR}/proto/generated)
+file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
+set(NEVO_PROTO_FILES common control voice video)
+set(NEVO_PROTO_SRCS "")
+set(NEVO_PROTO_HDRS "")
+foreach(proto ${NEVO_PROTO_FILES})
+    set(src ${PROTO_GEN_DIR}/${proto}.pb.cc)
+    set(hdr ${PROTO_GEN_DIR}/${proto}.pb.h)
+    list(APPEND NEVO_PROTO_SRCS ${src})
+    list(APPEND NEVO_PROTO_HDRS ${hdr})
+    add_custom_command(
+        OUTPUT ${src} ${hdr}
+        COMMAND ${Protobuf_PROTOC_EXECUTABLE}
+            --proto_path=${CMAKE_SOURCE_DIR}/proto
+            --cpp_out=${PROTO_GEN_DIR}
+            ${CMAKE_SOURCE_DIR}/proto/${proto}.proto
+        DEPENDS ${CMAKE_SOURCE_DIR}/proto/${proto}.proto
+        COMMENT "Protobuf 生成: ${proto}.proto -> C++"
+        VERBATIM
+    )
+endforeach()
+# 自定义目标确保生成顺序
+add_custom_target(nevo_proto_gen DEPENDS ${NEVO_PROTO_SRCS} ${NEVO_PROTO_HDRS})
+
+# ============================================================
+# 编译器警告与平台设置宏
+# ============================================================
+macro(nevo_set_compiler_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE
+            /W4        # 高警告级别
+            /WX        # 警告视为错误
+            /utf-8     # 源文件为 UTF-8 编码
+        )
+    else()
+        # GCC/Clang：保留告警但不作为错误（避免系统包环境下新代码的
+        # sign-compare/reorder 等非致命告警阻断 Linux/Docker 构建）
+        target_compile_options(${target} PRIVATE
+            -Wall -Wextra -Wpedantic -Wno-unused-parameter
+        )
+    endif()
+endmacro()
+
+macro(nevo_platform_setup target)
+    if(WIN32)
+        target_compile_definitions(${target} PRIVATE
+            _WIN32_WINNT=0x0A00
+            NOMINMAX
+            WIN32_LEAN_AND_MEAN
+            # 暴露数学常量（M_PI 等）
+            _USE_MATH_DEFINES
+        )
+        # Winsock：htonl/ntohl（PacketCodec）与 Boost.Asio 需要；
+        # 对静态库消费方（如 core_test）必须显式链接
+        target_link_libraries(${target} PRIVATE ws2_32 mswsock)
+    endif()
+    # 确保依赖 protobuf 生成
+    add_dependencies(${target} nevo_proto_gen)
+endmacro()
+
+# ============================================================
+# 源码子目录
+# ============================================================
 add_subdirectory(src)
 
-if(BUILD_TESTING AND TARGET GTest::gtest_main)
+# ============================================================
+# 测试（可选）
+# ============================================================
+option(BUILD_TESTING "Build NEVO test suite" ON)
+if(BUILD_TESTING)
+    # GTest 通过 FetchContent 获取
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        URL "https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz"
+    )
+    set(gtest_force_shared_rt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
     enable_testing()
     add_subdirectory(tests)
 endif()
 
 # ============================================================
-# Code coverage (Linux only, GCC/Clang)
+# 构建信息摘要
 # ============================================================
-option(ENABLE_COVERAGE "Enable code coverage reporting" OFF)
-if(ENABLE_COVERAGE AND BUILD_TESTING)
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        if(TARGET nevo_core)
-            target_compile_options(nevo_core PUBLIC --coverage -O0 -g)
-            target_link_options(nevo_core PUBLIC --coverage)
-        endif()
-        if(TARGET nevo_network)
-            target_compile_options(nevo_network PUBLIC --coverage -O0 -g)
-            target_link_options(nevo_network PUBLIC --coverage)
-        endif()
-        message(STATUS "Code coverage enabled")
-    endif()
-endif()
-
-# ============================================================
-# Install targets
-# ============================================================
-
-# 安装可执行文件
-install(TARGETS nevo_server
-    RUNTIME DESTINATION bin
-    COMPONENT Server
-)
-
-if(TARGET nevo_client)
-    install(TARGETS nevo_client
-        RUNTIME DESTINATION bin
-        COMPONENT Client
-    )
-endif()
-
-# 安装公共头文件
-install(DIRECTORY src/core/include/nevo/
-    DESTINATION include/nevo/core
-    COMPONENT Development
-    FILES_MATCHING PATTERN "*.h"
-)
-
-install(DIRECTORY src/network/include/nevo/
-    DESTINATION include/nevo/network
-    COMPONENT Development
-    FILES_MATCHING PATTERN "*.h"
-)
-
-# 安装配置文件示例
-install(FILES server_config.example.json
-    DESTINATION etc/nevo
-    COMPONENT Server
-    OPTIONAL
-)
-
-# ============================================================
-# CPack configuration
-# ============================================================
-
-set(CPACK_PACKAGE_NAME "NEVO")
-set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
-set(CPACK_PACKAGE_DESCRIPTION "Low-latency encrypted VoIP application")
-set(CPACK_PACKAGE_VENDOR "NEVO Project")
-set(CPACK_PACKAGE_CONTACT "nevo@example.com")
-set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
-set(CPACK_RESOURCE_FILE_README "${CMAKE_SOURCE_DIR}/README.md")
-
-# 平台相关打包格式
-if(WIN32)
-    set(CPACK_GENERATOR "ZIP;NSIS")
-    set(CPACK_PACKAGE_INSTALL_DIRECTORY "NEVO")
-elseif(APPLE)
-    set(CPACK_GENERATOR "DragNDrop")
-else()
-    set(CPACK_GENERATOR "DEB;RPM;TGZ")
-    set(CPACK_DEBIAN_PACKAGE_DEPENDS "libqt6core6,libqt6widgets6,libopus0,libsodium23,libboost-system1.74,libsqlite3-0")
-    set(CPACK_DEBIAN_PACKAGE_SECTION "sound")
-    set(CPACK_RPM_PACKAGE_LICENSE "Proprietary")
-endif()
-
-include(CPack)
+message(STATUS "============================================================")
+message(STATUS "  NEVO Build Configuration")
+message(STATUS "  Boost:     ${Boost_VERSION}")
+message(STATUS "  SQLite3:   ${SQLite3_VERSION}")
+message(STATUS "  Sodium:    ${sodium_VERSION}")
+message(STATUS "  Opus:      ${Opus_VERSION}")
+message(STATUS "  Protobuf:  ${Protobuf_VERSION}")
+message(STATUS "  OpenSSL:   ${OPENSSL_VERSION}")
+message(STATUS "  Qt6 GUI:   ${NEVO_HAS_QT}")
+message(STATUS "  Tests:     ${BUILD_TESTING}")
+message(STATUS "============================================================")

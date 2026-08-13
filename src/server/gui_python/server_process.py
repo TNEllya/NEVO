@@ -22,6 +22,13 @@ from PyQt5.QtCore import QSettings, QObject, pyqtSignal
 # ControlServer IPC port (fixed at 24432 in C++ code)
 IPC_PORT = 24432
 
+# 敏感管理命令（ControlServer 要求携带管理认证令牌）
+SENSITIVE_COMMANDS = {
+    "kick_user", "disconnect_all", "shutdown", "ban_user",
+    "set_config", "configure_ssl", "create_channel", "delete_channel",
+    "update_channel", "reorder_channels", "set_admin_password",
+}
+
 # QSettings key for persisting server configuration
 _SETTINGS_ORG = "NEVO"
 _SETTINGS_APP = "ServerManager"
@@ -96,6 +103,9 @@ class ServerProcess:
         self._ipc_connected = False
         self._ipc_thread: Optional[threading.Thread] = None
         self._ipc_buffer = ""
+
+        # 管理认证令牌（set_admin_password / admin_login 时获取）
+        self._auth_token: Optional[str] = None
 
         # Flag to prevent double cleanup between stop_server() and _monitor_process()
         self._stopping = False
@@ -362,6 +372,11 @@ class ServerProcess:
         def on_error(err):
             q.put(("error", err))
 
+        # 敏感命令自动附加管理认证令牌（ControlServer 侧 fail-closed 校验）
+        params = dict(params) if params else {}
+        if command in SENSITIVE_COMMANDS and self._auth_token:
+            params["auth_token"] = self._auth_token
+
         with self._lock:
             self._request_id += 1
             req_id = self._request_id
@@ -383,6 +398,14 @@ class ServerProcess:
             status, result = q.get(timeout=timeout)
             if status == "error":
                 raise RuntimeError(result)
+
+            # 管理认证失败时给出可操作的错误提示
+            if isinstance(result, dict) and result.get("status") == "error":
+                message = (result.get("data") or {}).get("message", "")
+                if "AUTH_REQUIRED" in message:
+                    raise RuntimeError(
+                        "管理操作需要认证：请先调用 admin_login(管理员密码)，"
+                        "或通过 Web 管理面板登录")
             return result
         except queue.Empty:
             with self._lock:
@@ -424,8 +447,24 @@ class ServerProcess:
     def shutdown(self) -> dict:
         return self.send_command("shutdown")
 
+    def admin_login(self, password: str) -> dict:
+        """管理面登录：用管理员密码换取认证令牌（供后续敏感命令使用）。"""
+        result = self.send_command("admin_login", {"password": password})
+        if isinstance(result, dict) and result.get("status") == "ok":
+            data = result.get("data") or {}
+            token = data.get("auth_token")
+            if token:
+                self._auth_token = token
+        return result
+
     def set_admin_password(self, password: str):
-        return self.send_command("set_admin_password", {"password": password})
+        result = self.send_command("set_admin_password", {"password": password})
+        if isinstance(result, dict) and result.get("status") == "ok":
+            data = result.get("data") or {}
+            token = data.get("auth_token")
+            if token:
+                self._auth_token = token
+        return result
 
     def set_config(self, **kwargs) -> dict:
         return self.send_command("set_config", kwargs)

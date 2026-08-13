@@ -2,6 +2,7 @@ package com.nevo.voip.core.di
 
 import android.content.Context
 import androidx.room.Room
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.nevo.voip.core.database.NevoDatabase
 import com.nevo.voip.core.database.dao.ChatMessageDao
 import com.nevo.voip.core.database.dao.FileCacheDao
@@ -25,7 +26,10 @@ object DatabaseModule {
             NevoDatabase::class.java,
             "nevo_voip.db"
         )
-            .fallbackToDestructiveMigration()
+            .addMigrations(
+                // Add future migrations here. e.g.:
+                // MIGRATION_1_2,
+            )
             .build()
     }
 

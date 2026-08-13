@@ -6,6 +6,9 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QSlider, QPushButton,
     QDialog, QWidget,
 )
+from theme_manager import (
+    ThemeManager, primary_slider_stylesheet, primary_button_stylesheet,
+)
 
 _SETTINGS_DIR = os.path.join(os.path.expanduser("~"), ".nevo")
 _SETTINGS_FILE = os.path.join(_SETTINGS_DIR, "per_user_volume.json")
@@ -100,7 +103,9 @@ class VolumeSliderDialog(QDialog):
         layout.setContentsMargins(20, 16, 20, 16)
 
         title_label = QLabel(self.tr("Volume for {}").format(user_name))
-        title_label.setStyleSheet("color: #ffffff; font-size: 13px; font-weight: bold;")
+        tm = ThemeManager.instance()
+        pal = tm.palette()
+        title_label.setStyleSheet(f"color: {pal['text_primary']}; font-size: 13px; font-weight: bold;")
         layout.addWidget(title_label)
 
         slider_row = QHBoxLayout()
@@ -110,25 +115,14 @@ class VolumeSliderDialog(QDialog):
         self._slider.setMinimum(0)
         self._slider.setMaximum(100)
         self._slider.setValue(int(current_volume * 100))
-        self._slider.setStyleSheet(
-            "QSlider::groove:horizontal {"
-            "  height: 6px; background: #4f545c; border-radius: 3px;"
-            "}"
-            "QSlider::handle:horizontal {"
-            "  background: #5865f2; width: 14px; height: 14px;"
-            "  margin: -4px 0; border-radius: 7px;"
-            "}"
-            "QSlider::sub-page:horizontal {"
-            "  background: #5865f2; border-radius: 3px;"
-            "}"
-        )
+        self._slider.setStyleSheet(primary_slider_stylesheet())
         self._slider.valueChanged.connect(self._on_slider_changed)
         slider_row.addWidget(self._slider, 1)
 
         self._percent_label = QLabel("{}%".format(int(current_volume * 100)))
         self._percent_label.setFixedWidth(40)
         self._percent_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self._percent_label.setStyleSheet("color: #b9bbbe; font-size: 13px;")
+        self._percent_label.setStyleSheet(f"color: {pal['text_muted']}; font-size: 13px;")
         slider_row.addWidget(self._percent_label)
 
         layout.addLayout(slider_row)
@@ -143,13 +137,7 @@ class VolumeSliderDialog(QDialog):
         btn_row.addStretch()
         apply_btn = QPushButton(self.tr("Apply"))
         apply_btn.setFixedWidth(80)
-        apply_btn.setStyleSheet(
-            "QPushButton {"
-            "  background-color: #5865f2; color: white; border: none;"
-            "  border-radius: 4px; padding: 6px 16px; font-size: 12px;"
-            "}"
-            "QPushButton:hover { background-color: #4752c4; }"
-        )
+        apply_btn.setStyleSheet(primary_button_stylesheet())
         apply_btn.clicked.connect(self.accept)
         btn_row.addWidget(apply_btn)
         layout.addLayout(btn_row)

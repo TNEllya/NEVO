@@ -1,0 +1,586 @@
+﻿<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Untitled</title>
+    <style id="theme-vars">
+/* NEVO GUI Design System — Amber Gold Theme */
+/* Brand: NEVO VoIP — Secure Voice Communication */
+
+:root {
+  /* === Color System === */
+  --color-primary: #F5B731;
+  --color-primary-hover: #E0A528;
+  --color-primary-dim: rgba(245, 183, 49, 0.12);
+  --color-primary-subtle: rgba(245, 183, 49, 0.06);
+
+  --color-bg-base: #0F0D0A;
+  --color-bg-secondary: #16140F;
+  --color-bg-tertiary: #1D1A13;
+  --color-bg-elevated: #242017;
+  --color-bg-hover: #2B2619;
+  --color-bg-active: #332D1F;
+  --color-bg-overlay: rgba(0, 0, 0, 0.65);
+
+  --color-border: #2B2619;
+  --color-border-light: #3D3625;
+  --color-border-focus: #F5B731;
+
+  --color-text-primary: #F0ECE4;
+  --color-text-secondary: #A89E8A;
+  --color-text-muted: #756B58;
+  --color-text-inverse: #0F0D0A;
+  --color-text-link: #F5B731;
+
+  --color-surface-card: #16140F;
+  --color-surface-sunken: #12100B;
+
+  /* State colors */
+  --state-success: #34D399;
+  --state-success-dim: rgba(52, 211, 153, 0.12);
+  --state-warning: #FBBF24;
+  --state-warning-dim: rgba(251, 191, 36, 0.12);
+  --state-error: #F87171;
+  --state-error-dim: rgba(248, 113, 113, 0.12);
+  --state-info: #60A5FA;
+  --state-info-dim: rgba(96, 165, 250, 0.12);
+
+  /* === Typography === */
+  --font-sans: 'Inter', 'MiSans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', monospace;
+
+  --text-xs: 0.6875rem;    /* 11px */
+  --text-sm: 0.8125rem;    /* 13px */
+  --text-base: 0.875rem;   /* 14px */
+  --text-lg: 1rem;         /* 16px */
+  --text-xl: 1.125rem;     /* 18px */
+  --text-2xl: 1.375rem;    /* 22px */
+  --text-3xl: 1.75rem;     /* 28px */
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+
+  --tracking-tight: -0.02em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.04em;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* === Radius === */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* === Spacing === */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* === Surface & Depth === */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-elevated: 0 4px 12px rgba(0, 0, 0, 0.04);
+  --shadow-modal: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-floating: 0 4px 16px rgba(0, 0, 0, 0.5);
+
+  /* === Transitions === */
+  --transition-fast: 0.12s ease;
+  --transition-normal: 0.2s ease;
+  --transition-slow: 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* === Utility Classes === */
+.heading-xl {
+  font-family: var(--font-sans);
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-text-primary);
+}
+
+.heading-lg {
+  font-family: var(--font-sans);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-text-primary);
+}
+
+.heading-md {
+  font-family: var(--font-sans);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  color: var(--color-text-primary);
+}
+
+.heading-sm {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-normal);
+  color: var(--color-text-primary);
+}
+
+.body-md {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-normal);
+  color: var(--color-text-secondary);
+}
+
+.caption {
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-normal);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-primary: var(--color-primary);
+    --color-border: var(--color-border);
+  }
+  @layer base {
+    body { background: var(--color-bg-base); color: var(--color-text-primary); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+    <main class="flex h-screen overflow-hidden" style="font-family: var(--font-sans);">
+
+      <!-- ===== COLUMN 1: Server Rail (72px) ===== -->
+      <nav class="flex flex-col items-center w-[72px] shrink-0 py-3 overflow-y-auto no-scrollbar" style="background: var(--color-bg-base);">
+        <!-- NEVO Home Icon -->
+        <div class="relative mb-2">
+          <div class="w-12 h-12 rounded-2xl flex items-center justify-center cursor-pointer transition-all duration-200 hover:rounded-xl" style="background: var(--color-primary); color: var(--color-text-inverse);">
+            <span class="font-bold text-lg" style="font-family: var(--font-sans);">N</span>
+          </div>
+          <!-- Green indicator dot -->
+          <div class="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2" style="background: var(--state-success); border-color: var(--color-bg-base);"></div>
+        </div>
+
+        <!-- Separator -->
+        <div class="w-8 my-2 rounded-full" style="background: var(--color-border);"></div>
+
+        <!-- Server icons placeholder -->
+        <div class="w-12 h-12 rounded-2xl flex items-center justify-center cursor-pointer mb-2 transition-all duration-200 hover:rounded-xl" style="background: var(--color-bg-tertiary); color: var(--color-text-muted);">
+          <i data-lucide="hash" class="w-5 h-5"></i>
+        </div>
+        <div class="w-12 h-12 rounded-2xl flex items-center justify-center cursor-pointer mb-2 transition-all duration-200 hover:rounded-xl" style="background: var(--color-bg-tertiary); color: var(--color-text-muted);">
+          <i data-lucide="headphones" class="w-5 h-5"></i>
+        </div>
+
+        <!-- Separator -->
+        <div class="w-8 my-2 rounded-full" style="background: var(--color-border);"></div>
+
+        <div class="w-12 h-12 rounded-2xl flex items-center justify-center cursor-pointer mb-2 transition-all duration-200 hover:rounded-xl" style="background: var(--color-bg-tertiary); color: var(--color-text-muted);">
+          <i data-lucide="plus" class="w-5 h-5"></i>
+        </div>
+
+        <!-- Spacer -->
+        <div class="flex-1"></div>
+
+        <!-- Settings gear -->
+        <div class="w-12 h-12 rounded-2xl flex items-center justify-center cursor-pointer mb-2 transition-all duration-200 hover:rounded-xl" style="background: var(--color-bg-tertiary); color: var(--color-text-muted);">
+          <i data-lucide="settings" class="w-5 h-5"></i>
+        </div>
+      </nav>
+
+      <!-- ===== COLUMN 2: Channel Sidebar (240px) ===== -->
+      <aside class="flex flex-col w-[240px] shrink-0 border-r overflow-hidden" style="background: var(--color-bg-secondary); border-color: var(--color-border);">
+        <!-- Server name header -->
+        <div class="flex items-center justify-between px-4 h-12 shrink-0 border-b cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors duration-150" style="border-color: var(--color-border);">
+          <span class="font-semibold text-sm truncate" style="color: var(--color-text-primary);">NEVO Server</span>
+          <i data-lucide="chevron-down" class="w-4 h-4 shrink-0" style="color: var(--color-text-muted);"></i>
+        </div>
+
+        <!-- Channel list (scrollable) -->
+        <div class="flex-1 overflow-y-auto px-2 pt-4 custom-scrollbar">
+          <!-- Voice Channels Section -->
+          <div class="mb-4">
+            <div class="flex items-center gap-1 px-2 mb-1">
+              <i data-lucide="chevron-down" class="w-3 h-3" style="color: var(--color-text-muted);"></i>
+              <span class="caption" style="font-size: 0.6875rem; letter-spacing: 0.04em;">璇煶棰戦亾</span>
+            </div>
+
+            <!-- Active channel: 甯歌 -->
+            <div class="flex items-center gap-1.5 px-2 py-1.5 rounded cursor-pointer" style="background: var(--color-bg-active); border-left: 2px solid var(--color-primary);">
+              <i data-lucide="volume-2" class="w-4 h-4 shrink-0" style="color: var(--color-primary);"></i>
+              <span class="text-sm font-medium truncate" style="color: var(--color-primary);">甯歌</span>
+              <span class="ml-auto text-xs shrink-0" style="color: var(--color-text-muted);">4</span>
+            </div>
+
+            <!-- Channel: 浼氳 -->
+            <div class="flex items-center gap-1.5 px-2 py-1.5 rounded cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors duration-150">
+              <i data-lucide="volume-2" class="w-4 h-4 shrink-0" style="color: var(--color-text-muted);"></i>
+              <span class="text-sm truncate" style="color: var(--color-text-secondary);">浼氳</span>
+            </div>
+
+            <!-- Channel: 鎶€鏈敮鎸?-->
+            <div class="flex items-center gap-1.5 px-2 py-1.5 rounded cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors duration-150">
+              <i data-lucide="volume-2" class="w-4 h-4 shrink-0" style="color: var(--color-text-muted);"></i>
+              <span class="text-sm truncate" style="color: var(--color-text-secondary);">鎶€鏈敮鎸?/span>
+            </div>
+
+            <!-- Channel: 闂茶亰 -->
+            <div class="flex items-center gap-1.5 px-2 py-1.5 rounded cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors duration-150">
+              <i data-lucide="volume-2" class="w-4 h-4 shrink-0" style="color: var(--color-text-muted);"></i>
+              <span class="text-sm truncate" style="color: var(--color-text-secondary);">闂茶亰</span>
+            </div>
+          </div>
+
+          <!-- Text Channels Section -->
+          <div class="mb-4">
+            <div class="flex items-center gap-1 px-2 mb-1">
+              <i data-lucide="chevron-down" class="w-3 h-3" style="color: var(--color-text-muted);"></i>
+              <span class="caption" style="font-size: 0.6875rem; letter-spacing: 0.04em;">鏂囧瓧棰戦亾</span>
+            </div>
+
+            <!-- Channel: 鍏憡 -->
+            <div class="flex items-center gap-1.5 px-2 py-1.5 rounded cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors duration-150">
+              <i data-lucide="hash" class="w-4 h-4 shrink-0" style="color: var(--color-text-muted);"></i>
+              <span class="text-sm truncate" style="color: var(--color-text-secondary);">鍏憡</span>
+            </div>
+
+            <!-- Channel: 鏃ュ父 -->
+            <div class="flex items-center gap-1.5 px-2 py-1.5 rounded cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors duration-150">
+              <i data-lucide="hash" class="w-4 h-4 shrink-0" style="color: var(--color-text-muted);"></i>
+              <span class="text-sm truncate" style="color: var(--color-text-secondary);">鏃ュ父</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- User info bar at bottom -->
+        <div class="flex items-center gap-2 px-2 h-[52px] shrink-0 border-t" style="background: var(--color-bg-tertiary); border-color: var(--color-border);">
+          <!-- Avatar -->
+          <div class="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style="background: var(--color-primary); color: var(--color-text-inverse);">
+            <span class="text-xs font-bold">A</span>
+          </div>
+          <!-- Info -->
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-medium truncate" style="color: var(--color-text-primary);">Alice</div>
+            <div class="text-xs truncate" style="color: var(--color-text-muted);">鍦ㄧ嚎</div>
+          </div>
+          <!-- Action icons -->
+          <div class="flex items-center gap-1 shrink-0">
+            <div class="w-8 h-8 flex items-center justify-center rounded cursor-pointer hover:bg-[var(--color-bg-hover)]" style="color: var(--color-text-muted);">
+              <i data-lucide="mic" class="w-4 h-4"></i>
+            </div>
+            <div class="w-8 h-8 flex items-center justify-center rounded cursor-pointer hover:bg-[var(--color-bg-hover)]" style="color: var(--color-text-muted);">
+              <i data-lucide="headphones" class="w-4 h-4"></i>
+            </div>
+            <div class="w-8 h-8 flex items-center justify-center rounded cursor-pointer hover:bg-[var(--color-bg-hover)]" style="color: var(--color-text-muted);">
+              <i data-lucide="settings" class="w-4 h-4"></i>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- ===== COLUMN 3: Main Content Area ===== -->
+      <div class="flex flex-col flex-1 min-w-0">
+
+        <!-- Header bar (48px) -->
+        <div class="flex items-center justify-between px-4 h-12 shrink-0 border-b" style="background: var(--color-bg-secondary); border-color: var(--color-border);">
+          <div class="flex items-center gap-2 min-w-0">
+            <i data-lucide="hash" class="w-5 h-5 shrink-0" style="color: var(--color-text-muted);"></i>
+            <span class="font-semibold text-sm truncate" style="color: var(--color-text-primary);">甯歌</span>
+            <div class="flex items-center gap-1 ml-3 shrink-0">
+              <div class="w-px h-4" style="background: var(--color-border-light);"></div>
+              <span class="text-sm truncate ml-2" style="color: var(--color-text-muted);">棰戦亾璇濋</span>
+            </div>
+          </div>
+          <div class="flex items-center gap-3 shrink-0">
+            <div class="w-8 h-8 flex items-center justify-center rounded cursor-pointer hover:bg-[var(--color-bg-hover)]" style="color: var(--color-text-muted);">
+              <i data-lucide="users" class="w-4 h-4"></i>
+            </div>
+            <div class="w-8 h-8 flex items-center justify-center rounded cursor-pointer hover:bg-[var(--color-bg-hover)]" style="color: var(--color-text-muted);">
+              <i data-lucide="search" class="w-4 h-4"></i>
+            </div>
+            <div class="w-8 h-8 flex items-center justify-center rounded cursor-pointer hover:bg-[var(--color-bg-hover)]" style="color: var(--color-text-muted);">
+              <i data-lucide="inbox" class="w-4 h-4"></i>
+            </div>
+          </div>
+        </div>
+
+        <!-- Body: Chat area + Voice panel -->
+        <div class="flex flex-1 min-h-0">
+
+          <!-- Chat area (flex: 1) -->
+          <div class="flex flex-col flex-1 min-w-0">
+
+            <!-- Messages (scrollable) -->
+            <div class="flex-1 overflow-y-auto px-4 pt-4 custom-scrollbar">
+              <!-- System message -->
+              <div class="flex items-center gap-2 mb-6">
+                <div class="w-full flex items-center justify-center gap-2 py-1">
+                  <div class="flex-1 h-px" style="background: var(--color-border);"></div>
+                  <span class="text-xs shrink-0" style="color: var(--color-text-muted);">娆㈣繋鏉ュ埌 #甯歌 棰戦亾</span>
+                  <div class="flex-1 h-px" style="background: var(--color-border);"></div>
+                </div>
+              </div>
+
+              <!-- Message 1: Bob -->
+              <div class="flex gap-3 mb-4 hover:bg-[var(--color-bg-hover)] rounded px-2 py-0.5 transition-colors duration-100 group">
+                <div class="w-10 h-10 rounded-full flex items-center justify-center shrink-0 mt-0.5" style="background: var(--state-info); color: var(--color-text-inverse);"
+                  <span class="text-sm font-bold">B</span>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-baseline gap-2">
+                    <span class="text-sm font-semibold" style="color: var(--state-info);">Bob</span>
+                    <span class="text-xs" style="color: var(--color-text-muted);">浠婂ぉ 14:32</span>
+                  </div>
+                  <p class="text-sm mt-0.5" style="color: var(--color-text-primary);">澶у濂斤紝浠婂ぉ鐨勭綉缁滃欢杩熸祴璇曠粨鏋滃凡缁忓嚭鏉ヤ簡锛屾暣浣撹〃鐜颁笉閿欍€?/p>
+                </div>
+              </div>
+
+              <!-- Message 2: Charlie -->
+              <div class="flex gap-3 mb-4 hover:bg-[var(--color-bg-hover)] rounded px-2 py-0.5 transition-colors duration-100 group">
+                <div class="w-10 h-10 rounded-full flex items-center justify-center shrink-0 mt-0.5" style="background: var(--state-warning); color: var(--color-text-inverse);"
+                  <span class="text-sm font-bold">C</span>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-baseline gap-2">
+                    <span class="text-sm font-semibold" style="color: var(--state-warning);">Charlie</span>
+                    <span class="text-xs" style="color: var(--color-text-muted);">浠婂ぉ 14:33</span>
+                  </div>
+                  <p class="text-sm mt-0.5" style="color: var(--color-text-primary);">鎴戠湅浜嗕竴涓嬫姤鍛婏紝涓滀簹鑺傜偣鐨?P99 寤惰繜闄嶅埌浜?12ms锛岃繘姝ュ緢澶с€?/p>
+                </div>
+              </div>
+
+              <!-- Message 3: David -->
+              <div class="flex gap-3 mb-4 hover:bg-[var(--color-bg-hover)] rounded px-2 py-0.5 transition-colors duration-100 group">
+                <div class="w-10 h-10 rounded-full flex items-center justify-center shrink-0 mt-0.5" style="background: var(--color-text-muted); color: var(--color-text-inverse);"
+                  <span class="text-sm font-bold">D</span>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-baseline gap-2">
+                    <span class="text-sm font-semibold" style="color: var(--color-text-muted);">David</span>
+                    <span class="text-xs" style="color: var(--color-text-muted);">浠婂ぉ 14:35</span>
+                  </div>
+                  <p class="text-sm mt-0.5" style="color: var(--color-text-primary);">涓嬪懆鍑嗗閮ㄧ讲鏂扮増缂栬В鐮佸櫒锛岄璁″甫瀹藉崰鐢ㄩ檷浣?30%銆?/p>
+                </div>
+              </div>
+
+              <!-- Message 4: Alice (self) -->
+              <div class="flex gap-3 mb-4 hover:bg-[var(--color-bg-hover)] rounded px-2 py-0.5 transition-colors duration-100 group">
+                <div class="w-10 h-10 rounded-full flex items-center justify-center shrink-0 mt-0.5" style="background: var(--color-primary); color: var(--color-text-inverse); box-shadow: 0 0 0 2px var(--color-bg-secondary), 0 0 0 3px var(--color-primary);">
+                  <span class="text-sm font-bold">A</span>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-baseline gap-2">
+                    <span class="text-sm font-semibold" style="color: var(--color-primary);">Alice</span>
+                    <span class="text-xs" style="color: var(--color-text-muted);">浠婂ぉ 14:36</span>
+                  </div>
+                  <p class="text-sm mt-0.5" style="color: var(--color-text-primary);">澶ソ浜嗭紒杩欏懆鍏堝仛涓€杞唴閮ㄥ帇鍔涙祴璇曞惂銆?/p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Chat input bar -->
+            <div class="px-4 pb-4 pt-0 shrink-0">
+              <div class="flex items-center gap-2 rounded-lg px-3 py-2" style="background: var(--color-bg-elevated); border: 1px solid var(--color-border);">
+                <div class="w-8 h-8 flex items-center justify-center rounded cursor-pointer hover:opacity-80 shrink-0" style="color: var(--color-text-muted);">
+                  <i data-lucide="plus-circle" class="w-5 h-5"></i>
+                </div>
+                <input type="text" placeholder="鍦?#甯歌 涓彂閫佹秷鎭? class="flex-1 bg-transparent text-sm outline-none min-w-0 placeholder:text-[var(--color-text-muted)]" style="color: var(--color-text-primary);">
+                <div class="flex items-center gap-2 shrink-0" style="color: var(--color-text-muted);">
+                  <div class="w-8 h-8 flex items-center justify-center rounded cursor-pointer hover:opacity-80">
+                    <i data-lucide="smile" class="w-5 h-5"></i>
+                  </div>
+                  <div class="w-8 h-8 flex items-center justify-center rounded cursor-pointer hover:opacity-80">
+                    <i data-lucide="gift" class="w-5 h-5"></i>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Voice Users Panel (280px) -->
+          <div class="w-[280px] shrink-0 flex flex-col border-l overflow-y-auto custom-scrollbar" style="background: var(--color-bg-secondary); border-color: var(--color-border);">
+            <!-- Voice connection header -->
+            <div class="flex items-center justify-between px-4 h-12 shrink-0 border-b" style="border-color: var(--color-border);">
+              <span class="text-sm font-semibold" style="color: var(--color-text-primary);">璇煶杩炴帴</span>
+              <div class="flex items-center gap-1">
+                <div class="w-7 h-7 flex items-center justify-center rounded cursor-pointer hover:bg-[var(--color-bg-hover)]" style="color: var(--color-text-muted);">
+                  <i data-lucide="phone-disconnect" class="w-4 h-4"></i>
+                </div>
+              </div>
+            </div>
+
+            <!-- Channel label -->
+            <div class="px-4 pt-3 pb-1">
+              <span class="text-xs font-medium" style="color: var(--color-text-muted);">璇煶棰戦亾 / 甯歌</span>
+            </div>
+
+            <!-- User cards -->
+            <div class="px-2 pt-1 space-y-0.5">
+              <!-- Alice (speaking) -->
+              <div class="flex items-center gap-2.5 px-2 py-1.5 rounded cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors duration-150 group">
+                <div class="relative shrink-0">
+                  <div class="w-8 h-8 rounded-full flex items-center justify-center speaking-ring" style="background: var(--color-primary); color: var(--color-text-inverse);">
+                    <span class="text-xs font-bold">A</span>
+                  </div>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <span class="text-sm font-medium truncate block" style="color: var(--color-text-primary);">Alice</span>
+                </div>
+                <div class="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+                  <div class="w-6 h-6 flex items-center justify-center rounded cursor-pointer" style="color: var(--color-text-muted);">
+                    <i data-lucide="volume-2" class="w-3.5 h-3.5"></i>
+                  </div>
+                </div>
+                <!-- Speaking indicator -->
+                <div class="flex items-end gap-0.5 shrink-0 speaking-bars">
+                  <div class="w-[3px] rounded-full" style="height: 4px; background: var(--color-primary);"></div>
+                  <div class="w-[3px] rounded-full" style="height: 10px; background: var(--color-primary);"></div>
+                  <div class="w-[3px] rounded-full" style="height: 6px; background: var(--color-primary);"></div>
+                  <div class="w-[3px] rounded-full" style="height: 12px; background: var(--color-primary);"></div>
+                </div>
+              </div>
+
+              <!-- Bob (muted) -->
+              <div class="flex items-center gap-2.5 px-2 py-1.5 rounded cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors duration-150 group">
+                <div class="relative shrink-0">
+                  <div class="w-8 h-8 rounded-full flex items-center justify-center" style="background: var(--state-info); color: var(--color-text-inverse);">
+                    <span class="text-xs font-bold">B</span>
+                  </div>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <span class="text-sm font-medium truncate block" style="color: var(--color-text-muted);">Bob</span>
+                </div>
+                <div class="flex items-center gap-1 shrink-0">
+                  <div class="w-6 h-6 flex items-center justify-center rounded cursor-pointer" style="color: var(--state-error);">
+                    <i data-lucide="mic-off" class="w-3.5 h-3.5"></i>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Charlie (deafened) -->
+              <div class="flex items-center gap-2.5 px-2 py-1.5 rounded cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors duration-150 group">
+                <div class="relative shrink-0">
+                  <div class="w-8 h-8 rounded-full flex items-center justify-center" style="background: var(--state-warning); color: var(--color-text-inverse);">
+                    <span class="text-xs font-bold">C</span>
+                  </div>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <span class="text-sm font-medium truncate block" style="color: var(--color-text-muted);">Charlie</span>
+                </div>
+                <div class="flex items-center gap-1 shrink-0">
+                  <div class="w-6 h-6 flex items-center justify-center rounded cursor-pointer" style="color: var(--state-error);">
+                    <i data-lucide="headphones" class="w-3.5 h-3.5"></i>
+                  </div>
+                </div>
+              </div>
+
+              <!-- David -->
+              <div class="flex items-center gap-2.5 px-2 py-1.5 rounded cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors duration-150 group">
+                <div class="relative shrink-0">
+                  <div class="w-8 h-8 rounded-full flex items-center justify-center" style="background: var(--color-text-muted); color: var(--color-text-inverse);">
+                    <span class="text-xs font-bold">D</span>
+                  </div>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <span class="text-sm font-medium truncate block" style="color: var(--color-text-secondary);">David</span>
+                </div>
+                <div class="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+                  <div class="w-6 h-6 flex items-center justify-center rounded cursor-pointer" style="color: var(--color-text-muted);">
+                    <i data-lucide="volume-2" class="w-3.5 h-3.5"></i>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+    <!-- Custom styles for voice channel UI -->
+    <style>
+      /* Speaking ring animation on avatar */
+      @keyframes speaking-ring-pulse {
+        0% { box-shadow: 0 0 0 0 rgba(45, 212, 168, 0.5); }
+        70% { box-shadow: 0 0 0 4px rgba(45, 212, 168, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(45, 212, 168, 0); }
+      }
+      .speaking-ring {
+        animation: speaking-ring-pulse 1.4s ease-in-out infinite;
+      }
+
+      /* Speaking bars animation */
+      @keyframes speaking-bar-1 { 0%, 100% { height: 4px; } 50% { height: 12px; } }
+      @keyframes speaking-bar-2 { 0%, 100% { height: 10px; } 50% { height: 4px; } }
+      @keyframes speaking-bar-3 { 0%, 100% { height: 6px; } 50% { height: 14px; } }
+      @keyframes speaking-bar-4 { 0%, 100% { height: 12px; } 50% { height: 6px; } }
+      .speaking-bars > :nth-child(1) { animation: speaking-bar-1 0.6s ease-in-out infinite; }
+      .speaking-bars > :nth-child(2) { animation: speaking-bar-2 0.5s ease-in-out infinite 0.1s; }
+      .speaking-bars > :nth-child(3) { animation: speaking-bar-3 0.55s ease-in-out infinite 0.2s; }
+      .speaking-bars > :nth-child(4) { animation: speaking-bar-4 0.65s ease-in-out infinite 0.15s; }
+
+      /* Custom scrollbar */
+      .custom-scrollbar::-webkit-scrollbar {
+        width: 6px;
+      }
+      .custom-scrollbar::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .custom-scrollbar::-webkit-scrollbar-thumb {
+        background: var(--color-border-light);
+        border-radius: 3px;
+      }
+      .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+        background: var(--color-primary);
+      }
+      /* Firefox scrollbar */
+      .custom-scrollbar {
+        scrollbar-width: thin;
+        scrollbar-color: var(--color-border-light) transparent;
+      }
+    </style>
+    <script>lucide.createIcons();</script>
+</body>
+</html>
+

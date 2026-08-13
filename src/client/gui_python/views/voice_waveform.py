@@ -40,10 +40,10 @@ _AMPLITUDE_DECAY = 0.85
 _MIN_AMPLITUDE_THRESHOLD = 0.015
 _SMOOTH_FACTOR = 0.35
 
-_COLOR_LOW = QColor("#43b581")
-_COLOR_MID = QColor("#faa61a")
+_COLOR_LOW = QColor("#2DD4A8")
+_COLOR_MID = QColor("#FBBF24")
 _COLOR_HIGH = QColor("#f04747")
-_COLOR_MUTED_STRIKE = QColor("#ed4245")
+_COLOR_MUTED_STRIKE = QColor("#F87171")
 
 def _get_theme_colors():
     tm = ThemeManager.instance()
@@ -471,6 +471,7 @@ class VoiceWaveformPanel(QFrame):
         self._update_info()
 
         if self._connected and self._channel_name:
+            self._sampler.reset_user(local_user_id)
             self._sampler.start()
             self._empty_label.setVisible(False)
             self._scroll.setVisible(True)
@@ -486,10 +487,34 @@ class VoiceWaveformPanel(QFrame):
             row.deleteLater()
         self._user_rows.clear()
 
+        seen_uids = set()
+        # always include local user first
+        if self._local_user_id:
+            uname = ""
+            for u in self._users:
+                if u.get("id") == self._local_user_id:
+                    uname = u.get("username", "")
+                    break
+            _log_wf(f"[WAVEFORM] _rebuild_rows: adding local row uid={self._local_user_id} name={uname}")
+            row = _WaveformUserRow(
+                user_id=self._local_user_id,
+                username=uname or self.tr("You"),
+                is_admin=False,
+                muted=False,
+                deafened=False,
+                parent=self._container,
+            )
+            row.user_clicked.connect(self._on_user_clicked)
+            self._user_rows[self._local_user_id] = row
+            self._content_layout.insertWidget(self._content_layout.count() - 1, row)
+            seen_uids.add(self._local_user_id)
+
         for user in self._users:
             uid = user.get("id", 0)
+            if uid in seen_uids or not uid:
+                continue
             uname = user.get("username", "")
-            _log_wf(f"[WAVEFORM] _rebuild_rows: adding row uid={uid} type={type(uid).__name__} name={uname}")
+            _log_wf(f"[WAVEFORM] _rebuild_rows: adding remote row uid={uid} type={type(uid).__name__} name={uname}")
             row = _WaveformUserRow(
                 user_id=uid,
                 username=uname,
@@ -501,6 +526,7 @@ class VoiceWaveformPanel(QFrame):
             row.user_clicked.connect(self._on_user_clicked)
             self._user_rows[uid] = row
             self._content_layout.insertWidget(self._content_layout.count() - 1, row)
+            seen_uids.add(uid)
 
         self._sampler.reset_user(self._local_user_id)
 

@@ -25,13 +25,6 @@ else()
     message(STATUS "Skipping client module: Boost not found")
 endif()
 
-# Qt 6 UI（可选，需要 Qt6）
-if(Qt6_FOUND)
-    add_subdirectory(ui)
-else()
-    message(STATUS "Skipping UI module: Qt6 not found")
-endif()
-
 # 语音通信模拟测试（独立可执行文件，不依赖 GTest）
 if(NEVO_HAS_BOOST AND NEVO_HAS_SODIUM AND NEVO_HAS_OPUS)
     add_executable(voice_relay_sim
@@ -45,6 +38,11 @@ if(NEVO_HAS_BOOST AND NEVO_HAS_SODIUM AND NEVO_HAS_OPUS)
     )
     nevo_set_compiler_warnings(voice_relay_sim)
     nevo_platform_setup(voice_relay_sim)
+    # 该模拟测试使用轻量 TEST_CASE 宏与历史代码，存在常量条件等告警，
+    # 与 server_test 一致放宽警告即错误（/WX）
+    if(MSVC)
+        target_compile_options(voice_relay_sim PRIVATE /WX-)
+    endif()
     message(STATUS "Voice relay simulation test: ENABLED")
 else()
     message(STATUS "Skipping voice_relay_sim: Boost=${NEVO_HAS_BOOST}, Sodium=${NEVO_HAS_SODIUM}, Opus=${NEVO_HAS_OPUS}")

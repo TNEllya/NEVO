@@ -42,6 +42,10 @@ VoiceCrypto::VoiceCrypto() {
     // 初始化密钥为零（不安全状态，必须调用 setSessionKey 后才能加密）
     current_key_.fill(0);
     old_key_.fill(0);
+    nonce_prefix_.fill(0);
+
+    // 生成随机 nonce 前缀（setSessionKey 时会重新生成）
+    randombytes_buf(nonce_prefix_.data(), NONCE_PREFIX_SIZE);
 }
 
 VoiceCrypto::~VoiceCrypto() {
@@ -57,10 +61,12 @@ VoiceCrypto::VoiceCrypto(VoiceCrypto&& other) noexcept
     , has_old_key_(other.has_old_key_)
     , old_key_expiry_time_(other.old_key_expiry_time_)
     , nonce_counter_(other.nonce_counter_.load())
+    , nonce_prefix_(other.nonce_prefix_)
 {
     // 安全擦除源对象密钥
     sodium_memzero(other.current_key_.data(), other.current_key_.size());
     sodium_memzero(other.old_key_.data(), other.old_key_.size());
+    sodium_memzero(other.nonce_prefix_.data(), other.nonce_prefix_.size());
     other.has_old_key_ = false;
 }
 
@@ -69,16 +75,19 @@ VoiceCrypto& VoiceCrypto::operator=(VoiceCrypto&& other) noexcept {
         // 擦除当前密钥
         sodium_memzero(current_key_.data(), current_key_.size());
         sodium_memzero(old_key_.data(), old_key_.size());
+        sodium_memzero(nonce_prefix_.data(), nonce_prefix_.size());
 
         current_key_ = other.current_key_;
         old_key_ = other.old_key_;
         has_old_key_ = other.has_old_key_;
         old_key_expiry_time_ = other.old_key_expiry_time_;
         nonce_counter_.store(other.nonce_counter_.load());
+        nonce_prefix_ = other.nonce_prefix_;
 
         // 擦除源对象密钥
         sodium_memzero(other.current_key_.data(), other.current_key_.size());
         sodium_memzero(other.old_key_.data(), other.old_key_.size());
+        sodium_memzero(other.nonce_prefix_.data(), other.nonce_prefix_.size());
         other.has_old_key_ = false;
     }
     return *this;
@@ -102,7 +111,11 @@ void VoiceCrypto::setSessionKey(const uint8_t key[CRYPTO_KEY_SIZE]) {
     // 重置 nonce 计数器
     nonce_counter_.store(0, std::memory_order_release);
 
-    NEVO_LOG_INFO("network", "VoiceCrypto: session key set, nonce counter reset");
+    // 重新生成随机 nonce 前缀：即使本实例与其他实例共享同一把密钥
+    // （多设备同账号、服务端中继），各自的 nonce 前缀不同，杜绝密钥流重用
+    randombytes_buf(nonce_prefix_.data(), NONCE_PREFIX_SIZE);
+
+    NEVO_LOG_INFO("network", "VoiceCrypto: session key set, nonce counter reset, new nonce prefix");
 }
 
 void VoiceCrypto::rotateKey(const uint8_t new_key[CRYPTO_KEY_SIZE]) {
@@ -270,17 +283,13 @@ std::optional<std::vector<uint8_t>> VoiceCrypto::decrypt(
 std::array<uint8_t, XCHACHA_NONCE_SIZE> VoiceCrypto::generateNonce(uint64_t counter) {
     std::array<uint8_t, XCHACHA_NONCE_SIZE> nonce{};
 
-    // 将 64 位计数器放入 nonce 的低 8 字节（小端序），
-    // 高 16 字节保持为零。这在实际使用中是安全的，因为：
-    //   1. 64 位计数器空间极大（2^64 = 1.8 * 10^19 次加密）
-    //   2. 即使每秒 1000 次加密，也需要约 5.8 亿年才会回绕
-    //   3. 每次密钥设置时计数器重置，进一步保证安全
-    //
-    // 替代方案：使用随机 nonce（crypto_aead_xchacha20poly1305_ietf_NPUBBYTES
-    // 为 24 字节，随机碰撞概率极低），但递增计数器更简单且可排序。
-    uint64_t counter_be = counter; // 直接使用，nonce 内部格式不要求端序
-    std::memcpy(nonce.data(), &counter_be, sizeof(counter_be));
-    // 高 16 字节已初始化为 0
+    // 24 字节 nonce = 随机前缀(16B) + 计数器(8B)
+    // 前缀保证不同实例（共享同一密钥时）的 nonce 空间互不重叠；
+    // 计数器在每个实例内单调递增。两者结合后：
+    //   - 同实例：nonce 严格递增，永不重复
+    //   - 跨实例：前缀随机，碰撞概率 ~2^-128
+    std::memcpy(nonce.data(), nonce_prefix_.data(), NONCE_PREFIX_SIZE);
+    std::memcpy(nonce.data() + NONCE_PREFIX_SIZE, &counter, sizeof(counter));
 
     return nonce;
 }
@@ -294,6 +303,7 @@ std::optional<std::vector<uint8_t>> VoiceCrypto::decryptWithKey(
     const uint8_t* header_aad,
     size_t aad_len)
 {
+    (void)nonce_len; // XChaCha20-Poly1305 使用固定 nonce 长度
     // 明文长度 = 密文长度 - tag 长度
     size_t pt_len = ct_len - POLY1305_TAG_SIZE;
     std::vector<uint8_t> plaintext(pt_len, 0);
@@ -331,6 +341,7 @@ std::optional<std::vector<uint8_t>> VoiceCrypto::decryptWithKey(
 VoiceCrypto::VoiceCrypto() {
     current_key_.fill(0);
     old_key_.fill(0);
+    nonce_prefix_.fill(0);
     NEVO_LOG_WARN("network", "VoiceCrypto: initialized as stub (libsodium not available)");
 }
 
@@ -341,6 +352,8 @@ VoiceCrypto::~VoiceCrypto() {
     for (size_t i = 0; i < current_key_.size(); ++i) { p[i] = 0; }
     p = old_key_.data();
     for (size_t i = 0; i < old_key_.size(); ++i) { p[i] = 0; }
+    p = nonce_prefix_.data();
+    for (size_t i = 0; i < nonce_prefix_.size(); ++i) { p[i] = 0; }
 }
 
 VoiceCrypto::VoiceCrypto(VoiceCrypto&& other) noexcept
@@ -349,12 +362,15 @@ VoiceCrypto::VoiceCrypto(VoiceCrypto&& other) noexcept
     , has_old_key_(other.has_old_key_)
     , old_key_expiry_time_(other.old_key_expiry_time_)
     , nonce_counter_(other.nonce_counter_.load())
+    , nonce_prefix_(other.nonce_prefix_)
 {
     // Use volatile pointer to prevent dead store elimination
     volatile uint8_t* p = other.current_key_.data();
     for (size_t i = 0; i < other.current_key_.size(); ++i) { p[i] = 0; }
     p = other.old_key_.data();
     for (size_t i = 0; i < other.old_key_.size(); ++i) { p[i] = 0; }
+    p = other.nonce_prefix_.data();
+    for (size_t i = 0; i < other.nonce_prefix_.size(); ++i) { p[i] = 0; }
     other.has_old_key_ = false;
 }
 
@@ -365,18 +381,23 @@ VoiceCrypto& VoiceCrypto::operator=(VoiceCrypto&& other) noexcept {
         for (size_t i = 0; i < current_key_.size(); ++i) { p[i] = 0; }
         p = old_key_.data();
         for (size_t i = 0; i < old_key_.size(); ++i) { p[i] = 0; }
+        p = nonce_prefix_.data();
+        for (size_t i = 0; i < nonce_prefix_.size(); ++i) { p[i] = 0; }
 
         current_key_ = other.current_key_;
         old_key_ = other.old_key_;
         has_old_key_ = other.has_old_key_;
         old_key_expiry_time_ = other.old_key_expiry_time_;
         nonce_counter_.store(other.nonce_counter_.load());
+        nonce_prefix_ = other.nonce_prefix_;
 
         // Wipe source keys with volatile
         p = other.current_key_.data();
         for (size_t i = 0; i < other.current_key_.size(); ++i) { p[i] = 0; }
         p = other.old_key_.data();
         for (size_t i = 0; i < other.old_key_.size(); ++i) { p[i] = 0; }
+        p = other.nonce_prefix_.data();
+        for (size_t i = 0; i < other.nonce_prefix_.size(); ++i) { p[i] = 0; }
         other.has_old_key_ = false;
     }
     return *this;
@@ -388,6 +409,7 @@ void VoiceCrypto::setSessionKey(const uint8_t key[CRYPTO_KEY_SIZE]) {
     has_old_key_ = false;
     old_key_expiry_time_ = 0;
     nonce_counter_.store(0, std::memory_order_release);
+    nonce_prefix_.fill(0); // stub 模式无加密能力，前缀置零即可
     NEVO_LOG_WARN("network", "VoiceCrypto::setSessionKey: stub (libsodium not available)");
 }
 
@@ -435,7 +457,8 @@ std::optional<std::vector<uint8_t>> VoiceCrypto::decrypt(
 
 std::array<uint8_t, XCHACHA_NONCE_SIZE> VoiceCrypto::generateNonce(uint64_t counter) {
     std::array<uint8_t, XCHACHA_NONCE_SIZE> nonce{};
-    std::memcpy(nonce.data(), &counter, sizeof(counter));
+    std::memcpy(nonce.data(), nonce_prefix_.data(), NONCE_PREFIX_SIZE);
+    std::memcpy(nonce.data() + NONCE_PREFIX_SIZE, &counter, sizeof(counter));
     return nonce;
 }
 

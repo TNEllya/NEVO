@@ -19,6 +19,11 @@
  *   10. 完整语音链路 - Opus → 加密 → 中继 → 解密 → Opus 解码
  */
 
+// MSVC 需要 _USE_MATH_DEFINES 才能使用 M_PI
+#ifdef _MSC_VER
+#define _USE_MATH_DEFINES
+#endif
+
 #include <gtest/gtest.h>
 
 #include <boost/asio.hpp>
@@ -62,25 +67,25 @@ std::vector<float> generateSineWave(float frequency, float duration_sec,
     return samples;
 }
 
-std::vector<uint8_t> encodeOpusFrame(OpusEncoder& encoder,
+std::vector<uint8_t> encodeOpusFrame(OpusEncoderWrapper& encoder,
                                       const std::vector<float>& pcm,
                                       int frame_size = 960) {
     std::vector<uint8_t> output(4000);
-    int len = encoder.encode(pcm.data(), frame_size, output.data(),
-                             static_cast<opus_int32>(output.size()));
-    if (len <= 0) return {};
-    output.resize(static_cast<size_t>(len));
+    auto result = encoder.encode(pcm.data(), output.data(),
+                                 static_cast<uint32_t>(output.size()));
+    if (!result) return {};
+    output.resize(result.value());
+    (void)frame_size;
     return output;
 }
 
-std::vector<float> decodeOpusFrame(OpusDecoder& decoder,
+std::vector<float> decodeOpusFrame(OpusDecoderWrapper& decoder,
                                     const uint8_t* data, size_t size,
                                     int frame_size = 960) {
     std::vector<float> pcm(static_cast<size_t>(frame_size));
-    int len = decoder.decode(data, static_cast<int>(size), pcm.data(),
-                              frame_size);
-    if (len <= 0) return {};
-    pcm.resize(static_cast<size_t>(len));
+    auto result = decoder.decode(data, static_cast<uint32_t>(size), pcm.data());
+    if (!result) return {};
+    pcm.resize(result.value());
     return pcm;
 }
 
@@ -355,8 +360,8 @@ TEST_F(VoiceRelayIntegrationTest, AADMismatchDecryptFails) {
 TEST_F(VoiceRelayIntegrationTest, OpusEncodeEncryptDecryptDecode) {
     auto sine = generateSineWave(440.0f, 0.02f);
 
-    OpusEncoder encoder(48000, 1, OPUS_APPLICATION_VOIP);
-    OpusDecoder decoder(48000, 1);
+    OpusEncoderWrapper encoder; // 默认 48kHz / 单声道 / 960 采样帧
+    OpusDecoderWrapper decoder;
 
     auto opus_frame = encodeOpusFrame(encoder, sine);
     ASSERT_FALSE(opus_frame.empty());
@@ -909,8 +914,8 @@ TEST_F(VoiceRelayIntegrationTest, FullVoicePipelineEndToEnd) {
     auto relay_ep = boost::asio::ip::udp::endpoint(
         boost::asio::ip::make_address("127.0.0.1"), relay_port);
 
-    OpusEncoder encoder(48000, 1, OPUS_APPLICATION_VOIP);
-    OpusDecoder decoder(48000, 1);
+    OpusEncoderWrapper encoder; // 默认 48kHz / 单声道 / 960 采样帧
+    OpusDecoderWrapper decoder;
     VoiceCrypto sender_crypto;
     sender_crypto.setSessionKey(shared_key);
 

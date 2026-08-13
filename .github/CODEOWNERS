@@ -1,0 +1,15 @@
+# NEVO Core Code Ownership
+# 核心代码路径的审查所有权声明
+# 这些路径的 PR 需要代码所有者的必需审查
+
+# 核心引擎（音频编解码、协议、模型）
+/src/core/ @TNEllya
+
+# 服务端（会话管理、音频/视频中继、服务器核心）
+/src/server/ @TNEllya
+
+# 网络层（TCP/UDP 连接、NAT 穿透、加密传输）
+/src/network/ @TNEllya
+
+# 协议定义（Protobuf schema 变更影响所有平台）
+/proto/ @TNEllya

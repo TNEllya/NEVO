@@ -67,21 +67,63 @@ std::string getExeDirectory() {
 }
 
 /**
+ * @brief 查找 web/server.py 的实际位置
+ *
+ * 搜索顺序：
+ *   1. <exe_dir>\web\server.py            —— 安装/打包布局
+ *   2. <exe_dir>\..\web\server.py         —— build\bin\Release\ 等布局
+ *   3. <exe_dir>\..\..\web\server.py      —— test\server\ 等布局
+ *   4. <exe_dir>\..\..\..\web\server.py   —— 更深的构建输出布局
+ *   5. <cwd>\web\server.py                —— 从项目根目录运行
+ *
+ * @return web 目录的绝对路径；未找到时返回空串。
+ */
+std::string findWebDirectory() {
+    std::string exe_dir = getExeDirectory();
+    std::vector<std::string> candidates;
+
+    // 1. EXE 同目录下的 web/
+    candidates.push_back(exe_dir + "\\web");
+
+    // 2-4. 逐级向上查找（最多 4 级），覆盖 build\bin\Release\ 等布局
+    std::string cur = exe_dir;
+    for (int i = 0; i < 4; ++i) {
+        size_t pos = cur.find_last_of("\\/");
+        if (pos == std::string::npos || pos == 0) break;
+        cur = cur.substr(0, pos);
+        candidates.push_back(cur + "\\web");
+    }
+
+    // 5. 当前工作目录下的 web/
+    char cwd_buf[MAX_PATH];
+    DWORD cwd_len = GetCurrentDirectoryA(MAX_PATH, cwd_buf);
+    if (cwd_len > 0 && cwd_len < MAX_PATH) {
+        std::string cwd(cwd_buf, cwd_len);
+        candidates.push_back(cwd + "\\web");
+    }
+
+    for (const auto& c : candidates) {
+        std::string server_py = c + "\\server.py";
+        DWORD attrs = GetFileAttributesA(server_py.c_str());
+        if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+            return c;
+        }
+    }
+    return "";
+}
+
+/**
  * @brief 启动 Python Web 代理（后台进程）
  *
  * 在 nevo_server.exe 同目录下的 web/ 子目录中查找 server.py 并启动。
- * 优先使用 python3，其次 python。
+ * 若未找到，则向上逐级查找，最后回退到当前工作目录。
  */
 void launchWebProxy() {
-    std::string exe_dir = getExeDirectory();
-    std::string web_dir = exe_dir + "\\web";
-    std::string server_py = web_dir + "\\server.py";
-
-    // 检查 server.py 是否存在
-    DWORD attrs = GetFileAttributesA(server_py.c_str());
-    if (attrs == INVALID_FILE_ATTRIBUTES) {
-        std::cout << "[WebUI] server.py not found at " << server_py
+    std::string web_dir = findWebDirectory();
+    if (web_dir.empty()) {
+        std::cout << "[WebUI] server.py not found — searched EXE dir, parent dirs, and CWD"
                   << " — web UI will not be available" << std::endl;
+        NEVO_LOG_WARN("server", "Web UI: server.py not found (searched EXE dir, parents, CWD)");
         return;
     }
 
@@ -92,11 +134,9 @@ void launchWebProxy() {
 
     PROCESS_INFORMATION pi = {};
 
-    // 尝试 python3 → python 依次查找
-    std::string cmd = "python -c \"import http.server; print('ok')\"";
+    // 构建命令行：在 web 目录下运行 python server.py
+    // 使用双引号包裹路径以支持空格；cmd /c 的外层引号由 cmd 规则自动剥离。
     std::string python = "python";
-
-    // 构建命令行：python server.py（在 web 目录下运行）
     std::string cmd_line = "cmd /c \"cd /d \"" + web_dir + "\" && " + python + " server.py\"";
 
     // cmd_line 需要可修改的缓冲区
@@ -110,8 +150,10 @@ void launchWebProxy() {
             &si, &pi)) {
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
-        std::cout << "[WebUI] Web proxy started (PID: " << pi.dwProcessId << ")" << std::endl;
-        NEVO_LOG_INFO("server", "Web proxy started on http://127.0.0.1:8090 (PID: {})", pi.dwProcessId);
+        std::cout << "[WebUI] Web proxy started from " << web_dir
+                  << " (PID: " << pi.dwProcessId << ")" << std::endl;
+        NEVO_LOG_INFO("server", "Web proxy started from {} on http://127.0.0.1:8090 (PID: {})",
+                      web_dir, pi.dwProcessId);
     } else {
         DWORD err = GetLastError();
         std::cout << "[WebUI] Failed to start web proxy: error " << err << std::endl;
@@ -141,27 +183,73 @@ void openBrowserAsync() {
 
 #else
 // Linux/macOS：使用 xdg-open / open
-void launchWebProxy() {
-    std::string web_dir;
-    // 尝试从可执行文件路径推断 web 目录
+
+/**
+ * @brief 获取当前可执行文件所在目录
+ */
+std::string getExeDirectory() {
     char buf[4096];
     ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-    if (len != -1) {
-        buf[len] = '\0';
-        std::string exe_path(buf);
-        size_t pos = exe_path.find_last_of("/");
-        if (pos != std::string::npos) {
-            web_dir = exe_path.substr(0, pos) + "/web";
+    if (len == -1) return ".";
+    buf[len] = '\0';
+    std::string path(buf);
+    size_t pos = path.find_last_of("/");
+    return (pos != std::string::npos) ? path.substr(0, pos) : ".";
+}
+
+/**
+ * @brief 查找 web/server.py 的实际位置（Linux/macOS 版本）
+ *
+ * 搜索顺序：
+ *   1. <exe_dir>/web/server.py            —— 安装/打包布局
+ *   2. <exe_dir>/../web/server.py         等 —— 构建输出布局
+ *   3. <cwd>/web/server.py                —— 从项目根目录运行
+ */
+std::string findWebDirectory() {
+    std::string exe_dir = getExeDirectory();
+    std::vector<std::string> candidates;
+
+    candidates.push_back(exe_dir + "/web");
+
+    // 逐级向上查找（最多 4 级）
+    std::string cur = exe_dir;
+    for (int i = 0; i < 4; ++i) {
+        size_t pos = cur.find_last_of("/");
+        if (pos == std::string::npos || pos == 0) break;
+        cur = cur.substr(0, pos);
+        candidates.push_back(cur + "/web");
+    }
+
+    // 当前工作目录
+    char cwd_buf[4096];
+    if (getcwd(cwd_buf, sizeof(cwd_buf))) {
+        candidates.push_back(std::string(cwd_buf) + "/web");
+    }
+
+    for (const auto& c : candidates) {
+        std::string server_py = c + "/server.py";
+        if (access(server_py.c_str(), F_OK) == 0) {
+            return c;
         }
     }
-    if (web_dir.empty()) web_dir = "./web";
+    return "";
+}
+
+void launchWebProxy() {
+    std::string web_dir = findWebDirectory();
+    if (web_dir.empty()) {
+        std::cout << "[WebUI] server.py not found — searched EXE dir, parent dirs, and CWD"
+                  << " — web UI will not be available" << std::endl;
+        NEVO_LOG_WARN("server", "Web UI: server.py not found (searched EXE dir, parents, CWD)");
+        return;
+    }
 
     std::string cmd = "cd \"" + web_dir + "\" && python3 server.py &";
     if (system(cmd.c_str()) != 0) {
         cmd = "cd \"" + web_dir + "\" && python server.py &";
         system(cmd.c_str());
     }
-    NEVO_LOG_INFO("server", "Web proxy started on http://127.0.0.1:8090");
+    NEVO_LOG_INFO("server", "Web proxy started from {} on http://127.0.0.1:8090", web_dir);
 }
 
 void openBrowserAsync() {

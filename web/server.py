@@ -16,10 +16,10 @@ import threading
 import time
 import urllib.parse
 
-HOST = "127.0.0.1"
-WEB_PORT = 8090
-TCP_PORT = 24433
-WEB_ROOT = os.path.dirname(os.path.abspath(__file__))
+HOST = os.environ.get("NEVO_WEB_HOST", "127.0.0.1")
+WEB_PORT = int(os.environ.get("NEVO_WEB_PORT", "8090"))
+TCP_PORT = int(os.environ.get("NEVO_CONTROL_PORT", "24433"))
+WEB_ROOT = os.environ.get("NEVO_WEB_ROOT", os.path.dirname(os.path.abspath(__file__)))
 
 _tcp_lock = threading.Lock()
 _req_counter = 0
@@ -35,6 +35,34 @@ MAX_LOG_ENTRIES = 200
 # ---- SSE subscribers ----
 _sse_subscribers = []
 _sse_lock = threading.Lock()
+
+# ---- Admin auth token (obtained from ControlServer via admin_login) ----
+_admin_token = None
+_token_lock = threading.Lock()
+
+# Commands that mutate server state — require auth token on the ControlServer side
+SENSITIVE_COMMANDS = {
+    "kick_user", "disconnect_all", "shutdown", "ban_user",
+    "set_config", "configure_ssl", "create_channel", "delete_channel",
+    "update_channel", "reorder_channels", "set_admin_password",
+}
+
+# Maximum accepted request body size (defense against unbounded reads)
+MAX_BODY_BYTES = 1024 * 1024
+
+# Allowed Host values (DNS-rebinding defense: only loopback hosts may use this proxy)
+ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
+
+
+def get_admin_token():
+    with _token_lock:
+        return _admin_token
+
+
+def set_admin_token(token):
+    global _admin_token
+    with _token_lock:
+        _admin_token = token
 
 # ---- Server process tracking ----
 _server_exe_dir = None
@@ -103,54 +131,171 @@ def collect_metrics() -> dict:
         return _collect_psutil()
     except ImportError:
         pass
+    if sys.platform == "win32":
+        try:
+            return _collect_win32()
+        except Exception:
+            pass
     try:
-        return _collect_win32()
+        return _collect_procfs()
     except Exception:
-        return {
-            "cpu_percent": -1, "memory_mb": -1, "memory_percent": -1,
-            "handles": -1, "threads": -1, "connections": -1,
-            "error": "psutil not available",
-        }
+        pass
+    return {
+        "cpu_percent": -1, "memory_mb": -1, "memory_percent": -1,
+        "handles": -1, "threads": -1, "connections": -1,
+        "error": "metrics backend not available",
+    }
+
+
+def _find_nevo_process():
+    """Locate the nevo_server process by executable name or cmdline."""
+    import psutil
+    for p in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            name = (p.info.get("name") or "").lower()
+            cmdline = p.info.get("cmdline") or []
+            cmdline_str = " ".join(cmdline).lower()
+            if "nevo_server" in name or "/usr/local/bin/nevo_server" in cmdline_str:
+                return p
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return None
 
 
 def _collect_psutil() -> dict:
     import psutil
-    proc = None
-    for p in psutil.process_iter(["pid", "name"]):
-        try:
-            if p.info["name"] and "nevo_server" in p.info["name"].lower():
-                proc = p
-                break
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
+    proc = _find_nevo_process()
     result = {
         "cpu_percent": round(psutil.cpu_percent(interval=0.2), 1),
-        "memory_mb": 0, "memory_percent": 0.0, "handles": 0,
-        "threads": 0, "connections": 0, "pid": 0,
+        "memory_mb": 0, "memory_total_gb": 0.0, "memory_percent": 0.0,
+        "handles": 0, "threads": 0, "connections": 0, "pid": 0,
         "disk_free_gb": 0, "disk_total_gb": 0,
     }
     if proc:
         try:
             mem = proc.memory_info()
             result["memory_mb"] = round(mem.rss / (1024 * 1024), 1)
-            result["memory_percent"] = round(proc.memory_percent(), 1)
-            result["handles"] = proc.num_handles() if hasattr(proc, "num_handles") else 0
+            try:
+                result["memory_percent"] = round(proc.memory_percent(), 1)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+            # num_handles is Windows-only; on Linux count open file descriptors.
+            if hasattr(proc, "num_handles"):
+                try:
+                    result["handles"] = proc.num_handles()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            else:
+                try:
+                    result["handles"] = proc.num_fds()
+                except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
+                    pass
             result["threads"] = proc.num_threads()
             result["connections"] = len(proc.connections())
             result["pid"] = proc.pid
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
+    try:
+        vm = psutil.virtual_memory()
+        result["memory_total_gb"] = round(vm.total / (1024 ** 3), 2)
+    except Exception:
+        pass
     usage = psutil.disk_usage(os.getcwd())
-    result["disk_free_gb"] = round(usage.free / (1024 ** 3), 1)
-    result["disk_total_gb"] = round(usage.total / (1024 ** 3), 1)
+    result["disk_free_gb"] = round(usage.free / (1024 ** 3), 2)
+    result["disk_total_gb"] = round(usage.total / (1024 ** 3), 2)
+    global _metrics_cache
+    _metrics_cache = result
+    return result
+
+
+def _collect_procfs() -> dict:
+    """Fallback metrics collector using Linux /proc filesystem."""
+    result = {
+        "cpu_percent": -1, "memory_mb": -1, "memory_total_gb": 0.0,
+        "memory_percent": -1, "handles": -1, "threads": -1,
+        "connections": -1, "pid": 0,
+        "disk_free_gb": 0, "disk_total_gb": 0,
+    }
+
+    # Find nevo_server PID
+    nevo_pid = 0
+    try:
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            try:
+                with open(f"/proc/{entry}/cmdline", "rb") as f:
+                    cmdline = f.read().replace(b"\x00", b" ").decode("utf-8", errors="replace")
+                if "nevo_server" in cmdline:
+                    nevo_pid = int(entry)
+                    break
+            except (OSError, ValueError):
+                continue
+    except OSError:
+        pass
+
+    if nevo_pid:
+        result["pid"] = nevo_pid
+        try:
+            with open(f"/proc/{nevo_pid}/status") as f:
+                status = f.read()
+            for line in status.splitlines():
+                if line.startswith("VmRSS:"):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        result["memory_mb"] = round(int(parts[1]) / 1024.0, 1)
+                elif line.startswith("Threads:"):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        result["threads"] = int(parts[1])
+            # Count open file descriptors as handles equivalent
+            try:
+                result["handles"] = len(os.listdir(f"/proc/{nevo_pid}/fd"))
+            except OSError:
+                pass
+        except OSError:
+            pass
+
+    # CPU load average (1-min) as a rough CPU utilisation proxy
+    try:
+        with open("/proc/loadavg") as f:
+            loadavg = f.read().split()
+            if loadavg:
+                result["cpu_percent"] = round(float(loadavg[0]) * 100, 1)
+    except (OSError, ValueError):
+        pass
+
+    # Total system memory from /proc/meminfo
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        result["memory_total_gb"] = round(int(parts[1]) / (1024 * 1024), 2)
+                    break
+    except (OSError, ValueError):
+        pass
+
+    # Disk usage for current working directory
+    try:
+        st = os.statvfs(os.getcwd())
+        total = st.f_blocks * st.f_frsize
+        free = st.f_bavail * st.f_frsize
+        result["disk_free_gb"] = round(free / (1024 ** 3), 2)
+        result["disk_total_gb"] = round(total / (1024 ** 3), 2)
+    except OSError:
+        pass
+
     global _metrics_cache
     _metrics_cache = result
     return result
 
 
 def _collect_win32() -> dict:
-    result = {"cpu_percent": -1, "memory_mb": 0, "memory_percent": 0.0,
-              "handles": 0, "threads": 0, "connections": 0, "pid": 0,
+    result = {"cpu_percent": -1, "memory_mb": 0, "memory_total_gb": 0.0,
+              "memory_percent": 0.0, "handles": 0, "threads": 0,
+              "connections": 0, "pid": 0,
               "disk_free_gb": 0, "disk_total_gb": 0}
     try:
         output = subprocess.check_output(
@@ -186,8 +331,9 @@ def _collect_win32() -> dict:
                 if "TotalPhysicalMemory=" in line:
                     val = line.split("=")[-1].strip()
                     if val.isdigit():
-                        total_mb = int(val) / (1024 * 1024)
-                        result["memory_percent"] = round(result["memory_mb"] / total_mb * 100, 1)
+                        total_gb = int(val) / (1024 ** 3)
+                        result["memory_total_gb"] = round(total_gb, 2)
+                        result["memory_percent"] = round(result["memory_mb"] / (total_gb * 1024) * 100, 1)
                     break
         except Exception:
             pass
@@ -205,8 +351,8 @@ def _collect_win32() -> dict:
                 val = line.split("=")[-1].strip()
                 if val.isdigit():
                     total = max(total, int(val))
-        result["disk_free_gb"] = round(free / (1024 ** 3), 1)
-        result["disk_total_gb"] = round(total / (1024 ** 3), 1)
+        result["disk_free_gb"] = round(free / (1024 ** 3), 2)
+        result["disk_total_gb"] = round(total / (1024 ** 3), 2)
     except Exception:
         pass
     global _metrics_cache
@@ -220,7 +366,13 @@ def send_tcp_command(command: str, params: dict | None = None) -> dict:
     global _req_counter
     with _tcp_lock:
         _req_counter += 1
-        request = {"id": _req_counter, "command": command, "params": params or {}}
+        params = dict(params or {})
+        # 敏感命令自动附加管理认证令牌（ControlServer 侧 fail-closed 校验）
+        if command in SENSITIVE_COMMANDS:
+            token = get_admin_token()
+            if token:
+                params["auth_token"] = token
+        request = {"id": _req_counter, "command": command, "params": params}
         payload = json.dumps(request, ensure_ascii=False) + "\n"
         try:
             sock = socket.create_connection((HOST, TCP_PORT), timeout=5.0)
@@ -299,12 +451,40 @@ class WebHandler(http.server.SimpleHTTPRequestHandler):
         sys.stdout.write("[{}] {}\n".format(timestamp, args[0]))
         sys.stdout.flush()
 
+    # ---- 安全防护：DNS rebinding / 跨站请求 ----
+
+    def _host_allowed(self) -> bool:
+        """只允许 loopback 主机访问（防 DNS rebinding 攻击）。"""
+        host = self.headers.get("Host", "")
+        hostname = host.split(":")[0] if host else ""
+        return hostname in ALLOWED_HOSTS
+
+    def _reject_foreign_host(self) -> bool:
+        """Host 非本地时拒绝请求。返回 True 表示已拒绝。"""
+        if not self._host_allowed():
+            self._send_json({"status": "error", "data": {"message": "Forbidden host"}}, 403)
+            return True
+        return False
+
+    def _require_auth(self) -> bool:
+        """校验 Bearer 令牌。未通过时返回 False 并已发送 401 响应。"""
+        token = get_admin_token()
+        if not token:
+            self._send_json({"status": "error", "data": {"message": "未登录管理面，请先 /api/login"}}, 401)
+            return False
+        auth = self.headers.get("Authorization", "")
+        expected = "Bearer " + token
+        if not auth or auth != expected:
+            self._send_json({"status": "error", "data": {"message": "AUTH_REQUIRED: 无效的管理令牌"}}, 401)
+            return False
+        return True
+
     def _send_json(self, data: dict, status: int = 200):
         body = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        # 不发送 CORS 头：管理面仅允许同源访问（防任意网页跨站调用本机管理 API）
         self.end_headers()
         self.wfile.write(body)
 
@@ -312,18 +492,27 @@ class WebHandler(http.server.SimpleHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         if length == 0:
             return None
+        if length > MAX_BODY_BYTES:
+            self._send_json({"status": "error", "data": {"message": "Request body too large"}}, 413)
+            return None
         raw = self.rfile.read(length)
-        return json.loads(raw.decode("utf-8"))
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            self._send_json({"status": "error", "data": {"message": "Invalid JSON body"}}, 400)
+            return None
 
     def do_OPTIONS(self):
+        if self._reject_foreign_host():
+            return
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        # 不发送 CORS 头（同源访问）
         self.end_headers()
 
     # ---- GET ----
     def do_GET(self):
+        if self._reject_foreign_host():
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/")
         qs = urllib.parse.parse_qs(parsed.query)
@@ -358,7 +547,7 @@ class WebHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        # 不发送 CORS 头（同源访问）
         self.end_headers()
         self.wfile.write(b":ok\n\n")
         self.wfile.flush()
@@ -378,10 +567,33 @@ class WebHandler(http.server.SimpleHTTPRequestHandler):
 
     # ---- POST ----
     def do_POST(self):
+        if self._reject_foreign_host():
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/")
-        body = self._read_body() or {}
-        admin_pwd = body.pop("_admin_password", None)
+        body = self._read_body()
+        if body is None:
+            body = {}
+
+        # ---- 管理面登录（换取管理认证令牌） ----
+        if path == "/api/login":
+            password = body.get("password", "")
+            result = send_tcp_command("admin_login", {"password": password})
+            if result.get("status") == "ok" and result.get("data", {}).get("authenticated"):
+                set_admin_token(result["data"].get("auth_token"))
+                add_log("admin_login", "admin", "管理面登录成功")
+                self._send_json(result)
+            else:
+                add_log("admin_login", "admin", "管理面登录失败", "error")
+                self._send_json({"status": "error", "data": {
+                    "authenticated": False,
+                    "message": result.get("data", {}).get("message", "密码错误")
+                }}, 401)
+            return
+
+        # ---- 其余 POST 均为敏感操作：要求管理认证 ----
+        if not self._require_auth():
+            return
 
         if path == "/api/kick":
             result = send_tcp_command("kick_user", body)
@@ -430,6 +642,10 @@ class WebHandler(http.server.SimpleHTTPRequestHandler):
 
         elif path == "/api/config":
             result = send_tcp_command("set_config", body)
+            # 修改管理员密码后 ControlServer 会轮换令牌，同步更新本地令牌
+            new_token = result.get("data", {}).get("auth_token")
+            if new_token:
+                set_admin_token(new_token)
             add_log("config", "admin", "修改系统配置")
             self._send_json(result)
 

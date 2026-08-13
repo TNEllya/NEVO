@@ -11,7 +11,10 @@
  *   - rotateKey(): 密钥轮换，旧密钥保留一段重叠期以处理过渡期数据包
  *
  * Nonce 方案：
- *   - 使用原子递增计数器生成 12 字节 nonce
+ *   - 24 字节 nonce = 每实例随机 16 字节前缀 + 8 字节原子递增计数器
+ *   - 前缀在每次 setSessionKey 时随机生成：即使多个实例共享同一把
+ *     会话密钥（如同一账号多设备、服务端中继），nonce 也不会跨实例
+ *     碰撞（碰撞概率 ~2^-128），从根上避免密钥流重用
  *   - 发送端单调递增，接收端不验证顺序（允许丢包/乱序）
  *
  * 帧格式：
@@ -48,6 +51,10 @@ inline constexpr size_t CRYPTO_KEY_SIZE = 32;
 /// 注意：虽然用户需求说 AES_GCM_NONCE_SIZE=12，但 XChaCha20-Poly1305 使用 24 字节 nonce
 /// 我们仍保留 PacketTypes.h 中定义的 AES_GCM_NONCE_SIZE=12 常量以兼容协议定义
 inline constexpr size_t XCHACHA_NONCE_SIZE = 24;
+
+/// 每实例随机 nonce 前缀长度（16 字节）
+/// nonce = 前缀(16B) + 计数器(8B)，前缀保证跨实例 nonce 不碰撞
+inline constexpr size_t NONCE_PREFIX_SIZE = 16;
 
 /// Poly1305 认证标签长度（16 字节）
 inline constexpr size_t POLY1305_TAG_SIZE = 16;
@@ -252,14 +259,17 @@ private:
     /// 原子 nonce 计数器——每次加密递增，生成唯一 nonce
     std::atomic<uint64_t> nonce_counter_{0};
 
+    /// 每实例随机 nonce 前缀（setSessionKey 时生成，保证跨实例唯一）
+    std::array<uint8_t, NONCE_PREFIX_SIZE> nonce_prefix_{};
+
     // ---- 内部方法 ----
 
     /**
-     * @brief 从计数器生成 24 字节 nonce
+     * @brief 从计数器生成 24 字节 nonce（前缀 + 计数器）
      * @param counter 计数器值
      * @return 24 字节 nonce
      */
-    static std::array<uint8_t, XCHACHA_NONCE_SIZE> generateNonce(uint64_t counter);
+    std::array<uint8_t, XCHACHA_NONCE_SIZE> generateNonce(uint64_t counter);
 
     /**
      * @brief 获取当前时间戳（秒，自 epoch）

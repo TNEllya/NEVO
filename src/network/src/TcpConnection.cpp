@@ -30,6 +30,13 @@
 namespace nevo {
 
 // ============================================================
+// 常量
+// ============================================================
+
+/// 载荷读取超时（防御 slowloris 慢速发送攻击）
+inline constexpr std::chrono::seconds TCP_PAYLOAD_READ_TIMEOUT{30};
+
+// ============================================================
 // 构造 / 析构
 // ============================================================
 
@@ -43,7 +50,17 @@ TcpConnection::TcpConnection(boost::asio::io_context& io_ctx)
 
 TcpConnection::~TcpConnection()
 {
-    close();
+    // 析构时同步关闭底层 socket，确保所有未完成的异步操作在对象销毁前被取消，
+    // 避免析构后仍有 async_connect/async_read 回调访问已释放的成员。
+    boost::system::error_code ec;
+    if (use_ssl_ && ssl_stream_) {
+        ssl_stream_->shutdown(ec);
+        ssl_stream_->next_layer().close(ec);
+        ssl_stream_.reset();
+    } else {
+        socket_.close(ec);
+    }
+    connected_.store(false);
     NEVO_LOG_DEBUG("network", "TcpConnection destroyed");
 }
 
@@ -54,12 +71,8 @@ TcpConnection::~TcpConnection()
 boost::asio::awaitable<boost::system::error_code>
 TcpConnection::asyncConnect(const std::string& host, uint16_t port, uint32_t timeout_ms)
 {
-    // 获取当前协程的执行器（strand 绑定）
-    auto executor = boost::asio::get_associated_executor(co_await boost::asio::this_coro::executor);
-    auto strand_executor = strand_;
 
-    // ---- DNS 解析 ----
-    boost::asio::ip::tcp::resolver resolver(strand_executor);
+    boost::asio::ip::tcp::resolver resolver(strand_);
     auto [resolve_ec, results] = co_await resolver.async_resolve(
         host, std::to_string(port),
         boost::asio::as_tuple(boost::asio::use_awaitable));
@@ -74,27 +87,14 @@ TcpConnection::asyncConnect(const std::string& host, uint16_t port, uint32_t tim
                    host, port, std::distance(results.begin(), results.end()));
 
     // ---- 带超时的连接 ----
-    // 使用 steady_timer 实现连接超时
-    boost::asio::steady_timer timer(strand_executor);
-    timer.expires_after(std::chrono::milliseconds(timeout_ms));
-
-    // 启动超时定时器（回调方式：超时后关闭 socket 取消连接）
-    timer.async_wait(
-        [this](boost::system::error_code ec) {
-            if (!ec) {
-                // 超时，关闭 socket 以取消连接操作
-                boost::system::error_code ignored;
-                socket_.close(ignored);
-            }
-        });
-
-    // 协程式异步连接：co_await 等待连接完成
+    // 使用 cancel_after 实现可取消的连接超时，避免手动 timer 的 this 捕获和
+    // Windows 下 close socket 无法立即取消异步 connect 的问题。
     auto [connect_ec, endpoint] = co_await boost::asio::async_connect(
         socket_, results,
-        boost::asio::as_tuple(boost::asio::use_awaitable));
-
-    // 取消定时器（连接已完成或已失败）
-    timer.cancel();
+        boost::asio::as_tuple(
+            boost::asio::cancel_after(
+                std::chrono::milliseconds(timeout_ms),
+                boost::asio::use_awaitable)));
 
     // 判断结果
     if (connect_ec == boost::asio::error::operation_aborted) {
@@ -326,18 +326,26 @@ boost::asio::awaitable<void> TcpConnection::asyncReadLoop()
             boost::system::error_code ec;
             size_t bytes_read = 0;
 
+            // 载荷读取同样带超时（防御 slowloris：恶意客户端声明大载荷后
+            // 逐字节慢发，长期占用连接与线程资源）
             if (use_ssl_) {
                 auto [read_ec, read_n] = co_await boost::asio::async_read(
                     *ssl_stream_,
                     boost::asio::buffer(read_buffer_.data(), payload_length),
-                    boost::asio::as_tuple(boost::asio::use_awaitable));
+                    boost::asio::as_tuple(
+                        boost::asio::cancel_after(
+                            TCP_PAYLOAD_READ_TIMEOUT,
+                            boost::asio::use_awaitable)));
                 ec = read_ec;
                 bytes_read = read_n;
             } else {
                 auto [read_ec, read_n] = co_await boost::asio::async_read(
                     socket_,
                     boost::asio::buffer(read_buffer_.data(), payload_length),
-                    boost::asio::as_tuple(boost::asio::use_awaitable));
+                    boost::asio::as_tuple(
+                        boost::asio::cancel_after(
+                            TCP_PAYLOAD_READ_TIMEOUT,
+                            boost::asio::use_awaitable)));
                 ec = read_ec;
                 bytes_read = read_n;
             }
@@ -482,10 +490,16 @@ void TcpConnection::close()
     // 通过 strand 发布关闭操作，确保与异步读写操作串行执行，
     // 避免从非 io_context 线程直接操作 socket 导致的数据竞争。
     //
-    // 使用 shared_from_this() 延长对象生命周期，防止 TcpConnection
-    // 在 strand 闭包执行前被析构导致的 use-after-free 崩溃。
-    auto self = shared_from_this();
-    boost::asio::post(strand_, [self]() {
+    // 使用 weak_from_this() 避免在析构函数中调用 shared_from_this() 导致崩溃。
+    // 当对象仍被外部 shared_ptr 持有时，闭包会成功升杯并执行关闭；
+    // 若对象正在析构（weak_ptr 已过期），则跳过异步关闭，由成员析构自动关闭 socket。
+    auto self_weak = weak_from_this();
+    boost::asio::post(strand_, [self_weak]() {
+        auto self = self_weak.lock();
+        if (!self) {
+            return;
+        }
+
         boost::system::error_code ec;
 
         if (self->use_ssl_ && self->ssl_stream_) {

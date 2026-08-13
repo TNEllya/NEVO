@@ -44,7 +44,19 @@ enum class MessageType(val id: Int) {
     FILE_DOWNLOAD_REQUEST(46),
     FILE_DOWNLOAD_RESPONSE(47),
     FILE_DELETE_REQUEST(49),
-    FILE_DELETE_RESPONSE(50);
+    FILE_DELETE_RESPONSE(50),
+    // ---- 屏幕共享（proto/control.proto 60-62） ----
+    SCREEN_SHARE_START(60),
+    SCREEN_SHARE_STOP(61),
+    SCREEN_SHARE_STATE(62),
+    // ---- 服主绑定（proto/control.proto 70-71） ----
+    BIND_OWNER_REQUEST(70),
+    BIND_OWNER_RESPONSE(71),
+    // ---- 视频通话（proto/control.proto 80-83） ----
+    VIDEO_CALL_REQUEST(80),
+    VIDEO_CALL_RESPONSE(81),
+    VIDEO_CALL_HANGUP(82),
+    VIDEO_CALL_PROFILE_UPDATE(83);
 
     companion object {
         fun fromId(id: Int): MessageType? = entries.find { it.id == id }

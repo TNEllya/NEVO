@@ -1,0 +1,127 @@
+{
+  "data": [
+    {
+      "id": "page-main-interface",
+      "title": "主界面 - 语音频道",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1751596800000,
+      "canvasData": {
+        "x": 0,
+        "y": 0,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/main-interface.html",
+        "interactions": [
+          {
+            "domId": "nav-video-call",
+            "targetPageId": "page-video-call"
+          },
+          {
+            "domId": "nav-settings",
+            "targetPageId": "page-settings"
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-video-call",
+      "title": "视频通话",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1751596800000,
+      "canvasData": {
+        "x": 620,
+        "y": 0,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/video-call.html",
+        "interactions": [
+          {
+            "domId": "back-to-main",
+            "targetPageId": "page-main-interface",
+            "hideEdge": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-settings",
+      "title": "设置",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1751596800000,
+      "canvasData": {
+        "x": 620,
+        "y": 377,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/settings.html",
+        "interactions": [
+          {
+            "domId": "back-to-main",
+            "targetPageId": "page-main-interface",
+            "hideEdge": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-main-interface-light",
+      "title": "主界面 - 语音频道（浅色）",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1751683200000,
+      "canvasData": {
+        "x": 0,
+        "y": 754,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/main-interface-light.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-video-call-light",
+      "title": "视频通话（浅色）",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1751683200000,
+      "canvasData": {
+        "x": 620,
+        "y": 754,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/video-call-light.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-settings-light",
+      "title": "设置（浅色）",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1751683200000,
+      "canvasData": {
+        "x": 1240,
+        "y": 754,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/settings-light.html",
+        "interactions": []
+      }
+    }
+  ],
+  "config": {
+    "autoLayout": true,
+    "deviceType": "desktop",
+    "projectName": "NEVO 语音聊天 UI",
+    "designLibrary": null
+  }
+}

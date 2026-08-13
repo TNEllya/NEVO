@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ~ Info.plist
+  ~ NEVO VoIP - iOS Application Configuration
+  ~
+  ~ This plist configures the iOS application for background VoIP operation:
+  ~
+  ~   1. UIBackgroundModes: audio
+  ~      Enables the app to continue playing and recording audio in the background.
+  ~      Required for VoIP calls to remain active when the app is not in the foreground.
+  ~
+  ~   2. NSMicrophoneUsageDescription
+  ~      Required privacy description for microphone access on iOS.
+  ~      iOS displays this message to the user when requesting microphone permission.
+  ~      Without this key, the app will crash when attempting to access the microphone.
+  ~
+  ~ Notes:
+  ~   - The "audio" background mode is preferred over "voip" for modern VoIP apps
+  ~     because "voip" mode requires PushKit and is designed for incoming call
+  ~     notification, while "audio" mode allows continuous audio I/O.
+  ~   - The microphone usage description should clearly explain why the app
+  ~     needs microphone access, as required by App Store review guidelines.
+  -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+
+    <!-- ================================================================ -->
+    <!-- Background Modes                                                  -->
+    <!-- ================================================================ -->
+
+    <!--
+      ~ UIBackgroundModes: Allows the app to operate in the background.
+      ~
+      ~ "audio": Enables background audio playback and recording.
+      ~ This is essential for VoIP apps to maintain call audio when
+      ~ the user switches to another app or locks the screen.
+      ~
+      ~ The audio session must be properly configured (see NevoAudioSession.swift)
+      ~ with the .playAndRecord category and .voiceChat mode for this
+      ~ background mode to function correctly.
+      -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>audio</string>
+    </array>
+
+    <!-- ================================================================ -->
+    <!-- Privacy Descriptions                                              -->
+    <!-- ================================================================ -->
+
+    <!--
+      ~ NSMicrophoneUsageDescription
+      ~
+      ~ Required by iOS for microphone access. This description is shown
+      ~ to the user in the system permission dialog.
+      ~
+      ~ The description should be clear and concise, explaining:
+      ~   1. What the app uses the microphone for (VoIP voice calls)
+      ~   2. That the audio is transmitted to other call participants
+      ~
+      ~ App Store review requires this description to be meaningful
+      ~ and specific to the app's functionality.
+      -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>NEVO needs access to your microphone for voice communication during VoIP calls. Your audio will be transmitted to other participants in the channel.</string>
+
+</dict>
+</plist>

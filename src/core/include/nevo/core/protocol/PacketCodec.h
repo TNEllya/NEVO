@@ -3,9 +3,27 @@
  * @file PacketCodec.h
  * @brief 包编解码工具
  *
- * 提供 TCP 帧和 UDP 语音包的序列化/反序列化功能。
- * TCP 帧格式：[4字节总长度][4字节消息类型][4字节request_id][Protobuf载荷]
- * UDP 帧格式：[变长Protobuf头部][加密Opus载荷]
+ * ============================================================
+ * 线格式（唯一运行时真源，全平台统一）
+ * ============================================================
+ * TCP 控制通道（C++ 服务端、C++ 客户端、Python 客户端、Android 客户端、
+ * Web 网关共用）运行时统一使用【自定义小端 TLV 格式】，权威定义见
+ * docs/protocol-wire-format.md：
+ *   帧头：[4B 大端总长度][4B 大端消息类型][4B 大端 request_id]
+ *   载荷：[4B 小端 case_value][4B 小端 inner_len][inner TLV 载荷]
+ *         inner: string/bytes = [4B 小端 len][data]，uint32/64 小端，bool 1B
+ * 跨语言一致性由金样互操作测试锁定：
+ *   - tests/core_tests/TestPacketCodec.cpp（PacketCodecInteropTest）
+ *   - src/client/gui_python/tests/test_wire_format.py
+ * 任何格式变更必须先更新上述两处金样并同步三端实现，否则不允许提交。
+ *
+ * UDP 语音/视频通道：[变长 Protobuf 头部（VoicePacketHeader/VideoPacketHeader）]
+ * + [加密载荷]，头部序列化为 protobuf（四端一致，无重复实现）。
+ *
+ * 下方 encodeTcpFrame/decodeTcpFramePayload 为【legacy Protobuf TCP 帧】
+ * 编码路径：当前生产运行时未使用（仅测试覆盖），保留用于协议迁移备选
+ * 与单元测试。新增代码一律使用 encodeCustomWirePayload/decodeCustomWirePayload。
+ * ============================================================
  */
 
 #include "nevo/core/protocol/PacketTypes.h"

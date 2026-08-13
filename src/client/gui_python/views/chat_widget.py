@@ -5,7 +5,7 @@ import re
 import sys
 import tempfile
 
-from PyQt5.QtCore import Qt, QSize, pyqtSignal, QRectF, QUrl
+from PyQt5.QtCore import Qt, QSize, pyqtSignal, QRectF, QUrl, QObject
 from PyQt5.QtGui import QColor, QFont, QPainter, QPainterPath, QPixmap, QTextCursor
 from PyQt5.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QDialog,
@@ -17,6 +17,17 @@ from theme_manager import ThemeManager, chat_bubble_stylesheet, system_msg_style
 from views.emoji_panel import EmojiPanel
 from views.file_upload_dialog import select_file
 from views.chat_input_bar import ChatInputBar
+import nevo_client  # noqa: E402  本地文件缓存目录/路径工具（get_file_cache_dir 等）
+
+
+# 文件传输信号总线：_ImageLabel/_FileCard 是消息气泡的子控件，无法直接
+# 连到 ChatWidget 的信号，通过模块级总线转发"请求下载/文件已缓存"事件。
+class _FileTransferSignals(QObject):
+    download_requested = pyqtSignal(str)   # file_id
+    file_cached = pyqtSignal(str)          # file_id
+
+
+_file_transfer_signals = _FileTransferSignals()
 
 _USER_COLORS = [
     "#5865F2",
@@ -115,46 +126,28 @@ class _ImageLabel(QLabel):
             f"border-radius: 8px; }}"
         )
         self.setCursor(Qt.PointingHandCursor)
-        self._load_async()
+        self.load_from_cache()
 
     @classmethod
     def cache_dir(cls):
         if cls._cache_dir is None:
-            import os
-            if getattr(sys, 'frozen', False):
-                base = os.path.join(os.path.dirname(sys.executable), "_image_cache")
-            else:
-                base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "_image_cache")
-            os.makedirs(base, exist_ok=True)
-            cls._cache_dir = base
+            cls._cache_dir = nevo_client.get_file_cache_dir()
         return cls._cache_dir
 
     @staticmethod
     def cache_image(file_id: str, source_path: str) -> str:
         """Copy source image to cache dir, return cached path."""
-        import os, shutil
-        d = _ImageLabel.cache_dir()
-        ext = os.path.splitext(source_path)[1] or ".png"
-        cached = os.path.join(d, f"{file_id}{ext}")
-        shutil.copy2(source_path, cached)
-        return cached
+        return nevo_client.cache_source_file(file_id, source_path)
 
-    def _load_async(self):
+    def load_from_cache(self):
+        """从本地缓存目录加载图片；缓存不存在时允许点击触发取回。"""
         from PyQt5.QtCore import QThread, pyqtSignal as qPySignal
         fid = self._file_id
         class Loader(QThread):
             done = qPySignal(bytes, str)
             def run(self):
-                import os
                 d = _ImageLabel.cache_dir()
-                found = None
-                try:
-                    for f in os.listdir(d):
-                        if f.startswith(fid + ".") or f == fid:
-                            found = os.path.join(d, f)
-                            break
-                except OSError:
-                    pass
+                found = nevo_client.get_cached_file_path(fid)
                 if found and os.path.exists(found):
                     try:
                         with open(found, "rb") as fh:
@@ -168,6 +161,10 @@ class _ImageLabel(QLabel):
         self._loader = Loader()
         self._loader.done.connect(self._on_loaded)
         self._loader.start()
+
+    def reload(self):
+        """文件数据到达缓存目录后由 ChatWidget.on_file_cached 调用。"""
+        self.load_from_cache()
 
     def _on_loaded(self, raw_bytes, error_msg):
         if raw_bytes:
@@ -186,7 +183,9 @@ class _ImageLabel(QLabel):
         self.setText(error_msg or "Failed to load image")
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton and self._pixmap and not self._pixmap.isNull():
+        if event.button() != Qt.LeftButton:
+            return
+        if self._pixmap and not self._pixmap.isNull():
             dlg = QDialog(self.window())
             dlg.setWindowTitle("Image Viewer")
             dlg.setModal(True)
@@ -198,6 +197,10 @@ class _ImageLabel(QLabel):
             dlg.setLayout(layout)
             dlg.resize(600, 400)
             dlg.exec_()
+        else:
+            # 缓存中还没有数据：向频道请求取回
+            self.setText("Fetching image...")
+            _file_transfer_signals.download_requested.emit(self._file_id)
 
 class _FileCard(QFrame):
     def __init__(self, file_id: str, filename: str, parent=None):
@@ -224,6 +227,7 @@ class _FileCard(QFrame):
             f"font-size: 11px; color: {pal['text_muted']}; background: transparent;"
         )
         info_layout.addWidget(size_lbl_widget)
+        self._status_lbl = size_lbl_widget
         layout.addLayout(info_layout)
         layout.addStretch()
         self.setStyleSheet(
@@ -232,16 +236,14 @@ class _FileCard(QFrame):
         )
         self.setCursor(Qt.PointingHandCursor)
 
+    def mark_available(self):
+        """文件数据已到达缓存目录：更新提示文本。"""
+        self._status_lbl.setText("Available — click to save")
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            from PyQt5.QtWidgets import QFileDialog, QMessageBox
-            d = _ImageLabel.cache_dir()
-            import os
-            found = None
-            for f in os.listdir(d):
-                if f.startswith(self._file_id + ".") or f == self._file_id:
-                    found = os.path.join(d, f)
-                    break
+            from PyQt5.QtWidgets import QFileDialog
+            found = nevo_client.get_cached_file_path(self._file_id)
             if found and os.path.exists(found):
                 path, _ = QFileDialog.getSaveFileName(
                     self.window(), "Save File", self._filename
@@ -250,10 +252,9 @@ class _FileCard(QFrame):
                     import shutil
                     shutil.copy2(found, path)
             else:
-                QMessageBox.information(
-                    self.window(), "Download",
-                    f"File '{self._filename}' is not available locally."
-                )
+                # 本地无数据：向频道请求取回（由上传者重发分片）
+                self._status_lbl.setText("Fetching...")
+                _file_transfer_signals.download_requested.emit(self._file_id)
 
 class _MessageBubble(QFrame):
     def __init__(self, text: str, is_self: bool = False, parent=None):
@@ -483,12 +484,15 @@ class ChatWidget(QFrame):
     chat_message_sent = pyqtSignal(str)
     file_upload_requested = pyqtSignal(str, int)
     image_upload_requested = pyqtSignal(str, int)
+    file_download_requested = pyqtSignal(str)   # file_id
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._local_user_id = 0
         self._local_username = ""
         self._emoji_panel = None
+        # 消息气泡内 _ImageLabel/_FileCard 的下载请求经总线转发到本信号
+        _file_transfer_signals.download_requested.connect(self.file_download_requested.emit)
         self._setup_ui()
 
     def _setup_ui(self):
@@ -556,6 +560,21 @@ class ChatWidget(QFrame):
             self.chat_message_sent.emit(f"[IMG:{file_id}]")
         else:
             self.input_bar.insert_text(f"[FILE:{file_id}:{filename}]")
+
+    def on_file_cached(self, file_id: str):
+        """文件数据已写入缓存目录：刷新对应图片标签/文件卡片。"""
+        layout = self.message_display._layout
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            if not item or not item.widget():
+                continue
+            w = item.widget()
+            for lbl in w.findChildren(_ImageLabel):
+                if lbl._file_id == file_id:
+                    lbl.reload()
+            for card in w.findChildren(_FileCard):
+                if card._file_id == file_id:
+                    card.mark_available()
 
     def add_message(self, sender_id: int, sender_name: str, text: str,
                     timestamp: int = 0, is_self: bool = False,

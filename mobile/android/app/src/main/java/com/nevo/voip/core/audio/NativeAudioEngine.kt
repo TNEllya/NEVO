@@ -22,9 +22,11 @@ class NativeAudioEngine {
 
     fun initAudio(sampleRate: Int, channels: Int): Boolean {
         android.util.Log.d(TAG, "Initializing audio: $sampleRate Hz, $channels channels")
+        _sampleRate = sampleRate
+        _channels = channels
         nativeAvailable = try {
             nativeInitAudio(sampleRate, channels)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             android.util.Log.e(TAG, "nativeInitAudio failed: ${e.message}")
             false
         }
@@ -33,70 +35,73 @@ class NativeAudioEngine {
     }
 
     fun encodeOpus(pcm: ShortArray): ByteArray {
-        require(initialized) { "Audio engine not initialized. Call initAudio() first." }
+        if (!initialized) return ByteArray(0)
         return try {
             nativeEncodeOpus(pcm, pcm.size / channels)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             android.util.Log.e(TAG, "nativeEncodeOpus failed: ${e.message}")
             ByteArray(0)
         }
     }
 
     fun encodeOpus(pcm: ShortArray, frameSize: Int): ByteArray {
-        require(initialized) { "Audio engine not initialized. Call initAudio() first." }
+        if (!initialized) return ByteArray(0)
         return try {
             nativeEncodeOpus(pcm, frameSize)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             android.util.Log.e(TAG, "nativeEncodeOpus failed: ${e.message}")
             ByteArray(0)
         }
     }
 
     fun decodeOpus(opus: ByteArray): ShortArray {
-        require(initialized) { "Audio engine not initialized. Call initAudio() first." }
+        val frameSize = sampleRate / 50
+        if (!initialized) return ShortArray(frameSize * channels)
         return try {
-            val frameSize = sampleRate / 50
             nativeDecodeOpus(opus, frameSize)
                 ?: ShortArray(frameSize * channels)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             android.util.Log.e(TAG, "nativeDecodeOpus failed: ${e.message}")
             ShortArray(sampleRate / 50 * channels)
         }
     }
 
     fun decodeOpus(opus: ByteArray, frameSize: Int): ShortArray {
-        require(initialized) { "Audio engine not initialized. Call initAudio() first." }
+        if (!initialized) return ShortArray(frameSize * channels)
         return try {
             nativeDecodeOpus(opus, frameSize)
                 ?: ShortArray(frameSize * channels)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             android.util.Log.e(TAG, "nativeDecodeOpus failed: ${e.message}")
             ShortArray(frameSize * channels)
         }
     }
 
     fun mixAudio(audioFrames: Array<ShortArray>, volumes: FloatArray): ByteArray {
+        if (!initialized) return ByteArray(0)
         return try {
             nativeMixAudio(audioFrames, volumes)
                 ?: ByteArray(0)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             android.util.Log.e(TAG, "nativeMixAudio failed: ${e.message}")
             ByteArray(0)
         }
     }
 
     fun jitterBufferPush(packet: ByteArray, timestamp: Int) {
+        if (!initialized) return
         try {
             nativeJitterBufferPush(packet, timestamp)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             android.util.Log.e(TAG, "nativeJitterBufferPush failed: ${e.message}")
         }
     }
 
     fun jitterBufferPop(): Pair<ByteArray, Int>? {
+        if (!initialized) return null
         return try {
             nativeJitterBufferPop()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             android.util.Log.e(TAG, "nativeJitterBufferPop failed: ${e.message}")
             null
         }

@@ -9,13 +9,16 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.nevo.voip.R
+import com.nevo.voip.feature.voice.data.VoiceEngine
 
 class NevoAudioService : Service() {
 
     companion object {
         const val CHANNEL_ID = "nevo_voip_channel"
+        private const val TAG = "NevoAudioService"
         private const val NOTIFICATION_ID = 1001
         private const val ACTION_STOP = "com.nevo.voip.ACTION_STOP"
 
@@ -50,12 +53,27 @@ class NevoAudioService : Service() {
             }
         }
 
-        val notification = buildNotification()
-        startForeground(NOTIFICATION_ID, notification)
-        return START_STICKY
+        return try {
+            val notification = buildNotification()
+            startForeground(NOTIFICATION_ID, notification)
+            START_STICKY
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start foreground audio service", e)
+            stopSelf()
+            START_NOT_STICKY
+        }
     }
 
     override fun onDestroy() {
+        // 服务销毁即停止语音采集/播放：VoiceEngine 由进程内单例持有，
+        // 此前此处为空实现，导致服务停止后通话继续占用麦克风/扬声器。
+        // stopAll 会释放 AudioRecord/AudioTrack 并重置会话密钥，
+        // 之后重新进入频道时 startVoiceEngine 可正常重新初始化。
+        try {
+            VoiceEngine.getInstance()?.stopAll()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to stop voice engine on service destroy", e)
+        }
         super.onDestroy()
     }
 

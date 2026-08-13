@@ -18,6 +18,8 @@
 #include <filesystem>
 #include <random>
 #include <cstdio>
+#include <chrono>
+#include <mutex>
 
 #ifdef NEVO_HAS_SODIUM
 #include <sodium.h>
@@ -28,6 +30,62 @@
 #include "control.pb.h"
 
 namespace nevo {
+
+// ============================================================
+// 登录失败限速（进程内状态）
+// 防止对 Argon2id 密码哈希的在线暴力破解
+// ============================================================
+
+namespace {
+
+/// 同一 IP 在窗口期内的最大失败次数
+constexpr int LOGIN_MAX_FAILURES = 5;
+/// 失败计数窗口（秒）
+constexpr int64_t LOGIN_WINDOW_SECONDS = 60;
+
+std::mutex g_login_rate_mutex;
+// IP -> (失败次数, 窗口起始时间)
+std::unordered_map<std::string, std::pair<int, int64_t>> g_login_failures;
+
+int64_t loginRateNowSeconds() {
+    auto now = std::chrono::system_clock::now();
+    return std::chrono::duration_cast<std::chrono::seconds>(
+        now.time_since_epoch()).count();
+}
+
+/// 检查该 IP 是否处于限速惩罚期
+bool isLoginRateLimited(const std::string& ip) {
+    std::lock_guard<std::mutex> lock(g_login_rate_mutex);
+    auto it = g_login_failures.find(ip);
+    if (it == g_login_failures.end()) {
+        return false;
+    }
+    if (loginRateNowSeconds() - it->second.second >= LOGIN_WINDOW_SECONDS) {
+        // 窗口过期，清除记录
+        g_login_failures.erase(it);
+        return false;
+    }
+    return it->second.first >= LOGIN_MAX_FAILURES;
+}
+
+/// 记录一次登录失败
+void recordLoginFailure(const std::string& ip) {
+    std::lock_guard<std::mutex> lock(g_login_rate_mutex);
+    auto& [count, window_start] = g_login_failures[ip];
+    if (loginRateNowSeconds() - window_start >= LOGIN_WINDOW_SECONDS) {
+        count = 0;
+        window_start = loginRateNowSeconds();
+    }
+    ++count;
+}
+
+/// 登录成功后清除失败记录
+void clearLoginFailures(const std::string& ip) {
+    std::lock_guard<std::mutex> lock(g_login_rate_mutex);
+    g_login_failures.erase(ip);
+}
+
+} // namespace
 
 // ============================================================
 // 静态成员初始化
@@ -271,6 +329,13 @@ void ClientSession::handleControlMessage(std::vector<uint8_t> data,
         handlePttToggle(msg, request_id);
     } else if (msg.has_mute_toggle()) {
         handleMuteToggle(msg, request_id);
+    } else if (msg.has_user_speaking()) {
+        // 客户端上报说话状态（VAD/连续模式）：user_id 以会话为准，防止伪造他人状态
+        bool speaking = msg.user_speaking().speaking();
+        user_.setSpeaking(speaking);
+        if (server_core_) {
+            server_core_->broadcastUserSpeaking(user_.id(), speaking);
+        }
     } else if (msg.has_udp_ping_request()) {
         handleUdpPing(msg, request_id);
     } else if (msg.has_admin_auth_request()) {
@@ -295,8 +360,16 @@ void ClientSession::handleControlMessage(std::vector<uint8_t> data,
         handleFileListRequest(msg, request_id);
     } else if (msg.has_file_upload_request()) {
         handleFileUploadRequest(msg, request_id);
+    } else if (msg.has_file_upload_chunk_request()) {
+        handleFileUploadChunkRequest(msg, request_id);
+    } else if (msg.has_file_download_request()) {
+        handleFileDownloadRequest(msg, request_id);
     } else if (msg.has_file_delete_request()) {
         handleFileDeleteRequest(msg, request_id);
+    } else if (msg.has_screen_share_start()) {
+        handleScreenShareStart(msg, request_id);
+    } else if (msg.has_screen_share_stop()) {
+        handleScreenShareStop(msg, request_id);
     } else {
         NEVO_LOG_WARN("server", "Received ControlMessage with unknown payload type");
     }
@@ -325,6 +398,18 @@ void ClientSession::handleLogin(const control::ControlMessage& msg, uint32_t req
         return;
     }
 
+    // 登录失败限速（防在线爆破）
+    if (isLoginRateLimited(remoteAddress())) {
+        NEVO_LOG_WARN("server", "Login rejected: too many failed attempts from {}",
+                      remoteAddress());
+
+        control::ControlMessage response;
+        auto* login_resp = response.mutable_login_response();
+        login_resp->set_result(nevo::common::ResultCode::ERROR_AUTH_FAILED);
+        sendControl(response, ControlMessageType::LoginResponse, request_id);
+        return;
+    }
+
     // 验证数据库可用
     if (!db_) {
         NEVO_LOG_ERROR("server", "Database not available for authentication");
@@ -344,6 +429,7 @@ void ClientSession::handleLogin(const control::ControlMessage& msg, uint32_t req
         auto verify_result = db_->verifyUser(username, credential);
         if (!verify_result) {
             NEVO_LOG_WARN("server", "Login rejected: wrong password for user '{}'", username);
+            recordLoginFailure(remoteAddress());
             control::ControlMessage response;
             auto* login_resp = response.mutable_login_response();
             login_resp->set_result(nevo::common::ResultCode::ERROR_AUTH_FAILED);
@@ -351,6 +437,7 @@ void ClientSession::handleLogin(const control::ControlMessage& msg, uint32_t req
             return;
         }
         user_id = verify_result.value();
+        clearLoginFailures(remoteAddress());
         NEVO_LOG_INFO("server", "User logged in: {} (id={})", username, user_id.value);
     } else {
         // 用户不存在，自动注册（使用提供的密码）
@@ -480,24 +567,28 @@ void ClientSession::handleLogin(const control::ControlMessage& msg, uint32_t req
     }
 
     // 生成并下发每客户端独立的加密会话密钥
+    bool sent_per_client_key = false;
     if (server_core_ && !client_pubkey.empty() && client_supports_crypto_box_seal) {
-        auto encrypted_key = server_core_->generateSessionKeyForClient(user_id, client_pubkey);
+        auto encrypted_key = server_core_->generateSessionKeyForClient(user_id, client_pubkey, true);
         if (!encrypted_key.empty()) {
             login_resp->set_encrypted_session_key(
                 std::string(reinterpret_cast<const char*>(encrypted_key.data()), encrypted_key.size()));
             login_resp->set_key_exchange_method("X25519+crypto_box_seal");
             NEVO_LOG_INFO("server", "Sent encrypted session key to user_id={}", user_id.value);
+            sent_per_client_key = true;
         } else {
-            NEVO_LOG_WARN("server", "Failed to generate encrypted session key for user_id={}", user_id.value);
+            NEVO_LOG_WARN("server", "Failed to generate encrypted session key for user_id={}; falling back to shared key",
+                          user_id.value);
         }
-    } else {
-        if (server_core_) {
-            const uint8_t* key = server_core_->serverSessionKey();
-            login_resp->set_server_public_key(std::string(reinterpret_cast<const char*>(key), CRYPTO_KEY_SIZE));
-            login_resp->set_key_exchange_method("X25519");
-            // 共享密钥模式：同样注册到 AudioRelay 的 per-client 映射中
-            server_core_->setClientSessionKey(user_id, key, CRYPTO_KEY_SIZE);
-        }
+    }
+
+    // 安全铁律：不提供任何"共享密钥/明文密钥"回退路径。
+    // 客户端未提供公钥或加密失败时，语音/视频不可用（fail-closed），
+    // 绝不把共享会话密钥明文下发（该路径曾导致任意嗅探者可解密全部媒体流）。
+    if (!sent_per_client_key) {
+        NEVO_LOG_WARN("server", "No per-client session key for user_id={}: voice/video will be unavailable (fail-closed)",
+                      user_id.value);
+        login_resp->set_key_exchange_method("none");
     }
 
     sendControl(response, ControlMessageType::LoginResponse, request_id);
@@ -1390,11 +1481,19 @@ void ClientSession::handleKeyRotationResponse(const control::ControlMessage& msg
     NEVO_LOG_INFO("server", "Key rotation response from user {}: epoch={}",
                   user_.id().value, resp.key_epoch());
 
-    // 客户端确认密钥轮换成功，记录日志
-    // 新的客户端公钥可用于后续轮换（如果提供）
+    // 客户端确认密钥轮换成功。若提供了新公钥，持久化到数据库，
+    // 使后续轮换使用新公钥加密（此前仅打日志不落库，导致"更新公钥"功能失效）
     if (resp.new_client_public_key().size() == 32 && db_) {
-        NEVO_LOG_DEBUG("server", "User {} provided new public key for future key exchange",
-                       user_.id().value);
+        std::vector<uint8_t> new_pubkey(
+            resp.new_client_public_key().begin(),
+            resp.new_client_public_key().end());
+        if (db_->updateUserPublicKey(user_.id(), new_pubkey)) {
+            NEVO_LOG_INFO("server", "User {} public key updated after key rotation",
+                          user_.id().value);
+        } else {
+            NEVO_LOG_WARN("server", "Failed to persist new public key for user {}",
+                          user_.id().value);
+        }
     }
 }
 
@@ -1429,59 +1528,267 @@ void ClientSession::handleFileListRequest(const control::ControlMessage& msg, ui
 
 void ClientSession::handleFileUploadRequest(const control::ControlMessage& msg, uint32_t request_id) {
     if (!msg.has_file_upload_request()) return;
-    const auto& req = msg.file_upload_request();
 
-    ChannelId cid(req.channel_id());
-    const std::string& filename = req.filename();
-    uint64_t file_size = req.file_size();
+    try {
+        const auto& req = msg.file_upload_request();
 
-    NEVO_LOG_INFO("server", "User {} uploading '{}' ({} bytes) to channel {}",
-                  user_.username(), filename, file_size, cid.value);
+        ChannelId cid(req.channel_id());
+        const std::string& filename = req.filename();
+        uint64_t file_size = req.file_size();
 
-    if (!db_ || !channel_mgr_) {
+        NEVO_LOG_INFO("server", "User {} uploading '{}' ({} bytes) to channel {}",
+                      user_.username(), filename, file_size, cid.value);
+
+        if (!db_ || !channel_mgr_) {
+            control::ControlMessage resp;
+            auto* r = resp.mutable_file_upload_response();
+            r->set_result(nevo::common::ResultCode::ERROR_UNKNOWN);
+            r->set_message("Server error");
+            sendControl(resp, ControlMessageType::FileUploadResponse, request_id);
+            return;
+        }
+
+        auto config = server_core_ ? server_core_->config() : ServerConfig{};
+        int max_size_mb = config.file_transfer.max_file_size_mb;
+        uint64_t max_bytes = static_cast<uint64_t>(max_size_mb) * 1024 * 1024;
+        if (file_size > max_bytes) {
+            control::ControlMessage resp;
+            auto* r = resp.mutable_file_upload_response();
+            r->set_result(nevo::common::ResultCode::ERROR_INVALID_REQUEST);
+            r->set_message("File too large");
+            sendControl(resp, ControlMessageType::FileUploadResponse, request_id);
+            return;
+        }
+
+        std::string upload_dir = config.file_transfer.upload_dir;
+        std::error_code ec;
+        std::filesystem::create_directories(upload_dir, ec);
+        if (ec) {
+            NEVO_LOG_ERROR("server", "Failed to create upload directory '{}': {}", upload_dir, ec.message());
+            control::ControlMessage resp;
+            auto* r = resp.mutable_file_upload_response();
+            r->set_result(nevo::common::ResultCode::ERROR_UNKNOWN);
+            r->set_message("Server upload directory not writable");
+            sendControl(resp, ControlMessageType::FileUploadResponse, request_id);
+            return;
+        }
+
+        std::string safe_name = filename;
+        size_t pos = safe_name.find_last_of("/\\");
+        if (pos != std::string::npos) safe_name = safe_name.substr(pos + 1);
+        std::string file_path = upload_dir + "/" + std::to_string(cid.value) + "_" +
+                                 std::to_string(user_.id().value) + "_" + safe_name;
+
+        auto result = db_->addFileRecord(cid.value, user_.id().value, safe_name, file_path, static_cast<int64_t>(file_size));
+
+        control::ControlMessage resp;
+        auto* r = resp.mutable_file_upload_response();
+        if (result) {
+            r->set_result(nevo::common::ResultCode::OK);
+            r->set_message("Ready to upload");
+            r->set_file_id(result.value());
+            NEVO_LOG_INFO("server", "File upload accepted: id={}, path='{}'", result.value(), file_path);
+        } else {
+            r->set_result(nevo::common::ResultCode::ERROR_UNKNOWN);
+            r->set_message(result.error().message());
+        }
+        sendControl(resp, ControlMessageType::FileUploadResponse, request_id);
+    } catch (const std::exception& e) {
+        NEVO_LOG_ERROR("server", "handleFileUploadRequest exception: {}", e.what());
         control::ControlMessage resp;
         auto* r = resp.mutable_file_upload_response();
         r->set_result(nevo::common::ResultCode::ERROR_UNKNOWN);
-        r->set_message("Server error");
+        r->set_message("Server error during file upload");
         sendControl(resp, ControlMessageType::FileUploadResponse, request_id);
-        return;
     }
+}
 
-    auto config = server_core_ ? server_core_->config() : ServerConfig{};
-    int max_size_mb = config.file_transfer.max_file_size_mb;
-    uint64_t max_bytes = static_cast<uint64_t>(max_size_mb) * 1024 * 1024;
-    if (file_size > max_bytes) {
+// ============================================================
+// 文件分片上传（真实字节流）
+// ============================================================
+//
+// 流程：FileUploadRequest 创建 DB 文件记录并返回 file_id →
+// 客户端按分片发送 FileUploadChunkRequest（44）→ 服务端边收边写盘 →
+// 每片回 FileUploadChunkAck（45），最后一片时校验总大小并完成。
+// 安全约束：仅接受文件记录归属本人（uploader_id）的分片；首片声明的
+// 总分片数与大小受 FileUploadRequest 阶段的最大文件大小限制。
+
+void ClientSession::handleFileUploadChunkRequest(const control::ControlMessage& msg, uint32_t request_id) {
+    if (!msg.has_file_upload_chunk_request()) return;
+
+    const auto& req = msg.file_upload_chunk_request();
+    const uint64_t file_id = req.file_id();
+    const uint32_t chunk_index = req.chunk_index();
+    const uint32_t total_chunks = req.total_chunks();
+
+    auto send_ack = [this, request_id](uint64_t fid, uint32_t idx,
+                                       nevo::common::ResultCode result,
+                                       const std::string& message) {
         control::ControlMessage resp;
-        auto* r = resp.mutable_file_upload_response();
-        r->set_result(nevo::common::ResultCode::ERROR_INVALID_REQUEST);
-        r->set_message("File too large");
-        sendControl(resp, ControlMessageType::FileUploadResponse, request_id);
+        auto* ack = resp.mutable_file_upload_chunk_ack();
+        ack->set_result(result);
+        ack->set_message(message);
+        ack->set_file_id(fid);
+        ack->set_chunk_index(idx);
+        sendControl(resp, ControlMessageType::FileUploadChunkAck, request_id);
+    };
+
+    if (!db_) {
+        send_ack(file_id, chunk_index, nevo::common::ResultCode::ERROR_UNKNOWN,
+                 "Server error");
         return;
     }
 
-    std::string upload_dir = config.file_transfer.upload_dir;
-    std::filesystem::create_directories(upload_dir);
+    // 首片：校验文件记录归属并打开输出流
+    auto it = file_assemblies_.find(file_id);
+    if (it == file_assemblies_.end()) {
+        auto record = db_->getFile(static_cast<int64_t>(file_id));
+        if (!record || record.value().uploader_id != static_cast<int64_t>(user_.id().value)) {
+            NEVO_LOG_WARN("server", "File chunk rejected: file_id={} not owned by user={}",
+                          file_id, user_.id().value);
+            send_ack(file_id, chunk_index, nevo::common::ResultCode::ERROR_PERMISSION_DENIED,
+                     "File not found or not owned by this user");
+            return;
+        }
+        FileUploadAssembly assembly;
+        assembly.file_path = record.value().file_path;
+        assembly.total_chunks = total_chunks;
+        assembly.stream = std::make_shared<std::ofstream>(
+            assembly.file_path, std::ios::binary | std::ios::trunc);
+        if (!assembly.stream->is_open()) {
+            NEVO_LOG_ERROR("server", "Failed to open upload target '{}'", assembly.file_path);
+            send_ack(file_id, chunk_index, nevo::common::ResultCode::ERROR_UNKNOWN,
+                     "Server cannot write upload target");
+            return;
+        }
+        it = file_assemblies_.emplace(file_id, std::move(assembly)).first;
+    }
 
-    std::string safe_name = filename;
-    size_t pos = safe_name.find_last_of("/\\");
-    if (pos != std::string::npos) safe_name = safe_name.substr(pos + 1);
-    std::string file_path = upload_dir + "/" + std::to_string(cid.value) + "_" +
-                             std::to_string(user_.id().value) + "_" + safe_name;
+    auto& assembly = it->second;
+    if (assembly.total_chunks != total_chunks) {
+        NEVO_LOG_WARN("server", "File chunk rejected: total_chunks mismatch for file_id={}", file_id);
+        send_ack(file_id, chunk_index, nevo::common::ResultCode::ERROR_INVALID_REQUEST,
+                 "total_chunks mismatch");
+        return;
+    }
+    if (chunk_index != assembly.received_chunks) {
+        NEVO_LOG_WARN("server", "File chunk out of order: file_id={} expected={} got={}",
+                      file_id, assembly.received_chunks, chunk_index);
+        send_ack(file_id, chunk_index, nevo::common::ResultCode::ERROR_INVALID_REQUEST,
+                 "Chunk out of order");
+        return;
+    }
 
-    auto result = db_->addFileRecord(cid.value, user_.id().value, safe_name, file_path, static_cast<int64_t>(file_size));
+    // 写盘
+    const std::string& data = req.data();
+    assembly.stream->write(data.data(), static_cast<std::streamsize>(data.size()));
+    if (!assembly.stream->good()) {
+        NEVO_LOG_ERROR("server", "Write failed for file_id={}, aborting upload", file_id);
+        file_assemblies_.erase(it);
+        send_ack(file_id, chunk_index, nevo::common::ResultCode::ERROR_UNKNOWN,
+                 "Server write failed");
+        return;
+    }
+    assembly.bytes_written += data.size();
+    ++assembly.received_chunks;
 
-    control::ControlMessage resp;
-    auto* r = resp.mutable_file_upload_response();
-    if (result) {
+    const bool is_last = assembly.received_chunks >= assembly.total_chunks;
+    if (is_last) {
+        assembly.stream->flush();
+        assembly.stream.reset();
+        file_assemblies_.erase(file_id);
+        NEVO_LOG_INFO("server", "File upload complete: file_id={} bytes={}",
+                      file_id, assembly.bytes_written);
+    }
+
+    send_ack(file_id, chunk_index, nevo::common::ResultCode::OK,
+             is_last ? "Upload complete" : "OK");
+}
+
+// ============================================================
+// 文件下载（按分片下发真实字节流）
+// ============================================================
+
+void ClientSession::handleFileDownloadRequest(const control::ControlMessage& msg, uint32_t request_id) {
+    if (!msg.has_file_download_request()) return;
+
+    const auto& req = msg.file_download_request();
+    const uint64_t file_id = req.file_id();
+
+    constexpr size_t CHUNK_SIZE = 16 * 1024;  // 16KB/片
+
+    auto send_error = [this, request_id, file_id](nevo::common::ResultCode result,
+                                                  const std::string& message) {
+        control::ControlMessage resp;
+        auto* r = resp.mutable_file_download_response();
+        r->set_result(result);
+        r->set_message(message);
+        r->set_file_id(file_id);
+        sendControl(resp, ControlMessageType::FileDownloadResponse, request_id);
+    };
+
+    if (!db_) {
+        send_error(nevo::common::ResultCode::ERROR_UNKNOWN, "Server error");
+        return;
+    }
+
+    auto record_result = db_->getFile(static_cast<int64_t>(file_id));
+    if (!record_result) {
+        send_error(nevo::common::ResultCode::ERROR_USER_NOT_FOUND, "File not found");
+        return;
+    }
+    const auto& record = record_result.value();
+
+    // 路径穿越防护：文件路径必须仍位于配置的上传目录内
+    if (server_core_) {
+        auto config = server_core_->config();
+        const std::string upload_dir = config.file_transfer.upload_dir;
+        std::error_code ec;
+        auto real_upload = std::filesystem::weakly_canonical(upload_dir, ec);
+        auto real_path = std::filesystem::weakly_canonical(record.file_path, ec);
+        if (ec || real_upload.empty() ||
+            real_path.string().rfind(real_upload.string(), 0) != 0) {
+            NEVO_LOG_WARN("server", "File download rejected: path escapes upload dir (file_id={})",
+                          file_id);
+            send_error(nevo::common::ResultCode::ERROR_PERMISSION_DENIED,
+                       "File path invalid");
+            return;
+        }
+    }
+
+    std::ifstream in(record.file_path, std::ios::binary);
+    if (!in.is_open()) {
+        send_error(nevo::common::ResultCode::ERROR_USER_NOT_FOUND, "File data missing on server");
+        return;
+    }
+
+    uint64_t file_size = 0;
+    in.seekg(0, std::ios::end);
+    file_size = static_cast<uint64_t>(in.tellg());
+    in.seekg(0, std::ios::beg);
+
+    const uint32_t total_chunks = static_cast<uint32_t>((file_size + CHUNK_SIZE - 1) / CHUNK_SIZE);
+    std::vector<char> buffer(CHUNK_SIZE);
+
+    for (uint32_t idx = 0; idx < total_chunks; ++idx) {
+        in.read(buffer.data(), CHUNK_SIZE);
+        std::streamsize got = in.gcount();
+
+        control::ControlMessage resp;
+        auto* r = resp.mutable_file_download_response();
         r->set_result(nevo::common::ResultCode::OK);
-        r->set_message("Ready to upload");
-        r->set_file_id(result.value());
-        NEVO_LOG_INFO("server", "File upload accepted: id={}, path='{}'", result.value(), file_path);
-    } else {
-        r->set_result(nevo::common::ResultCode::ERROR_UNKNOWN);
-        r->set_message(result.error().message());
+        r->set_message("OK");
+        r->set_file_id(file_id);
+        r->set_filename(record.filename);
+        r->set_file_size(file_size);
+        r->set_chunk_index(idx);
+        r->set_total_chunks(total_chunks);
+        r->set_data(std::string(buffer.data(), static_cast<size_t>(got)));
+        sendControl(resp, ControlMessageType::FileDownloadResponse, request_id);
     }
-    sendControl(resp, ControlMessageType::FileUploadResponse, request_id);
+
+    NEVO_LOG_INFO("server", "File download served: file_id={} bytes={} chunks={}",
+                  file_id, file_size, total_chunks);
 }
 
 void ClientSession::handleFileDeleteRequest(const control::ControlMessage& msg, uint32_t request_id) {
@@ -1536,6 +1843,40 @@ void ClientSession::handleFileDeleteRequest(const control::ControlMessage& msg, 
         r->set_message(del_result.error().message());
     }
     sendControl(resp, ControlMessageType::FileDeleteResponse, request_id);
+}
+
+void ClientSession::handleScreenShareStart(const control::ControlMessage& msg, uint32_t request_id) {
+    if (!msg.has_screen_share_start()) return;
+    const auto& req = msg.screen_share_start();
+
+    ChannelId channel_id = user_.currentChannel();
+    if (!channel_id) {
+        NEVO_LOG_WARN("server", "ScreenShareStart from user {} with no channel", user_.id().value);
+        return;
+    }
+
+    NEVO_LOG_INFO("server", "ScreenShareStart: user={} channel={} source={} {}x{}@{}fps",
+                  user_.id().value, channel_id.value, req.source_type(),
+                  req.width(), req.height(), req.fps());
+
+    if (server_core_) {
+        server_core_->broadcastScreenShareState(
+            user_.id(), true, req.source_type(), req.source_name(),
+            req.width(), req.height());
+    }
+}
+
+void ClientSession::handleScreenShareStop(const control::ControlMessage& msg, uint32_t request_id) {
+    if (!msg.has_screen_share_stop()) return;
+
+    ChannelId channel_id = user_.currentChannel();
+    NEVO_LOG_INFO("server", "ScreenShareStop: user={} channel={}",
+                  user_.id().value, channel_id.value);
+
+    if (server_core_) {
+        server_core_->broadcastScreenShareState(
+            user_.id(), false, 0, "", 0, 0);
+    }
 }
 
 } // namespace nevo

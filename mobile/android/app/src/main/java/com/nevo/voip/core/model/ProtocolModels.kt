@@ -42,7 +42,9 @@ data class JoinChannelRequest(
     val channelId: Long = 0
 )
 
-class LeaveChannelRequest
+data class LeaveChannelRequest(
+    val channelId: Long = 0
+)
 
 data class CreateChannelRequest(
     val parentId: Long = 0,

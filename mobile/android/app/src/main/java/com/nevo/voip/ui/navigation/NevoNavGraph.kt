@@ -2,8 +2,10 @@ package com.nevo.voip.ui.navigation
 
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.navArgument
 
 sealed class Screen(val route: String) {
     object Home : Screen("home")
@@ -32,19 +34,28 @@ fun NevoNavGraph(navController: NavHostController) {
         composable(Screen.Connection.route) {
             ConnectionScreen(navController)
         }
-        composable(Screen.Channel.route) { backStackEntry ->
+        composable(
+            route = Screen.Channel.route,
+            arguments = listOf(navArgument("serverId") { type = NavType.StringType })
+        ) { backStackEntry ->
             val serverId = backStackEntry.arguments?.getString("serverId") ?: ""
             ChannelScreen(navController = navController, serverId = serverId)
         }
-        composable(Screen.Chat.route) { backStackEntry ->
-            val channelId = backStackEntry.arguments?.getString("channelId")?.toLongOrNull() ?: 0L
+        composable(
+            route = Screen.Chat.route,
+            arguments = listOf(navArgument("channelId") { type = NavType.LongType })
+        ) { backStackEntry ->
+            val channelId = backStackEntry.arguments?.getLong("channelId") ?: 0L
             ChatScreen(navController = navController, channelId = channelId)
         }
         composable(Screen.Settings.route) {
             SettingsScreen(navController)
         }
-        composable(Screen.ScreenShare.route) { backStackEntry ->
-            val userId = backStackEntry.arguments?.getString("userId")?.toLongOrNull() ?: 0L
+        composable(
+            route = Screen.ScreenShare.route,
+            arguments = listOf(navArgument("userId") { type = NavType.LongType })
+        ) { backStackEntry ->
+            val userId = backStackEntry.arguments?.getLong("userId") ?: 0L
             ScreenShareScreen(navController = navController, userId = userId)
         }
     }

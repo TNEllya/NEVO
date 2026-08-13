@@ -43,9 +43,6 @@ class ChatInputEdit(QWidget):
         self._text.setFixedHeight(44)
         self._text.setFont(QFont("Segoe UI", 10))
         self._refresh_input_style()
-        self._text.setStyleSheet(
-            "QTextEdit::verticalScrollBar { width: 0px; }"
-        )
         self._text.setPlaceholderText("Type a message...")
         self._text.setAcceptRichText(False)
         self._text.installEventFilter(self)
@@ -147,6 +144,8 @@ class ChatInputBar(QWidget):
         self._refresh_send_btn_style()
         self._send_btn.clicked.connect(self._on_send)
         layout.addWidget(self._send_btn)
+
+        self._refresh_tool_btn_styles()
 
     def _refresh_send_btn_style(self):
         tm = ThemeManager.instance()
