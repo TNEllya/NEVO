@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deploy NEVO server to the remote Debian host (192.168.31.39) via SSH."""
+"""Deploy NEVO server to the remote Debian host via SSH (host from NEVO_SSH_HOST)."""
 import io
 import os
 import sys
@@ -8,16 +8,20 @@ import time
 
 import paramiko
 
-HOST = "192.168.31.39"
-USER = "llya"
+# 目标主机与账号一律从环境变量注入（禁止硬编码；缺失时脚本拒绝执行）
+HOST = os.environ.get("NEVO_SSH_HOST", "")
+USER = os.environ.get("NEVO_SSH_USER", "")
+if not HOST or not USER:
+    sys.stderr.write("缺少环境变量 NEVO_SSH_HOST / NEVO_SSH_USER（目标主机地址与用户名）\n")
+    sys.exit(1)
 # 凭据一律从环境变量注入（禁止硬编码；缺失时脚本拒绝执行）
 ROOT_PASSWORD = os.environ.get("NEVO_SSH_ROOT_PASSWORD", "")
 USER_PASSWORD = os.environ.get("NEVO_SSH_USER_PASSWORD", "") or ROOT_PASSWORD
 if not ROOT_PASSWORD:
     sys.stderr.write("缺少环境变量 NEVO_SSH_ROOT_PASSWORD（目标主机 root 密码）\n")
     sys.exit(1)
-REMOTE_DIR = "/home/llya/nevo"
-ARCHIVE = "/home/llya/nevo_deploy.tar.gz"
+REMOTE_DIR = f"/home/{USER}/nevo"
+ARCHIVE = f"/home/{USER}/nevo_deploy.tar.gz"
 LOCAL_PROJECT = r"C:\Users\yzd20\Desktop\Project\NEVO"
 
 # Files/directories required to build and run the Docker image.
@@ -135,19 +139,19 @@ def run_cmd_pty(ssh, cmd, password=ROOT_PASSWORD, timeout=60):
 
 
 def ensure_sudoers(ssh):
-    """Ensure llya can run passwordless sudo."""
-    print("\nChecking sudo access for llya...")
+    """Ensure USER can run passwordless sudo."""
+    print(f"\nChecking sudo access for {USER}...")
     code, out, err = run_cmd(ssh, "sudo -n whoami", timeout=10)
     if code == 0 and "root" in out:
-        print("llya already has passwordless sudo.")
+        print(f"{USER} already has passwordless sudo.")
         return True
 
-    print("Configuring passwordless sudo for llya via root...")
+    print(f"Configuring passwordless sudo for {USER} via root...")
     script = (
         "mkdir -p /etc/sudoers.d && "
-        "printf '%s\\n' 'llya ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/llya-nevo && "
-        "chmod 440 /etc/sudoers.d/llya-nevo && "
-        "visudo -c -f /etc/sudoers.d/llya-nevo"
+        f"printf '%s\\n' '{USER} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/{USER}-nevo && "
+        f"chmod 440 /etc/sudoers.d/{USER}-nevo && "
+        f"visudo -c -f /etc/sudoers.d/{USER}-nevo"
     )
     code, _, err = run_cmd_pty(ssh, script, timeout=30)
     if code != 0:
@@ -181,7 +185,7 @@ def main():
     run_cmd(ssh, f"sudo rm -rf {REMOTE_DIR} && sudo mkdir -p {REMOTE_DIR}")
     run_cmd(ssh, f"sudo tar -xzf {ARCHIVE} -C {REMOTE_DIR}")
     run_cmd(ssh, f"sudo rm -f {ARCHIVE}")
-    run_cmd(ssh, f"sudo chown -R llya:llya {REMOTE_DIR}")
+    run_cmd(ssh, f"sudo chown -R {USER}:{USER} {REMOTE_DIR}")
 
     # Install Docker if missing
     print("\nChecking Docker installation...")
@@ -193,7 +197,7 @@ def main():
         run_cmd(ssh, "curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg", timeout=60)
         run_cmd(ssh, 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null')
         run_cmd(ssh, "sudo apt-get update && sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin", timeout=300)
-        run_cmd(ssh, "sudo usermod -aG docker llya")
+        run_cmd(ssh, f"sudo usermod -aG docker {USER}")
         run_cmd(ssh, "docker --version && docker compose version", timeout=30)
 
     # Prepare config and env

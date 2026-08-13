@@ -12,7 +12,7 @@ import hashlib
 
 HOST = "127.0.0.1"
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8098
-SERVER_HOST = sys.argv[2] if len(sys.argv) > 2 else "192.168.31.39"
+SERVER_HOST = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("NEVO_TEST_HOST", "your-server-host")
 NAMES = sys.argv[3:5] or ["BundleTestA", "BundleTestB"]
 
 

@@ -96,8 +96,30 @@ mobile/android/local.properties
 *.db-shm
 *.db-wal
 
+# Secrets / credentials (绝不可提交)
+.env
+.env.*
+!.env.example
+server_config.json
+server_config.local.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa
+id_ed25519
+credentials.json
+secrets.*
+*.secret
+
 # Logs
 *.log
+*.err
+*.out.txt
+pyinstaller_*.txt
+pyinstaller_*.err
 
 # Temp build artifacts
 build_error*.txt

@@ -2,7 +2,7 @@
 
 **Status:** [OPEN]
 **Started:** 2026-07-04
-**Symptom:** 客户端 A 与 B 在 192.168.31.39 服务器上无法进行语音和屏幕共享通讯
+**Symptom:** 客户端 A 与 B 在部署服务器（内网 Debian 主机）上无法进行语音和屏幕共享通讯
 
 ## Hypotheses
 

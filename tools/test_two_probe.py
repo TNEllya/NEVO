@@ -11,7 +11,7 @@ import time
 
 HOST = "127.0.0.1"
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8088
-SERVER_HOST = "192.168.31.39"
+SERVER_HOST = os.environ.get("NEVO_TEST_HOST", "your-server-host")
 CHANNEL_ID = 2
 
 

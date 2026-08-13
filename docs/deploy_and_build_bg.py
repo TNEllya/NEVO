@@ -14,15 +14,19 @@ import time
 
 import paramiko
 
-HOST = "192.168.31.39"
-USER = "llya"
+# 目标主机与账号一律从环境变量注入（禁止硬编码；缺失时脚本拒绝执行）
+HOST = os.environ.get("NEVO_SSH_HOST", "")
+USER = os.environ.get("NEVO_SSH_USER", "")
+if not HOST or not USER:
+    sys.stderr.write("缺少环境变量 NEVO_SSH_HOST / NEVO_SSH_USER（目标主机地址与用户名）\n")
+    sys.exit(1)
 # 凭据一律从环境变量注入（禁止硬编码；缺失时脚本拒绝执行）
 PASSWORD = os.environ.get("NEVO_SSH_PASSWORD", "")
 if not PASSWORD:
     sys.stderr.write("缺少环境变量 NEVO_SSH_PASSWORD（目标主机 SSH 密码）\n")
     sys.exit(1)
-REMOTE_DIR = "/home/llya/nevo"
-ARCHIVE = "/home/llya/nevo_deploy.tar.gz"
+REMOTE_DIR = f"/home/{USER}/nevo"
+ARCHIVE = f"/home/{USER}/nevo_deploy.tar.gz"
 LOCAL_PROJECT = r"C:\Users\yzd20\Desktop\Project\NEVO"
 BUILD_LOG = "/tmp/nevo_build.log"
 BUILD_PID = "/tmp/nevo_build.pid"

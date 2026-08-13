@@ -13,7 +13,7 @@ import sys
 import threading
 import time
 
-HOST = sys.argv[1] if len(sys.argv) > 1 else "192.168.31.39"
+HOST = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("NEVO_TEST_HOST", "your-server-host")
 PORT = 24430
 NAMES = sys.argv[2:4] or ["LinkTestA", "LinkTestB"]
 

@@ -4,18 +4,22 @@ import os
 import sys
 import paramiko
 
-HOST = "192.168.31.39"
-USER = "llya"
+# 目标主机与账号一律从环境变量注入（禁止硬编码；缺失时脚本拒绝执行）
+HOST = os.environ.get("NEVO_SSH_HOST", "")
+USER = os.environ.get("NEVO_SSH_USER", "")
+if not HOST or not USER:
+    sys.stderr.write("缺少环境变量 NEVO_SSH_HOST / NEVO_SSH_USER（目标主机地址与用户名）\n")
+    sys.exit(1)
 # 凭据一律从环境变量注入（禁止硬编码；缺失时脚本拒绝执行）
 PASSWORD = os.environ.get("NEVO_SSH_PASSWORD", "")
 if not PASSWORD:
     sys.stderr.write("缺少环境变量 NEVO_SSH_PASSWORD（目标主机 SSH 密码）\n")
     sys.exit(1)
 
-DOCKER_USER = os.environ.get("DOCKER_USER", "nellya")
+DOCKER_USER = os.environ.get("DOCKER_USER", "")
 DOCKER_TOKEN = os.environ.get("DOCKER_TOKEN", "")
-if not DOCKER_TOKEN:
-    sys.stderr.write("缺少环境变量 DOCKER_TOKEN（Docker Hub Personal Access Token）\n")
+if not DOCKER_USER or not DOCKER_TOKEN:
+    sys.stderr.write("缺少环境变量 DOCKER_USER / DOCKER_TOKEN（Docker Hub 用户名与 Personal Access Token）\n")
     sys.exit(1)
 IMAGE_LOCAL = "nevo-server:latest"
 IMAGE_REMOTE = f"{DOCKER_USER}/nevo-server:latest"
