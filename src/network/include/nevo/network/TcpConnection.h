@@ -28,6 +28,8 @@
 #include <memory>
 #include <atomic>
 #include <string>
+#include <mutex>
+#include <deque>
 
 #include "nevo/core/common/Logger.h"
 #include "nevo/core/protocol/PacketTypes.h"
@@ -169,6 +171,17 @@ private:
     /// 触发断开连接回调
     void notifyDisconnected();
 
+    /**
+     * @brief 写队列排空协程（单写者模式）
+     *
+     * 同一连接的所有出帧（控制消息 + TCP 语音帧）先入队，再由本协程
+     * 逐帧串行 async_write。boost::asio 的 composed async_write 不允许
+     * 在同一 socket 上并发执行（会交错损坏字节流），此前每个 sendControl/
+     * sendVoiceFrameTcp 各自 co_spawn 独立写协程，是外网/高负载下
+     * 消息静默丢失与流损坏的根因。
+     */
+    boost::asio::awaitable<void> drainWriteQueue();
+
     // ============================================================
     // 服务端支持
     // ============================================================
@@ -222,6 +235,15 @@ public:
 
     /// 缓存的远端端点字符串（在 socket_ 移入 ssl_stream_ 前保存）
     std::string cached_remote_endpoint_;
+
+    /// 写队列互斥锁（保护 write_queue_ 与 write_in_progress_）
+    std::mutex write_mutex_;
+
+    /// 待发送帧队列（完整帧：帧头 + 载荷）
+    std::deque<std::vector<uint8_t>> write_queue_;
+
+    /// 是否已有排空协程在运行（单写者）
+    bool write_in_progress_ = false;
 };
 
 } // namespace nevo

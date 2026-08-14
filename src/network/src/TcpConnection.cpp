@@ -23,7 +23,6 @@
 #include <boost/asio/as_tuple.hpp>
 #include <boost/asio/steady_timer.hpp>
 #include <boost/asio/detached.hpp>
-#include <boost/asio/cancel_after.hpp>
 #include <boost/endian.hpp>
 #include <boost/asio/ssl/host_name_verification.hpp>
 
@@ -304,8 +303,9 @@ boost::asio::awaitable<void> TcpConnection::asyncReadLoop()
         }
 
         NEVO_LOG_TRACE("network",
-                       "Frame header: payload_len={}, type={}, request_id={}",
-                       payload_length, message_type, request_id);
+                       "Frame header: payload_len={}, type={}, request_id={}, remote={}",
+                       payload_length, message_type, request_id,
+                       remoteEndpointString());
 
         // ---- 步骤3：安全校验 ----
         // 检查载荷长度是否超出最大限制，防止恶意大包攻击
@@ -326,29 +326,44 @@ boost::asio::awaitable<void> TcpConnection::asyncReadLoop()
             boost::system::error_code ec;
             size_t bytes_read = 0;
 
-            // 载荷读取同样带超时（防御 slowloris：恶意客户端声明大载荷后
-            // 逐字节慢发，长期占用连接与线程资源）
+            // 载荷读取带超时（防御 slowloris：恶意客户端声明大载荷后
+            // 逐字节慢发，长期占用连接与线程资源）。
+            //
+            // 注意：不使用 asio::cancel_after——其取消路径存在竞态
+            // （操作完成与定时器取消竞争时可能丢失完成处理器，表现为
+            // 读循环静默卡死在载荷读取上：帧头已读到、载荷永远不回来）。
+            // 改用独立的 steady_timer：超时直接关闭连接，由 close()
+            // 中止挂起的 async_read，行为确定且无静默丢失。
+            boost::asio::steady_timer read_timeout_timer(
+                socket_.get_executor());
+            read_timeout_timer.expires_after(TCP_PAYLOAD_READ_TIMEOUT);
+            read_timeout_timer.async_wait(
+                [this](const boost::system::error_code& timer_ec) {
+                    if (!timer_ec && !closing_.load()) {
+                        NEVO_LOG_WARN("network",
+                                      "Payload read timeout (slowloris defense), closing connection (remote={})",
+                                      remoteEndpointString());
+                        close();
+                    }
+                });
+
             if (use_ssl_) {
                 auto [read_ec, read_n] = co_await boost::asio::async_read(
                     *ssl_stream_,
                     boost::asio::buffer(read_buffer_.data(), payload_length),
-                    boost::asio::as_tuple(
-                        boost::asio::cancel_after(
-                            TCP_PAYLOAD_READ_TIMEOUT,
-                            boost::asio::use_awaitable)));
+                    boost::asio::as_tuple(boost::asio::use_awaitable));
                 ec = read_ec;
                 bytes_read = read_n;
             } else {
                 auto [read_ec, read_n] = co_await boost::asio::async_read(
                     socket_,
                     boost::asio::buffer(read_buffer_.data(), payload_length),
-                    boost::asio::as_tuple(
-                        boost::asio::cancel_after(
-                            TCP_PAYLOAD_READ_TIMEOUT,
-                            boost::asio::use_awaitable)));
+                    boost::asio::as_tuple(boost::asio::use_awaitable));
                 ec = read_ec;
                 bytes_read = read_n;
             }
+
+            read_timeout_timer.cancel();
 
             if (ec) {
                 NEVO_LOG_ERROR("network", "Read payload failed: {}", ec.message());
@@ -383,84 +398,113 @@ boost::asio::awaitable<void> TcpConnection::asyncReadLoop()
 }
 
 // ============================================================
-// asyncSend - 协程式发送
+// asyncSend - 协程式发送（写队列串行化）
 // ============================================================
+//
+// 说明：boost::asio 的 composed async_write 不允许在同一 socket 上并发
+// 执行——两个并发 async_write 会交错写入、损坏字节流。此前每个
+// sendControl/sendVoiceFrameTcp 各自 co_spawn 独立写协程直接 async_write，
+// 高并发/高延迟（外网 frp）下消息被静默破坏或丢失。
+// 现在所有出帧先拷贝入写队列，由唯一的排空协程逐帧串行写出。
 
 boost::asio::awaitable<boost::system::error_code>
 TcpConnection::asyncSend(const uint8_t* data, uint32_t size,
                          uint32_t type, uint32_t request_id)
 {
-    if (!connected_.load() || closing_.load()) {
-        NEVO_LOG_WARN("network", "Attempted send on disconnected/closing connection");
-        co_return boost::asio::error::not_connected;
+    // ---- 构建完整帧（帧头 + 载荷），拷贝入队，避免依赖调用方内存生命周期 ----
+    auto header = encodeFrameHeader(size, type, request_id);
+    std::vector<uint8_t> frame;
+    frame.reserve(TCP_HEADER_SIZE + size);
+    frame.insert(frame.end(), header.begin(), header.end());
+    if (size > 0) {
+        frame.insert(frame.end(), data, data + size);
     }
 
-    // ---- 构建发送缓冲区：帧头 + 载荷 ----
-    // 使用分散写（scatter-gather）避免额外拷贝：
-    //   buffer 0 = 帧头（12字节）
-    //   buffer 1 = 载荷
-    auto header = encodeFrameHeader(size, type, request_id);
+    bool start_drainer = false;
+    {
+        std::lock_guard<std::mutex> lock(write_mutex_);
+        if (!connected_.load() || closing_.load()) {
+            NEVO_LOG_WARN("network", "Attempted send on disconnected/closing connection");
+            co_return boost::asio::error::not_connected;
+        }
+        write_queue_.push_back(std::move(frame));
+        if (!write_in_progress_) {
+            write_in_progress_ = true;
+            start_drainer = true;
+        }
+    }
 
-    // 如果载荷为空，只发送帧头
-    if (size == 0) {
+    if (start_drainer) {
+        auto self = shared_from_this();
+        boost::asio::co_spawn(
+            socket_.get_executor(),
+            [self]() -> boost::asio::awaitable<void> {
+                co_await self->drainWriteQueue();
+            },
+            boost::asio::detached);
+    }
+
+    co_return boost::system::error_code{};
+}
+
+boost::asio::awaitable<void> TcpConnection::drainWriteQueue()
+{
+    while (true) {
+        std::vector<uint8_t> frame;
+        {
+            std::lock_guard<std::mutex> lock(write_mutex_);
+            if (write_queue_.empty()) {
+                write_in_progress_ = false;
+                co_return;
+            }
+            frame = std::move(write_queue_.front());
+            write_queue_.pop_front();
+        }
+
+        // 解析帧头字段用于日志
+        uint32_t frame_type = 0;
+        uint32_t frame_request_id = 0;
+        uint32_t frame_payload_size = 0;
+        if (frame.size() >= TCP_HEADER_SIZE) {
+            uint32_t net_len, net_type, net_rid;
+            std::memcpy(&net_len, frame.data(), 4);
+            std::memcpy(&net_type, frame.data() + 4, 4);
+            std::memcpy(&net_rid, frame.data() + 8, 4);
+            frame_payload_size = boost::endian::big_to_native(net_len);
+            frame_type = boost::endian::big_to_native(net_type);
+            frame_request_id = boost::endian::big_to_native(net_rid);
+        }
+
         boost::system::error_code ec;
-
-        if (use_ssl_) {
-            auto [write_ec, bytes_written] = co_await boost::asio::async_write(
+        size_t bytes_written = 0;
+        if (use_ssl_ && ssl_stream_) {
+            std::tie(ec, bytes_written) = co_await boost::asio::async_write(
                 *ssl_stream_,
-                boost::asio::buffer(header.data(), header.size()),
+                boost::asio::buffer(frame),
                 boost::asio::as_tuple(boost::asio::use_awaitable));
-            ec = write_ec;
         } else {
-            auto [write_ec, bytes_written] = co_await boost::asio::async_write(
+            std::tie(ec, bytes_written) = co_await boost::asio::async_write(
                 socket_,
-                boost::asio::buffer(header.data(), header.size()),
+                boost::asio::buffer(frame),
                 boost::asio::as_tuple(boost::asio::use_awaitable));
-            ec = write_ec;
         }
 
         if (ec) {
-            NEVO_LOG_ERROR("network", "Send frame header failed: {}", ec.message());
+            NEVO_LOG_ERROR("network", "Send frame failed: {} (remote={})",
+                           ec.message(), remoteEndpointString());
             connected_.store(false);
             notifyDisconnected();
+            // 清空剩余队列，避免挂起的发送协程堆积
+            std::lock_guard<std::mutex> lock(write_mutex_);
+            write_queue_.clear();
+            write_in_progress_ = false;
+            co_return;
         }
 
-        co_return ec;
-    }
-
-    // 分散写入
-    std::array<boost::asio::const_buffer, 2> buffers = {
-        boost::asio::buffer(header.data(), header.size()),
-        boost::asio::buffer(data, size)
-    };
-
-    boost::system::error_code ec;
-
-    if (use_ssl_) {
-        auto [write_ec, bytes_written] = co_await boost::asio::async_write(
-            *ssl_stream_,
-            buffers,
-            boost::asio::as_tuple(boost::asio::use_awaitable));
-        ec = write_ec;
-    } else {
-        auto [write_ec, bytes_written] = co_await boost::asio::async_write(
-            socket_,
-            buffers,
-            boost::asio::as_tuple(boost::asio::use_awaitable));
-        ec = write_ec;
-    }
-
-    if (ec) {
-        NEVO_LOG_ERROR("network", "Send frame failed: {}", ec.message());
-        connected_.store(false);
-        notifyDisconnected();
-    } else {
         NEVO_LOG_TRACE("network",
                        "Sent frame: type={}, request_id={}, payload_size={}",
-                       type, request_id, size);
+                       frame_type, frame_request_id, frame_payload_size);
     }
-
-    co_return ec;
 }
 
 boost::asio::awaitable<boost::system::error_code>

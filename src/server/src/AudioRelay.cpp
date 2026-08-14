@@ -310,6 +310,15 @@ void AudioRelay::relayVoicePacket(const uint8_t* data, uint32_t size,
         }
     }
 
+    // ---- 5.2 空载荷 = 客户端 UDP 端点注册/保活包 ----
+    // 端点在步骤 5/5.1（解密认证）已注册，保活目的已达成；
+    // 空载荷没有音频内容，若继续中继，接收端 WebCodecs 解码器会因空 chunk
+    // 报错并永久关闭（表现为"一段时间后无声音"）。这里直接丢弃。
+    if (plaintext.empty()) {
+        ++packets_dropped_;
+        return;
+    }
+
     // ---- 6. 转发给同频道其他用户（用接收者密钥重新加密） ----
     for (const auto& peer_endpoint : peers) {
         UserId receiver_id = findUserByEndpoint(peer_endpoint);
