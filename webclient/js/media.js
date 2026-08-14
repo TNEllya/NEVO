@@ -40,6 +40,8 @@
     // 解码视频渲染
     remoteVideoCanvas: null,
     remoteVideoCtx: null,
+    // 视频大厅：user_id -> { canvas, ctx, decoder, w, h }（多人网格解码目标）
+    lobbyTargets: new Map(),
     // PTT
     pttActive: false,
     inputMode: 'continuous', // continuous | ptt | vad
@@ -762,14 +764,123 @@
     frame.close();
   }
 
+  // ---- 视频大厅（多人）解码目标管理 ----
+
+  // 大厅帧超时检测：某成员停止发送视频（关闭摄像头/掉线）后恢复头像占位
+  let lobbyStaleTimer = null;
+
+  function startLobbyStaleCheck() {
+    if (lobbyStaleTimer) return;
+    lobbyStaleTimer = setInterval(() => {
+      const now = Date.now();
+      for (const [, target] of MediaState.lobbyTargets) {
+        if (target.canvas && target.canvas.style.display !== 'none' && now - (target.lastFrameTime || 0) > 2000) {
+          target.canvas.style.display = 'none';
+          const ph = target.canvas.parentElement && target.canvas.parentElement.querySelector('.lobby-tile-placeholder');
+          if (ph) ph.style.display = 'flex';
+        }
+      }
+    }, 1000);
+  }
+
+  function stopLobbyStaleCheck() {
+    if (lobbyStaleTimer) { clearInterval(lobbyStaleTimer); lobbyStaleTimer = null; }
+  }
+
+  // 为某个频道成员注册解码目标 canvas；grid 重建时先 clear 再逐个注册
+  function setLobbyVideoTarget(userId, canvas) {
+    const ctx = canvas.getContext('2d', { alpha: false });
+    let target = MediaState.lobbyTargets.get(userId);
+    if (target) {
+      target.canvas = canvas;
+      target.ctx = ctx;
+    } else {
+      target = { userId, canvas, ctx, decoder: null, w: 0, h: 0, lastFrameTime: 0 };
+      MediaState.lobbyTargets.set(userId, target);
+    }
+    startLobbyStaleCheck();
+  }
+
+  function removeLobbyVideoTarget(userId) {
+    const target = MediaState.lobbyTargets.get(userId);
+    if (!target) return;
+    if (target.decoder) { try { target.decoder.close(); } catch (_) {} }
+    MediaState.lobbyTargets.delete(userId);
+    if (MediaState.lobbyTargets.size === 0) stopLobbyStaleCheck();
+  }
+
+  function clearLobbyVideoTargets() {
+    for (const [, target] of MediaState.lobbyTargets) {
+      if (target.decoder) { try { target.decoder.close(); } catch (_) {} }
+    }
+    MediaState.lobbyTargets.clear();
+    stopLobbyStaleCheck();
+  }
+
+  // 解码输出 → 画到指定成员的 canvas
+  function renderLobbyFrame(frame, target) {
+    if (!target || !target.canvas || !target.ctx) {
+      frame.close();
+      return;
+    }
+    // 首次收到画面：显示 canvas、隐藏头像占位
+    if (target.canvas.style.display === 'none') {
+      target.canvas.style.display = 'block';
+      const ph = target.canvas.parentElement && target.canvas.parentElement.querySelector('.lobby-tile-placeholder');
+      if (ph) ph.style.display = 'none';
+    }
+    if (target.w !== frame.codedWidth || target.h !== frame.codedHeight) {
+      target.canvas.width = frame.codedWidth;
+      target.canvas.height = frame.codedHeight;
+      target.w = frame.codedWidth;
+      target.h = frame.codedHeight;
+    }
+    target.ctx.drawImage(frame, 0, 0);
+    frame.close();
+  }
+
   // ---- 接收远端视频帧 ----
 
   function handleVideoFrame(data) {
+    if (!data || !data.data) return;
+    const buf = base64ToArrayBuffer(data.data);
+    // 与语音一致：空载荷直接跳过，避免解码器进入错误/关闭状态
+    if (!buf.byteLength) return;
+
+    // 视频大厅模式：按 sender_id 路由到各成员的解码器
+    if (MediaState.lobbyTargets.size > 0) {
+      const target = MediaState.lobbyTargets.get(Number(data.sender_id) || 0);
+      if (!target) return; // 非大厅目标成员（如不在大厅的其他频道成员）的帧直接丢弃
+      try {
+        // 惰性创建解码器：首次收到帧时按发送方分辨率/帧率推断 codec（与发送端同一规则）
+        if (!target.decoder) {
+          const codec = pickVideoCodec(data.width || 640, data.height || 480, data.fps || 30);
+          target.decoder = new VideoDecoder({
+            output: (frame) => renderLobbyFrame(frame, target),
+            error: (e) => console.error('[MEDIA] Lobby VideoDecoder error:', e),
+          });
+          target.decoder.configure({
+            codec,
+            width: data.width || 640,
+            height: data.height || 480,
+          });
+        }
+        if (target.decoder.state !== 'configured') return;
+        const chunk = new EncodedVideoChunk({
+          type: data.keyframe ? 'key' : 'delta',
+          timestamp: Date.now() * 1000,
+          data: buf,
+        });
+        target.decoder.decode(chunk);
+      } catch (e) {
+        // 解码错误，忽略
+      }
+      return;
+    }
+
+    // 原有 1v1 通话路径
     if (!MediaState.videoDecoder || MediaState.videoDecoder.state !== 'configured') return;
     try {
-      const buf = base64ToArrayBuffer(data.data);
-      // 与语音一致：空载荷直接跳过，避免解码器进入错误/关闭状态
-      if (!buf.byteLength) return;
       const chunk = new EncodedVideoChunk({
         type: data.keyframe ? 'key' : 'delta',
         timestamp: Date.now() * 1000,
@@ -952,6 +1063,9 @@
     stopVideo,
     handleVideoFrame,
     setRemoteVideoCanvas,
+    setLobbyVideoTarget,
+    removeLobbyVideoTarget,
+    clearLobbyVideoTargets,
     startScreenShare,
     stopScreenShare,
     setInputMode,

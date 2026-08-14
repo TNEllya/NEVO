@@ -207,9 +207,23 @@ class ClientBridge:
             cid = self._client.current_channel_id
             if cid > 0:
                 self._media_bridge.set_channel(cid)
+            # 对端重启软件后重新登录时，服务器只广播 channel_list（无 user_joined）。
+            # 若不在此时重置其语音去重基线，新会话序号从 0 重新计数会被当作
+            # 旧会话的重复帧全部丢弃（"A 重启后 B 听不到 A"）。重置所有在列
+            # 用户：至多造成每个活跃发送者一帧重复（20ms），可听影响可忽略。
+            for ch in (channels or []):
+                for u in (ch.get("users") or []):
+                    uid = u.get("id")
+                    if uid:
+                        self._media_bridge.reset_sender(uid)
 
     def _on_user_joined(self, user):
         self._send_event("user_joined", {"user": user})
+        # 对端重新入频道（含重启后显式入频道）同样需要重置其去重基线与
+        # 视频分片缓冲（原因同 _on_channel_list）。
+        uid = (user or {}).get("id")
+        if uid and self._media_bridge:
+            self._media_bridge.reset_sender(uid)
 
     def _on_user_left(self, user_id):
         self._send_event("user_left", {"user_id": user_id})
@@ -682,6 +696,14 @@ class _FragmentReassembler:
             for k in stale:
                 del self._buffers[k]
 
+    def reset_sender(self, sender_id):
+        """丢弃某发送者的所有未完成分片（发送端重启后旧分片必须作废，
+        否则会与新会话的相同序号分片混拼成损坏的 NAL）。"""
+        with self._lock:
+            stale = [k for k in self._buffers if k[0] == sender_id]
+            for k in stale:
+                del self._buffers[k]
+
 
 class MediaBridge:
     """桥接浏览器 WebCodecs 编码帧到 NEVO UDP 语音/视频协议。"""
@@ -1004,14 +1026,35 @@ class MediaBridge:
 
     # ---- 接收（后端 UDP → 浏览器 WS）----
 
+    # 同流内乱序/重复的序号回退幅度很小（双路中继最多相差几帧）；
+    # 回退超过该阈值视为发送端已重启（新会话序号从 0 重新计数）。
+    _SEEN_RESET_GAP = 256
+
     def _is_duplicate(self, sender_id, seq):
-        """TCP/UDP 双路中继去重：同一 (sender_id, seq) 只转发一次。"""
+        """TCP/UDP 双路中继去重：同一 (sender_id, seq) 只转发一次。
+
+        发送端（对端用户）重启软件后，其新会话的序号从 0 重新计数。
+        若仍按旧基线判断，新会话的全部帧会被误判为重复帧丢弃
+        （"A 重启后 B 听不到 A，B 重启才恢复"的根因）。因此：
+        小幅回退 = 同流内的乱序/重复（丢弃）；大幅回退 = 新会话
+        （重置基线并放行）。
+        """
         with self._seen_lock:
             last = self._voice_seen.get(sender_id, -1)
             if seq <= last:
+                if last - seq >= self._SEEN_RESET_GAP:
+                    self._voice_seen[sender_id] = seq
+                    return False
                 return True
             self._voice_seen[sender_id] = seq
             return False
+
+    def reset_sender(self, sender_id):
+        """发送端会话重建（对端重启软件/重新入频道）后重置其去重基线，
+        并清空其视频分片重组缓冲，避免新旧会话的相同序号分片被混拼。"""
+        with self._seen_lock:
+            self._voice_seen.pop(sender_id, None)
+        self._reassembler.reset_sender(sender_id)
 
     def _on_tcp_voice_frame(self, payload: bytes):
         """接收 TCP 语音帧（服务端中继经 TCP 控制连接下发），解密并转发浏览器。
@@ -1189,6 +1232,7 @@ class MediaBridge:
             "height": header.height,
             "fps": header.fps,
             "frame_type": header.frame_type,
+            "keyframe": header.frame_type == 0,  # 0=KeyFrame, 1=DeltaFrame
             "data": base64.b64encode(nal_data).decode('ascii'),
         })
 

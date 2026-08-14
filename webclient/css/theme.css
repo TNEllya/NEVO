@@ -791,6 +791,34 @@ body {
 .voice-call-btn:hover { background: var(--color-primary-subtle); }
 
 /* ============================================================
+   Video Lobby Entry (left sidebar bottom)
+   ============================================================ */
+
+.lobby-entry {
+  flex-shrink: 0;
+  margin: 0 8px 8px;
+  padding: 8px 12px;
+  display: flex; align-items: center; gap: 8px;
+  background: var(--color-primary-dim);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  color: var(--color-primary);
+  font-size: var(--text-sm); font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+.lobby-entry:hover { background: var(--color-primary-subtle); }
+.lobby-entry-name { flex: 1; }
+.lobby-entry-badge {
+  min-width: 18px; height: 18px; padding: 0 5px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--color-primary);
+  color: var(--color-text-inverse);
+  border-radius: var(--radius-full);
+  font-size: 11px; font-weight: var(--weight-bold);
+}
+
+/* ============================================================
    Video Call Page
    ============================================================ */
 
@@ -950,6 +978,138 @@ body {
 .incoming-call-card .ic-actions {
   display: flex; gap: 12px; justify-content: center;
 }
+
+/* ============================================================
+   Video Lobby Page (Teams-style meeting room)
+   ============================================================ */
+
+#page-video-lobby {
+  position: relative; overflow: hidden;
+  background: var(--color-bg-base);
+  flex-direction: column;
+}
+
+.lobby-vignette {
+  position: absolute; inset: 0; pointer-events: none; z-index: 10;
+  box-shadow: inset 0 0 120px 40px rgba(0, 0, 0, 0.5);
+}
+
+.lobby-header {
+  position: relative; z-index: 20;
+  height: 56px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 20px;
+  background: var(--color-bg-secondary);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.lobby-header-left { display: flex; align-items: center; gap: 12px; }
+
+.lobby-back {
+  width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-sm); cursor: pointer;
+  color: var(--color-text-muted);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.lobby-back:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+
+.lobby-title-block { display: flex; flex-direction: column; gap: 2px; }
+.lobby-title { font-size: var(--text-base); font-weight: var(--weight-semibold); color: var(--color-text-primary); }
+.lobby-subtitle { font-size: var(--text-xs); color: var(--color-text-muted); }
+
+.lobby-badge-secure {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px;
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs); color: var(--color-text-secondary);
+}
+
+/* Video grid */
+.lobby-grid {
+  position: relative; z-index: 10;
+  flex: 1; overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  padding: 24px;
+  align-content: start;
+}
+
+.lobby-empty {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; justify-content: center;
+  min-height: 200px;
+  color: var(--color-text-muted); font-size: var(--text-base);
+}
+
+.lobby-tile {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+}
+.lobby-tile.is-me { border-color: var(--color-primary); }
+
+.lobby-tile-video {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+}
+video.lobby-tile-video { transform: scaleX(-1); /* 本地预览镜像 */ }
+
+.lobby-tile-placeholder {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.lobby-tile-avatar {
+  width: 72px; height: 72px;
+  border-radius: var(--radius-full);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 28px; font-weight: var(--weight-bold);
+  color: var(--color-text-inverse);
+}
+
+.lobby-tile-namebar {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px;
+  background: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.65) 100%);
+  font-size: var(--text-xs);
+}
+.lobby-tile-name { color: var(--color-text-inverse); font-weight: var(--weight-medium); }
+.lobby-tile-tag {
+  padding: 2px 8px;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: var(--radius-full);
+  color: var(--color-text-secondary);
+}
+
+/* Control bar */
+.lobby-controls {
+  position: relative; z-index: 30;
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; gap: 16px;
+  padding: 14px 20px;
+  background: var(--color-bg-secondary);
+  border-top: 1px solid var(--color-border);
+}
+
+.lobby-ctrl-btn {
+  width: 48px; height: 48px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-full);
+  cursor: pointer; border: none;
+  transition: opacity var(--transition-fast), background var(--transition-fast);
+}
+.lobby-ctrl-btn:hover { opacity: 0.8; }
+.lobby-ctrl-btn.active { background: var(--color-primary-dim); color: var(--color-primary); }
+.lobby-ctrl-btn.inactive { background: var(--color-bg-hover); color: var(--color-text-secondary); }
+.lobby-ctrl-btn.leave { background: var(--state-error); color: var(--color-text-inverse); }
+.lobby-ctrl-btn.leave:hover { opacity: 0.9; }
 
 /* ============================================================
    Settings Page
