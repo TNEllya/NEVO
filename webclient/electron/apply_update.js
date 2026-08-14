@@ -139,9 +139,39 @@ function applyPlan(plan) {
   return { ok: true, replaced: done.length };
 }
 
+/**
+ * 解析并校验更新目录（argv[2] 是唯一外部输入，必须先过白名单校验再使用）。
+ * 安全规则：必须为绝对路径、路径段必须含 .nevo_update（与 updater.js getUpdateDir
+ * 约定一致）、必须存在且为目录。任一不满足即抛错 —— 拒绝把不可信命令行参数
+ * 用于后续任何文件读取/替换操作。
+ */
+function resolveUpdateDir(arg) {
+  if (typeof arg !== 'string' || arg.length === 0) {
+    throw new Error('update dir argument missing');
+  }
+  if (!path.isAbsolute(arg)) {
+    throw new Error('update dir must be absolute: ' + arg);
+  }
+  const resolved = path.resolve(arg);
+  if (!resolved.split(path.sep).includes('.nevo_update')) {
+    throw new Error('update dir must reside under .nevo_update: ' + resolved);
+  }
+  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+    throw new Error('update dir is not a directory: ' + resolved);
+  }
+  return resolved;
+}
+
 /** 入口：argv[2] 为 updateDir（由 apply_update.cmd 以 %~dp0 传入）。 */
 function main() {
-  const updateDir = process.argv[2] ? path.resolve(process.argv[2]) : path.dirname(__dirname);
+  let updateDir;
+  try {
+    updateDir = resolveUpdateDir(process.argv[2] || path.join(path.dirname(__dirname), '.nevo_update'));
+  } catch (err) {
+    // 参数缺失/非法：不执行任何文件操作，直接失败退出
+    console.error('[apply_update] rejected update dir:', err.message);
+    return 1;
+  }
   const planPath = path.join(updateDir, MANIFEST_NAME);
   const resultPath = path.join(updateDir, RESULT_NAME);
   let result;
@@ -160,4 +190,4 @@ if (require.main === module) {
   process.exit(main());
 }
 
-module.exports = { MANIFEST_NAME, RESULT_NAME, isSafeRelPath, resolveWithin, applyPlan, main };
+module.exports = { MANIFEST_NAME, RESULT_NAME, isSafeRelPath, resolveWithin, resolveUpdateDir, applyPlan, main };
