@@ -21,7 +21,7 @@
   "build": {
     "appId": "com.nevo.webclient",
     "productName": "NEVO Web Client",
-    "buildVersion": "BETA0.0.1",
+    "buildVersion": "BETA0.0.2",
     "directories": {
       "output": "../../NEVO"
     },

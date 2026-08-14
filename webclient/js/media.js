@@ -21,6 +21,7 @@
     remoteMasterGain: null,
     remoteAudioQueue: [],        // 抖动缓冲：待播放的 AudioBuffer
     remoteAudioPlaying: false,
+    _nextPlayTime: 0,            // 时钟对齐排程：下一帧的 AudioContext 起始时刻
     // 波形渲染 DOM 缓存（避免每帧 rAF 全量 querySelector）
     _wfCache: { self: null, bars: new Map() },
     // 视频渲染缓存
@@ -54,7 +55,7 @@
       codec: 'opus',
       sampleRate: 48000,
       numberOfChannels: 1,
-      bitrate: 32000,
+      bitrate: 48000, // 48kbps：语音清晰度与带宽的平衡点（32k 下齿音/电音感明显）
     },
     video: {
       codec: 'avc1.4D0028', // H.264 Main Profile Level 4.0（1080p@30 内可用）
@@ -225,12 +226,28 @@
       try {
         const workletSrc = `
           class NevoPCMProcessor extends AudioWorkletProcessor {
+            constructor() {
+              super();
+              this._pending = new Float32Array(0);
+            }
             process(inputs) {
               const input = inputs[0];
               if (input && input.length && input[0].length) {
                 const ch = input[0];
-                // 转移 buffer 所有权，避免拷贝
-                this.port.postMessage(ch.slice(0), [ch.buffer]);
+                // 累积到 960 样本（20ms @ 48kHz）再投递：
+                // 1) 保证 Opus 编码器输出标准 20ms 帧（各 Chromium 版本行为一致，
+                //    避免部分版本按输入块长度输出非 20ms 帧导致对端播放断档）；
+                // 2) 主线程消息频率从 ~375 次/s 降到 50 次/s，显著降低
+                //    编码/发送路径的抖动（语音卡顿的重要来源）。
+                const merged = new Float32Array(this._pending.length + ch.length);
+                merged.set(this._pending);
+                merged.set(ch, this._pending.length);
+                this._pending = merged;
+                if (this._pending.length >= 960) {
+                  const out = this._pending.slice(0, 960);
+                  this._pending = this._pending.slice(960);
+                  this.port.postMessage(out, [out.buffer]);
+                }
               }
               return true;
             }
@@ -352,6 +369,7 @@
     if (MediaState._remoteDrainTimer) { clearTimeout(MediaState._remoteDrainTimer); MediaState._remoteDrainTimer = null; }
     MediaState.remoteAudioQueue = [];
     MediaState.remoteAudioPlaying = false;
+    MediaState._nextPlayTime = 0;
     if (MediaState.remoteMasterGain) {
       try { MediaState.remoteMasterGain.disconnect(); } catch (_) {}
       MediaState.remoteMasterGain = null;
@@ -376,6 +394,7 @@
   //  - 大幅减少 AudioBufferSourceNode / AudioBuffer 的创建频率（GC 压力）
   const REMOTE_FRAME_MS = 20;
   const REMOTE_QUEUE_MAX = 12; // 240ms，超出说明网络延迟累积，丢弃最旧帧防止延迟堆积
+  const REMOTE_PREFILL = 2;    // 预填 2 帧再开始播放，吸收起始抖动避免一帧一断
 
   function playRemoteAudio(frame) {
     if (!MediaState.remoteAudioContext) { frame.close(); return; }
@@ -395,7 +414,8 @@
         MediaState.remoteAudioQueue.shift();
       }
       MediaState.remoteAudioQueue.push(buf);
-      if (!MediaState.remoteAudioPlaying) {
+      if (!MediaState.remoteAudioPlaying &&
+          MediaState.remoteAudioQueue.length >= REMOTE_PREFILL) {
         MediaState.remoteAudioPlaying = true;
         drainRemoteAudio();
       }
@@ -410,14 +430,29 @@
       MediaState.remoteAudioPlaying = false;
       return;
     }
+    const ctx = MediaState.remoteAudioContext;
     try {
-      const src = MediaState.remoteAudioContext.createBufferSource();
+      const src = ctx.createBufferSource();
       src.buffer = buf;
-      src.connect(MediaState.remoteMasterGain || MediaState.remoteAudioContext.destination);
-      src.start();
-    } catch (e) { /* 播放失败时丢弃该帧 */ }
-    // 以固定 20ms 间隔逐帧播放；队列空时停止循环，下一帧到达后自动重启
-    MediaState._remoteDrainTimer = setTimeout(drainRemoteAudio, REMOTE_FRAME_MS);
+      src.connect(MediaState.remoteMasterGain || ctx.destination);
+      // 对齐 AudioContext 时钟排程（start(when) 精确到采样点）：
+      // 每帧在上帧结束的精确时刻开始，彻底消除 setTimeout 漂移
+      // 造成的周期性断音/卡顿。
+      const now = ctx.currentTime;
+      if (MediaState._nextPlayTime < now + 0.003) {
+        // 落后（欠载重启动/定时器迟到）：钳制到 3ms 后，避免 start 时刻在过去
+        MediaState._nextPlayTime = now + 0.003;
+      }
+      src.start(MediaState._nextPlayTime);
+      MediaState._nextPlayTime += buf.duration;
+      // 提前 5ms 唤醒：容忍定时器延迟，保证每帧在精确时刻开始
+      const delayMs = Math.max(2, (MediaState._nextPlayTime - ctx.currentTime) * 1000 - 5);
+      MediaState._remoteDrainTimer = setTimeout(drainRemoteAudio, delayMs);
+    } catch (e) {
+      // 播放失败时按帧长重试，避免死循环
+      MediaState._remoteDrainTimer = setTimeout(
+        drainRemoteAudio, Math.max(10, (buf.duration || 0.02) * 1000));
+    }
   }
 
   // 实时调整远端语音输出音量（0-100）
@@ -437,6 +472,10 @@
     if (!MediaState.audioDecoder || MediaState.audioDecoder.state !== 'configured') return;
     try {
       const buf = base64ToArrayBuffer(data.data);
+      // 空载荷（网关注册/保活包被中继）不能喂给 AudioDecoder：
+      // Chrome/Electron 会抛 "EncodingError: Null or empty decoder buffer"，
+      // 解码器进入 closed 状态后所有语音帧被永久丢弃（"一段时间后无声音"的根因）。
+      if (!buf.byteLength) return;
       const chunk = new EncodedAudioChunk({
         type: 'key',
         timestamp: Date.now() * 1000,
@@ -729,6 +768,8 @@
     if (!MediaState.videoDecoder || MediaState.videoDecoder.state !== 'configured') return;
     try {
       const buf = base64ToArrayBuffer(data.data);
+      // 与语音一致：空载荷直接跳过，避免解码器进入错误/关闭状态
+      if (!buf.byteLength) return;
       const chunk = new EncodedVideoChunk({
         type: data.keyframe ? 'key' : 'delta',
         timestamp: Date.now() * 1000,

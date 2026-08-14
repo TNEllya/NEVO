@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-NEVO 是一个多平台 VoIP 语音通信系统，包含 C++ 核心引擎、Python GUI 客户端、Kotlin Android 客户端和 Web 网关。
+NEVO 是一个多平台 VoIP 语音通信系统，包含 C++ 核心引擎、Kotlin Android 客户端和 Electron Web 客户端（V3）。
 
 ## 构建与测试
 
@@ -39,8 +39,8 @@ cd build && ctest --output-on-failure -C Release
 src/core/       → 核心引擎（无外部依赖，纯逻辑）
 src/network/    → 网络传输层（依赖 core）
 src/server/     → 服务端（依赖 core + network）
-src/client/     → C++ 客户端核心 + Python GUI（依赖 core + network）
-src/ui/         → Qt UI 组件（依赖 core）
+src/client/     → C++ 客户端核心（依赖 core + network）+ Electron 网关 Python 协议库
+webclient/      → Electron Web 客户端（V3：electron/ + js/ + gateway.py）
 mobile/android/ → Kotlin Android 客户端（独立构建，Gradle）
 proto/          → Protobuf 协议定义（所有平台共享）
 ```
@@ -49,5 +49,7 @@ proto/          → Protobuf 协议定义（所有平台共享）
 
 - `3rdparty/` 目录为第三方库（spdlog、miniaudio），**不可修改**
 - 协议变更流程：修改 `proto/*.proto` → 运行 `python scripts/sync_proto_enums.py` → 重新生成各平台代码
-- Python 客户端使用 PyQt5，入口为 `src/client/gui_python/main.py`
+- 桌面 GUI 客户端已下线，客户端仅保留 Electron（`webclient/`）；Electron 网关 `webclient/gateway.py` 复用
+  `src/client/gui_python/` 下的 Python 协议库（`nevo_client.py`、`nevo_wire.py`、`voice_crypto.py`、`proto/`），
+  删除或改动前必须确认网关打包（`webclient/nevo_gateway.spec`）与链路测试（`test/cross_device_repro/`）不受影响
 - Android 客户端使用 Jetpack Compose，独立 Gradle 构建

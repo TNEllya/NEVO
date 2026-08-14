@@ -139,9 +139,7 @@ __pycache__/
 *.spec.bak
 
 # Large binary archives
-install/NEVO.zip
 *.zip
-!src/client/gui_python/translations/*.json
 !src/server/gui_python/translations/*.json
 
 # Binary distributions
@@ -153,10 +151,14 @@ test/
 # Mimosa 安全扫描历史
 .mimosa/
 
-# 客户端运行时/临时目录
+# 运行时/临时目录
 .nevo_update/
 .tmp/
 
-# PyInstaller 打包产物（dist 已在上面忽略；此处覆盖已跟踪场景）
+# PyInstaller 打包产物
 src/server/gui_python/dist/
-src/client/gui_python/dist/
+webclient/dist/
+webclient/build_pyinstaller/
+
+# ZCode 工具会话文件
+.zcode/

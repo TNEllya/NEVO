@@ -8,7 +8,7 @@
 
 **NEVO 是一款低延迟端到端加密 VoIP 通讯系统**，定位类似于 TeamSpeak / Mumble / Discord 语音频道的自托管替代方案。
 
-- **技术栈**：C++20 服务端/核心库 + Kotlin Android 客户端 + Python(PyQt5) 桌面客户端 + Web 管理面板
+- **技术栈**：C++20 服务端/核心库 + Kotlin Android 客户端 + Electron Web 客户端（V3）+ Web 管理面板
 - **核心特性**：
   1. 实时语音：Opus 编解码，48kHz 采样，桌面端 20ms 帧
   2. 端到端加密：XChaCha20-Poly1305 AEAD 加密全部语音/视频数据
@@ -156,10 +156,9 @@ NEVO/
 
 | 客户端 | 技术 | 状态 |
 |--------|------|------|
-| Python 桌面 GUI | PyQt5（`src/client/` 下） | 活跃 |
+| Electron Web 客户端 | JS + Electron 包装 + Python 网关（`webclient/`，V3） | 活跃（唯一 GUI 客户端） |
 | 服务端管理 GUI | Qt6 Widgets，含 en/zh_CN/zh_TW 翻译 | 可选构建 |
 | Web 管理面板 | HTML/JS + Python 代理（`web/`） | 活跃 |
-| Web 客户端 | JS + Electron 包装（`webclient/`） | 存在 |
 | React 客户端 | React+TS+Vite（`nevo-client/`） | 早期/实验性 |
 | iOS | — | **未发现** |
 
@@ -201,7 +200,7 @@ NEVO/
 
 4. **`docs/` 目录内含整个项目的嵌套副本**（`docs/src/`、`docs/tests/`、`docs/3rdparty/`、`docs/docker-compose.yml` 等），严重污染仓库、增大体积，且可能造成搜索/构建混淆，应立即清理。
 5. **构建产物入库**：根目录存在 `build/`、`build_client/`、`build_server_manager/`、`dist*/`、`nevo_server.db`（SQLite 数据库）等，应全部加入 `.gitignore` 并从历史清除。
-6. **客户端实现过度分散**：`web/`、`webclient/`、`nevo-client/`（React）、Python GUI 四套并行，维护成本高、协议演进时易不同步，建议收敛。
+6. **客户端实现过度分散**：`web/`、`webclient/`、`nevo-client/`（React）三套并行，维护成本高、协议演进时易不同步，建议收敛（PyQt5 桌面客户端已下线，仅保留 Electron V3）。
 7. **CMake 重复定义**：顶层 `CMakeLists.txt` 内部自定义了与 `cmake/CompilerWarnings.cmake`、`cmake/PlatformSetup.cmake` 同名但简化的宏，两份实现并存易漂移，应统一 `include()` 模块。
 
 ### 🟢 低 / 卫生

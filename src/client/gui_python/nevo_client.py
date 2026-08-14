@@ -499,7 +499,13 @@ class NevoClient:
             )
             self._send_message(WireMessageType.LOGIN_REQUEST, login_msg)
 
-            msg_type, payload = self._read_frame()
+            # 限时等待登录响应：服务器无响应时不能让调用线程（网关 WS 处理
+            # 线程）永久阻塞，否则该网关会话的所有后续命令都会被卡死。
+            self._sock.settimeout(15)
+            try:
+                msg_type, payload = self._read_frame()
+            finally:
+                self._sock.settimeout(None)
             if msg_type != 2:
                 raise RuntimeError(f"Expected LoginResponse (type 2), got type {msg_type}")
 
@@ -1374,6 +1380,19 @@ class NevoClient:
 
     def set_session_key(self, key: bytes):
         self._session_key = key
+
+    def register_media_engines(self, voice_engine=None, video_engine=None):
+        """登录后注册媒体引擎（Web 网关场景）。
+
+        PyQt 客户端在 connect() 时传入 voice_engine/video_engine；Web 网关的
+        MediaBridge 依赖登录响应（session_key）才能创建，只能在登录后注册。
+        注册后，服务端密钥轮换（KeyRotationRequest）会经
+        _rotate_session_key_in_media 传播到引擎的加密层——此前网关媒体桥
+        不注册引擎，服务端每 600s 轮换会话密钥后媒体加密密钥不同步，
+        语音/视频在轮换后的 20s 宽限期一过即被服务端全部丢弃。
+        """
+        self._voice_engine = voice_engine
+        self._video_engine = video_engine
 
     def _send_message(self, msg_type: WireMessageType, msg):
         if not self._sock:

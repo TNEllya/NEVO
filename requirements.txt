@@ -1,31 +1,19 @@
 # NEVO Python 运行时依赖
-# 适用于客户端 GUI、服务端管理 GUI 和 Web 代理
+# 适用于服务端管理 GUI（PyQt5）、Web 代理与 Electron 网关（webclient/gateway.py）
 
-# 客户端 GUI (PyQt5 + qfluentwidgets)
+# 服务端管理 GUI (PyQt5 + qfluentwidgets)
 PyQt5>=5.15.10
 PyQt5-Qt5>=5.15.2
 PyQt5-sip>=12.13
 PyQt-Fluent-Widgets>=1.7.0
 
-# 音频/视频/屏幕
-mss>=9.0.0
-av>=12.0.0
-opencv-python>=4.9.0
-sounddevice>=0.4.6
-numpy>=1.26.0
-opuslib>=3.0.1
-
-# 网络/加密/协议
-requests>=2.31.0
-charset-normalizer>=3.3.0
+# 网络/加密/协议（Electron 网关依赖：nevo_client / voice_crypto / proto）
 cryptography>=42.0.0
 pynacl>=1.5.0
 protobuf>=4.25.0
 
-# 输入/系统
-pynput>=1.7.6
-pywin32>=306
+# 系统（Web 代理 web/server.py）
 psutil>=5.9.8
 
-# 打包工具
+# 打包工具（nevo_gateway.spec / 服务端管理 GUI）
 pyinstaller>=6.0.0

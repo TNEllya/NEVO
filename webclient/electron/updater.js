@@ -49,11 +49,18 @@ try {
 // ============================================================
 // Ed25519 SPKI DER 前缀：与 32 字节原始公钥拼接后构造 crypto KeyObject
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
-// 发布清单验证公钥（32 字节原始公钥，hex 编码）。
-// 安全警告：当前为开发/测试公钥。生产发布前必须替换为正式发布密钥对的公钥，
+// 发布清单验证公钥（32 字节原始公钥，hex 编码）——2026-08-14 密钥轮换后的主公钥。
+// 轮换原因：旧私钥（对应下方 LEGACY 公钥）丢失，无法再签发可验证的清单。
 // 对应私钥仅由发布流水线持有（环境变量 NEVO_RELEASE_KEY_HEX，64 字符 hex 种子），
 // 严禁将私钥写入仓库或任何客户端代码。
-let PUBLIC_KEY_HEX = '2b9c2782c3016a9e4bfedf75b1648fc6e54686a4b2529130eb946789d93dd6fc';
+let PUBLIC_KEY_HEX = 'd7ea51bee0fe9547c2f41bddfcb6bf48ea75c84c5286a7ee8d3dcf8a66afd608';
+
+// 历史轮换公钥（兼容验证）：旧公钥 2b9c... 在 2026-08-14 密钥轮换前使用。
+// 保留它以兼容旧私钥签发的历史清单（若私钥日后找回），验证时任一公钥通过即成功。
+// 安全警告：仅保留可信的历史公钥；一旦某公钥对应私钥泄露，必须从本列表移除。
+const LEGACY_PUBLIC_KEYS_HEX = [
+  '2b9c2782c3016a9e4bfedf75b1648fc6e54686a4b2529130eb946789d93dd6fc',
+];
 
 let _pubKeyObject = null;
 function publicKeyObject() {
@@ -65,6 +72,18 @@ function publicKeyObject() {
     });
   }
   return _pubKeyObject;
+}
+
+let _legacyKeyObjects = null;
+function legacyKeyObjects() {
+  if (!_legacyKeyObjects) {
+    _legacyKeyObjects = LEGACY_PUBLIC_KEYS_HEX.map((hex) => crypto.createPublicKey({
+      key: Buffer.concat([ED25519_SPKI_PREFIX, Buffer.from(hex, 'hex')]),
+      format: 'der',
+      type: 'spki',
+    }));
+  }
+  return _legacyKeyObjects;
 }
 
 /**
@@ -93,13 +112,19 @@ function canonicalManifestBytes(parsed) {
 /**
  * 验证清单 Ed25519 签名。message = sha256(去除 signature 字段后的规范化字节)。
  * sigHex 必须为 128 字符 hex（Ed25519 签名 64 字节）。
+ * 主公钥（PUBLIC_KEY_HEX）与历史轮换公钥（LEGACY_PUBLIC_KEYS_HEX）任一验证通过即成功。
  */
 function verifyManifestSignature(text, sigHex) {
   if (typeof sigHex !== 'string' || !/^[0-9a-f]{128}$/i.test(sigHex)) return false;
   let parsed;
   try { parsed = JSON.parse(text); } catch (_) { return false; }
   const msg = crypto.createHash('sha256').update(canonicalManifestBytes(parsed)).digest();
-  return crypto.verify(null, msg, publicKeyObject(), Buffer.from(sigHex, 'hex'));
+  const sig = Buffer.from(sigHex, 'hex');
+  if (crypto.verify(null, msg, publicKeyObject(), sig)) return true;
+  for (const keyObj of legacyKeyObjects()) {
+    if (crypto.verify(null, msg, keyObj, sig)) return true;
+  }
+  return false;
 }
 
 // ============================================================
@@ -1104,5 +1129,5 @@ module.exports = {
   UpdateEngine, defaultBaseDir, defaultCurrentVersion, defaultFetcher,
   getResourcesDir, getApplyJsPath, sanitizeFilename, isSafeRelPath,
   resolveZipDest, extractZip, buildApplyCmd,
-  PUBLIC_KEY_HEX, setPublicKey, canonicalManifestBytes, verifyManifestSignature,
+  PUBLIC_KEY_HEX, LEGACY_PUBLIC_KEYS_HEX, setPublicKey, canonicalManifestBytes, verifyManifestSignature,
 };
