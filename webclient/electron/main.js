@@ -224,6 +224,13 @@ async function createWindow() {
   });
 }
 
+// Application version: packaged reads package.json buildVersion (changes with each
+// release/update), dev (unpackaged `electron .`) shows "dev".
+const APP_VERSION = app.isPackaged
+  ? (JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf-8')).buildVersion || '0.0.0')
+  : 'dev';
+ipcMain.handle('app:version', () => APP_VERSION);
+
 // Custom title-bar controls
 ipcMain.on('window-minimize', () => {
   if (mainWindow) mainWindow.minimize();

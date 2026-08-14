@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
 // Online updater API
 contextBridge.exposeInMainWorld('updaterAPI', {
+  appVersion: () => ipcRenderer.invoke('app:version'),
   checkNow: () => ipcRenderer.invoke('updater:check'),
   download: () => ipcRenderer.invoke('updater:download'),
   restartToApply: () => ipcRenderer.invoke('updater:restart'),

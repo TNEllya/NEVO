@@ -62,6 +62,9 @@
     capturingPTTKey: false,
     // Screen share
     screenSharing: false,
+    // Video lobby (Teams-style meeting room)
+    videoLobbyActive: false,
+    lobbyCamOn: false,
     // File list
     fileList: [],
     // Server quick access
@@ -246,6 +249,11 @@
       state.connected = false;
       state.inChannel = false;
       stopVoiceEngine();
+      if (state.videoLobbyActive) {
+        stopLobbyCamera();
+        state.videoLobbyActive = false;
+        if (window.NevoMedia) window.NevoMedia.clearLobbyVideoTargets();
+      }
       showPage('page-connect');
     } else if (newState === 'connected') {
       state.connected = true;
@@ -262,6 +270,8 @@
     const existing = state.channelUsers.find(u => u.id === user.id);
     if (!existing) state.channelUsers.push(user);
     renderVoiceUsers();
+    updateLobbyEntryBadge();
+    if (state.videoLobbyActive) { updateLobbySubtitle(); renderLobbyGrid(); }
     addSystemMessage(t('{0} 加入了频道', user.username));
     if (getSetting('desktop_notify', false)) {
       if (window.NevoMedia) window.NevoMedia.showNotification('NEVO', t('{0} 加入了频道', user.username));
@@ -272,6 +282,8 @@
     const user = state.channelUsers.find(u => u.id === userId);
     state.channelUsers = state.channelUsers.filter(u => u.id !== userId);
     renderVoiceUsers();
+    updateLobbyEntryBadge();
+    if (state.videoLobbyActive) { updateLobbySubtitle(); renderLobbyGrid(); }
     if (user) addSystemMessage(t('{0} 离开了频道', user.username));
   }
 
@@ -316,6 +328,12 @@
   }
 
   function handleCallEstablished(data) {
+    // 1v1 通话与视频大厅互斥：接通通话时先退出大厅（若在大厅），避免视频帧被大厅路由截走
+    if (state.videoLobbyActive) {
+      stopLobbyCamera();
+      state.videoLobbyActive = false;
+      if (window.NevoMedia) window.NevoMedia.clearLobbyVideoTargets();
+    }
     state.videoCallActive = true;
     state.currentCallId = data.call_id;
     state.callPeerId = data.peer_id;
@@ -519,19 +537,9 @@
       const bars = el('div', { class: 'speaking-bars', style: isMe ? 'display:none;' : 'display:flex;' });
       for (let i = 0; i < 4; i++) bars.appendChild(el('div', { class: 'bar', style: 'height: 4px;' }));
       userEl.appendChild(bars);
-      // Video call button for other users
-      if (!isMe && !state.videoCallActive) {
-        const callBtn = el('div', { class: 'vu-action', style: 'color: var(--color-primary); cursor: pointer; margin-left: 4px;', title: t('视频通话') }, [videoCallIcon()]);
-        callBtn.addEventListener('click', (e) => { e.stopPropagation(); startVideoCall(user.id, user.username); });
-        userEl.appendChild(callBtn);
-      }
       container.appendChild(userEl);
     }
-    if (state.inChannel && !state.videoCallActive && state.channelUsers.length > 1) {
-      const callBtn = el('div', { class: 'voice-call-btn' }, [videoCallIcon(), el('span', {}, t('视频通话'))]);
-      const otherUser = state.channelUsers.find(u => u.id !== state.userId);
-      if (otherUser) { callBtn.addEventListener('click', () => startVideoCall(otherUser.id, otherUser.username)); container.appendChild(callBtn); }
-    }
+    updateLobbyEntryBadge();
   }
 
   function micOffIcon() {
@@ -553,17 +561,6 @@
     svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '2');
     svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round');
     svg.innerHTML = `<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>`;
-    return svg;
-  }
-
-  function videoCallIcon() {
-    const ns = 'http://www.w3.org/2000/svg';
-    const svg = document.createElementNS(ns, 'svg');
-    svg.setAttribute('width', '16'); svg.setAttribute('height', '16');
-    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('fill', 'none');
-    svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '2');
-    svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round');
-    svg.innerHTML = `<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>`;
     return svg;
   }
 
@@ -1010,6 +1007,7 @@
 
   async function leaveChannel() {
     stopVoiceEngine();
+    if (state.videoLobbyActive) leaveVideoLobby();
     await sendCommand('leave_channel');
     state.currentChannelId = 0;
     state.currentChannelName = '';
@@ -1036,6 +1034,7 @@
     await sendCommand('toggle_mute', { muted: state.isMuted });
     updateMyStatus();
     renderVoiceUsers();
+    updateLobbyMicUI();
     toast(state.isMuted ? t('已静音') : t('已取消静音'), 'info', 1500);
   }
 
@@ -1046,17 +1045,6 @@
     updateMyStatus();
     renderVoiceUsers();
     toast(state.isDeafened ? t('已关闭音频') : t('已恢复音频'), 'info', 1500);
-  }
-
-  async function startVideoCall(peerId, peerName) {
-    const resp = await sendCommand('start_video_call', { callee_id: peerId });
-    if (resp.ok) {
-      state.currentCallId = resp.call_id;
-      state.callPeerName = peerName;
-      toast(`${t('正在呼叫')} ${peerName}...`, 'info');
-    } else {
-      toast(resp.error || t('发起通话失败'), 'error');
-    }
   }
 
   async function acceptVideoCall() {
@@ -1080,8 +1068,162 @@
     showPage('page-main');
   }
 
+  // ============================================================
+  // Video Lobby（类 Teams 会议页：多人视频大厅）
+  // 摄像头由个人自行打开，打开后视频经服务器按频道广播，
+  // 大厅内所有成员都能看到。进入大厅不自动开摄像头。
+  // ============================================================
+
+  function enterVideoLobby() {
+    if (!state.inChannel) { toast(t('请先加入频道'), 'info', 2000); return; }
+    state.videoLobbyActive = true;
+    showPage('page-video-lobby');
+    if (window.NevoMedia) window.NevoMedia.clearLobbyVideoTargets();
+    updateLobbySubtitle();
+    updateLobbyEntryBadge();
+    updateLobbyMicUI();
+    renderLobbyGrid();
+    updateLobbyCamUI();
+  }
+
+  function leaveVideoLobby() {
+    stopLobbyCamera();
+    state.videoLobbyActive = false;
+    if (window.NevoMedia) window.NevoMedia.clearLobbyVideoTargets();
+    showPage('page-main');
+    updateLobbyEntryBadge();
+  }
+
+  function updateLobbySubtitle() {
+    const sub = $('lobby-subtitle');
+    if (!sub) return;
+    sub.textContent = state.inChannel
+      ? `${t('语音频道')} / ${state.currentChannelName || '—'} · ${state.channelUsers.length} ${t('人')}`
+      : '—';
+  }
+
+  function updateLobbyEntryBadge() {
+    const badge = $('lobby-entry-badge');
+    if (!badge) return;
+    if (state.inChannel) {
+      badge.textContent = state.channelUsers.length;
+      badge.style.display = 'flex';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  function renderLobbyGrid() {
+    const grid = $('lobby-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+    if (window.NevoMedia) window.NevoMedia.clearLobbyVideoTargets();
+    if (state.channelUsers.length === 0) {
+      grid.innerHTML = `<div class="lobby-empty">${t('当前频道暂无成员')}</div>`;
+      return;
+    }
+    for (const user of state.channelUsers) {
+      const isMe = user.id === state.userId;
+      const tile = el('div', { class: `lobby-tile ${isMe ? 'is-me' : ''}`, 'data-lobby-uid': user.id });
+      // 头像占位（摄像头未开启时显示）
+      tile.appendChild(el('div', { class: 'lobby-tile-placeholder' }, [
+        el('div', { class: `lobby-tile-avatar ${getAvatarColor(user.username)}` }, getInitials(user.username)),
+      ]));
+      // 视频层：自己用 <video> 本地预览（镜像），他人用 <canvas> 接收远端解码画面
+      if (isMe) {
+        const videoEl = el('video', { autoplay: true, muted: true, playsinline: true, class: 'lobby-tile-video' });
+        videoEl.style.display = 'none';
+        tile.appendChild(videoEl);
+        if (state.lobbyCamOn && state.localStream) {
+          videoEl.srcObject = state.localStream;
+          videoEl.style.display = 'block';
+          tile.querySelector('.lobby-tile-placeholder').style.display = 'none';
+        }
+      } else {
+        const canvas = el('canvas', { class: 'lobby-tile-video' });
+        canvas.style.display = 'none';
+        tile.appendChild(canvas);
+        if (window.NevoMedia) window.NevoMedia.setLobbyVideoTarget(user.id, canvas);
+      }
+      // 底部名字条
+      const namebar = el('div', { class: 'lobby-tile-namebar' }, [
+        el('span', { class: 'lobby-tile-name' }, user.username + (isMe ? ` (${t('我')})` : '')),
+      ]);
+      if (isMe) {
+        namebar.appendChild(el('span', { class: 'lobby-tile-tag' }, state.lobbyCamOn ? t('摄像头已开') : t('摄像头未开启')));
+      }
+      tile.appendChild(namebar);
+      grid.appendChild(tile);
+    }
+  }
+
+  async function toggleLobbyCamera() {
+    if (state.lobbyCamOn) stopLobbyCamera();
+    else await startLobbyCamera();
+    updateLobbyCamUI();
+  }
+
+  async function startLobbyCamera() {
+    try {
+      // 先打开本地摄像头预览（复用 PiP 流程），再启动编码广播（复用同一流，避免二次请求权限）
+      await startLocalCamera();
+      const cameraId = getSetting('camera_device', '');
+      const res = getSetting('resolution', '1280x720');
+      const [w, h] = res.split('x').map(Number);
+      const fps = parseInt(getSetting('fps', '30'), 10);
+      await window.NevoMedia.startVideo(cameraId, w || 640, h || 480, fps, state.localStream);
+      state.lobbyCamOn = true;
+      updateSelfTileVideo();
+    } catch (e) {
+      console.error('[APP] Failed to start lobby camera:', e);
+      state.lobbyCamOn = false;
+      toast(t('无法访问摄像头') + ': ' + (e.message || e.name), 'error');
+    }
+  }
+
+  function stopLobbyCamera() {
+    if (window.NevoMedia) window.NevoMedia.stopVideo();
+    stopLocalCamera();
+    state.lobbyCamOn = false;
+    updateSelfTileVideo();
+  }
+
+  // 同步自己格子的画面层：开摄像头 → 显示本地 <video>；关 → 恢复头像占位
+  function updateSelfTileVideo() {
+    const selfTile = document.querySelector(`.lobby-tile[data-lobby-uid="${state.userId}"]`);
+    if (!selfTile) return;
+    const ph = selfTile.querySelector('.lobby-tile-placeholder');
+    const videoEl = selfTile.querySelector('.lobby-tile-video');
+    const tag = selfTile.querySelector('.lobby-tile-tag');
+    if (state.lobbyCamOn && state.localStream && videoEl) {
+      videoEl.srcObject = state.localStream;
+      videoEl.style.display = 'block';
+      if (ph) ph.style.display = 'none';
+    } else if (videoEl) {
+      videoEl.srcObject = null;
+      videoEl.style.display = 'none';
+      if (ph) ph.style.display = 'flex';
+    }
+    if (tag) tag.textContent = state.lobbyCamOn ? t('摄像头已开') : t('摄像头未开启');
+  }
+
+  function updateLobbyCamUI() {
+    const btn = $('lobby-cam');
+    if (!btn) return;
+    btn.classList.toggle('active', state.lobbyCamOn);
+    btn.classList.toggle('inactive', !state.lobbyCamOn);
+  }
+
+  function updateLobbyMicUI() {
+    const btn = $('lobby-mic');
+    if (!btn) return;
+    btn.classList.toggle('active', !state.isMuted);
+    btn.classList.toggle('inactive', state.isMuted);
+  }
+
   async function disconnect() {
     stopVoiceEngine();
+    if (state.videoLobbyActive) leaveVideoLobby();
     await sendCommand('disconnect');
     state.connected = false;
     state.inChannel = false;
@@ -1565,6 +1707,16 @@
     $('vc-settings').addEventListener('click', () => showPage('page-settings'));
     $('vc-hangup').addEventListener('click', hangupVideoCall);
 
+    // Video lobby controls
+    $('lobby-entry').addEventListener('click', enterVideoLobby);
+    $('lobby-back').addEventListener('click', leaveVideoLobby);
+    $('lobby-cam').addEventListener('click', toggleLobbyCamera);
+    $('lobby-mic').addEventListener('click', () => {
+      if (!state.inChannel) { toast(t('请先加入频道'), 'info', 2000); return; }
+      toggleMute();
+    });
+    $('lobby-leave').addEventListener('click', leaveVideoLobby);
+
     // Incoming call buttons
     $('btn-accept-call').addEventListener('click', acceptVideoCall);
     $('btn-reject-call').addEventListener('click', rejectVideoCall);
@@ -1860,6 +2012,15 @@
       applyTheme(getSetting('theme', 'dark'));
       // Apply i18n
       if (window.NevoI18n) window.NevoI18n.applyTranslations();
+      // Version badge: packaged shows buildVersion (changes with each update), dev shows "dev"
+      if (window.updaterAPI && window.updaterAPI.appVersion) {
+        window.updaterAPI.appVersion().then((v) => {
+          const footer = document.getElementById('app-version-footer');
+          const about = document.getElementById('app-version-about');
+          if (footer) footer.textContent = v;
+          if (about) about.textContent = v;
+        }).catch(() => {});
+      }
       // Init emoji panel
       initEmojiPanel();
       // Init event listeners + settings
