@@ -336,6 +336,10 @@ class ClientBridge:
                             self._media_bridge.start(
                                 host, c.server_udp_port, c.server_video_udp_port,
                                 c.user_id, c.session_key)
+                            # 注册为客户端媒体引擎：服务端每 600s 轮换会话
+                            # 密钥时，NevoClient 会把新密钥传播到媒体桥的
+                            # 加密层（否则轮换宽限期一过语音/视频全部失效）。
+                            c.register_media_engines(self._media_bridge)
                         except Exception as e:
                             print(f"[GATEWAY] MediaBridge start failed: {e}")
                             self._media_bridge = None
@@ -392,11 +396,23 @@ class ClientBridge:
             elif action == "toggle_mute":
                 muted = bool(params.get("muted", False))
                 c.set_muted(muted)
+                # 同步媒体桥：静音后停止发送本端麦克风音频（否则他人仍能听到）
+                if self._media_bridge:
+                    try:
+                        self._media_bridge.set_muted(muted)
+                    except Exception:
+                        pass
                 return {"ok": True, "muted": muted}
 
             elif action == "toggle_deafen":
                 deafened = bool(params.get("deafened", False))
                 c.set_deafened(deafened)
+                # 同步媒体桥：闭麦后停止播放远端音频（并隐含静音本端）
+                if self._media_bridge:
+                    try:
+                        self._media_bridge.set_deafened(deafened)
+                    except Exception:
+                        pass
                 return {"ok": True, "deafened": deafened, "muted": c.is_muted}
 
             elif action == "speaking_state":
@@ -689,11 +705,33 @@ class MediaBridge:
         self._video_recv_thread = None
         self._keepalive_thread = None
         self._alive = True
+        # 静音（不发送本端麦克风）/ 闭麦（同时不播放远端音频）
+        # 由 handle_command 的 toggle_mute / toggle_deafen 驱动，
+        # 媒体收发线程读取（Python 简单属性读写原子，GIL 保证可见性）
+        self._muted = False
+        self._deafened = False
         self._reassembler = _FragmentReassembler()
         # 远端用户说话状态检测（基于收到的音频包，与 PyQt 客户端 on_voice_received 行为一致）
         self._speaking_last_audio = {}   # user_id -> 最近收到音频的时间戳
         self._speaking_active = {}       # user_id -> 是否正在说话
         self._speaking_lock = threading.Lock()
+        # TCP/UDP 双路去重：网关发送端对同一帧同时走 TCP 隧道与 UDP，
+        # 服务端会把两条路径都中继过来（sequence_number 相同）。
+        # 若不去重，浏览器收到 2 倍帧、抖动缓冲被灌满只能丢帧，语音卡顿。
+        self._voice_seen = {}            # sender_id -> 最近已转发的序号
+        self._seen_lock = threading.Lock()
+
+    # ---- 静音 / 闭麦 ----
+
+    def set_muted(self, muted: bool):
+        """静音：停止发送本端麦克风音频（他人听不到本端）。"""
+        self._muted = bool(muted)
+
+    def set_deafened(self, deafened: bool):
+        """闭麦：停止播放远端音频（听不到他人），并隐含静音本端。"""
+        self._deafened = bool(deafened)
+        if deafened:
+            self._muted = True
 
     # ---- 生命周期 ----
 
@@ -804,6 +842,24 @@ class MediaBridge:
     def set_call_id(self, call_id):
         self._call_id = call_id
 
+    # ---- 会话密钥同步（注册为 NevoClient 媒体引擎后由客户端驱动） ----
+
+    def set_session_key(self, key):
+        """下发/重设会话密钥（登录或重协商）。"""
+        if self._crypto:
+            self._crypto.set_session_key(bytes(key))
+
+    def rotate_session_key(self, key):
+        """服务端密钥轮换：切换新密钥，旧密钥保留 KEY_OVERLAP_SECONDS 兜底。
+
+        服务端每 600s 轮换一次每客户端会话密钥，并通过 KeyRotationRequest
+        通知客户端；客户端（NevoClient）会把新密钥传播到注册的媒体引擎。
+        此前 MediaBridge 未注册为引擎，轮换后仍用旧密钥加密/解密，
+        服务端宽限期（20s）一过，本网关的所有语音/视频帧被中继丢弃。
+        """
+        if self._crypto:
+            self._crypto.rotate_key(bytes(key))
+
     # ---- 发送（浏览器 → 后端 UDP）----
 
     def send_voice_frame(self, encoded_data):
@@ -814,6 +870,9 @@ class MediaBridge:
         内网直连兜底（服务端中继会按接收者情况选择 TCP 或 UDP 下发）。
         """
         if not self._crypto:
+            return
+        # 静音：不发送本端麦克风音频（保活/注册包由独立线程发送，不受影响）
+        if self._muted:
             return
         try:
             # 频道 ID 兜底：channel_list 回调与 MediaBridge 创建存在时序竞态，
@@ -945,6 +1004,15 @@ class MediaBridge:
 
     # ---- 接收（后端 UDP → 浏览器 WS）----
 
+    def _is_duplicate(self, sender_id, seq):
+        """TCP/UDP 双路中继去重：同一 (sender_id, seq) 只转发一次。"""
+        with self._seen_lock:
+            last = self._voice_seen.get(sender_id, -1)
+            if seq <= last:
+                return True
+            self._voice_seen[sender_id] = seq
+            return False
+
     def _on_tcp_voice_frame(self, payload: bytes):
         """接收 TCP 语音帧（服务端中继经 TCP 控制连接下发），解密并转发浏览器。
 
@@ -968,11 +1036,21 @@ class MediaBridge:
             plaintext = self._crypto.decrypt(payload_body, header_aad=header_aad)
             if plaintext is None:
                 return
-            # 通过 WS 事件发送给浏览器
-            self._send_media_event("voice_frame", {
-                "sender_id": header.sender_id,
-                "data": base64.b64encode(plaintext).decode('ascii'),
-            })
+            # 空载荷 = 对端的 UDP 注册/保活包（仅用于端点注册，无音频内容）：
+            # 不能转发给浏览器，否则 AudioDecoder 解空 chunk 报错并永久关闭
+            # （表现为"一段时间后无声音"）。
+            if len(plaintext) == 0:
+                return
+            # 闭麦：不播放远端音频（不转发给浏览器）
+            if self._deafened:
+                return
+            # TCP/UDP 双路去重（同一帧经两条路径各中继一次）
+            if not self._is_duplicate(header.sender_id, header.sequence_number):
+                # 通过 WS 事件发送给浏览器
+                self._send_media_event("voice_frame", {
+                    "sender_id": header.sender_id,
+                    "data": base64.b64encode(plaintext).decode('ascii'),
+                })
         except Exception:
             pass
 
@@ -999,6 +1077,15 @@ class MediaBridge:
                 header_aad = data[2:2 + header_size]
                 plaintext = self._crypto.decrypt(payload, header_aad=header_aad)
                 if plaintext is None:
+                    continue
+                # 空载荷（注册/保活包）不转发给浏览器（原因同 TCP 语音路径）
+                if len(plaintext) == 0:
+                    continue
+                # TCP/UDP 双路去重（与 TCP 语音路径共享去重状态）
+                if self._is_duplicate(header.sender_id, header.sequence_number):
+                    continue
+                # 闭麦：不播放远端音频（不转发给浏览器）
+                if self._deafened:
                     continue
                 # 检测到远端有效音频（非空载荷，排除保活空包）
                 # 注意：说话状态由服务端 USER_SPEAKING 广播统一驱动，
@@ -1069,6 +1156,9 @@ class MediaBridge:
                 # 视频使用 decrypt_simple
                 plaintext = self._crypto.decrypt_simple(payload, header_aad)
                 if plaintext is None:
+                    continue
+                # 空载荷不转发（与语音路径一致，避免解码器进入错误状态）
+                if len(plaintext) == 0:
                     continue
                 seq = header.sequence_number
                 frag_idx = header.fragment_index

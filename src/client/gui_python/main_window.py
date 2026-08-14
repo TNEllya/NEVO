@@ -799,6 +799,15 @@ class MainWindow(FluentWindow):
             self.voice_engine.set_deafened(deafened)
         except Exception:
             pass
+        # 闭麦隐含静音：听不到他人的同时，本端麦克风也不应继续发送
+        if deafened and not self.client.is_muted:
+            self.client.set_muted(True)
+            try:
+                self.voice_engine.set_muted(True)
+            except Exception:
+                pass
+            self.connection_bar.btn_mute.setChecked(True)
+            self.connection_bar.btn_mute.setText(self.tr("开麦"))
         if deafened:
             self.connection_bar.btn_deafen.setText(self.tr("取消禁言"))
         else:
