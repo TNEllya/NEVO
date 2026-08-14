@@ -1,7 +1,7 @@
 {
   "name": "nevo-web-client",
   "version": "0.0.2-beta.0",
-  "buildVersion": "BETA0.0.4",
+  "buildVersion": "BETA0.0.5",
   "description": "NEVO Web Client — Discord-style frontend with Python gateway backend",
   "main": "main.js",
   "author": "NEVO",
@@ -21,7 +21,7 @@
   "build": {
     "appId": "com.nevo.webclient",
     "productName": "NEVO Web Client",
-    "buildVersion": "BETA0.0.4",
+    "buildVersion": "BETA0.0.5",
     "directories": {
       "output": "../../NEVO"
     },
@@ -44,7 +44,7 @@
         "nsis"
       ],
       "icon": "app-icon.ico",
-      "artifactName": "NEVO.Web.Client.BETA0.0.4.Setup.${ext}",
+      "artifactName": "NEVO.Web.Client.BETA0.0.5.Setup.${ext}",
       "signAndEditExecutable": false,
       "verifyUpdateCodeSignature": false
     },

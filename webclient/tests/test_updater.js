@@ -32,8 +32,8 @@ t(U.isNewerVersion('BETA0.0.1', 'BETA0.1.0') === false, '0.0.1 < 0.1.0');
 t(U.isNewerVersion('1.10.0', '1.9.9') === true, 'patch compare');
 
 // ghproxy URL 拼接
-t(U.proxyGithubUrl('https://github.com/a/b/releases/download/v1/f.zip') === 'https://ghproxy.com/https://github.com/a/b/releases/download/v1/f.zip', 'proxy github download url');
-t(U.proxyGithubUrl('https://ghproxy.com/https://github.com/a/b/x.zip') === 'https://ghproxy.com/https://github.com/a/b/x.zip', 'do not double-proxy');
+t(U.proxyGithubUrl('https://github.com/a/b/releases/download/v1/f.zip') === 'https://ghproxy.net/https://github.com/a/b/releases/download/v1/f.zip', 'proxy github download url');
+t(U.proxyGithubUrl('https://ghproxy.net/https://github.com/a/b/x.zip') === 'https://ghproxy.net/https://github.com/a/b/x.zip', 'do not double-proxy');
 t(U.proxyGithubUrl('https://example.com/x.zip') === 'https://example.com/x.zip', 'leave non-github url untouched');
 
 // 清单解析
@@ -163,7 +163,7 @@ engine.onState((oldS, newS) => states.push(newS));
         return { tag_name: 'BETA0.0.2', assets: [{ name: 'latest.json', browser_download_url: 'https://github.com/TNEllya/NEVO/releases/download/BETA0.0.2/latest.json' }] };
       }
       if (kind === 'manifest') {
-        if (!url.startsWith('https://ghproxy.com/')) throw new Error('request timeout');
+        if (!url.startsWith('https://ghproxy.net/')) throw new Error('request timeout');
         return JSON.stringify({ version: 'BETA0.0.2', full_package: { url: 'https://github.com/x/Setup.exe', size: 10, sha256: H64 } });
       }
       throw new Error('unknown');
@@ -210,6 +210,6 @@ engine.onState((oldS, newS) => states.push(newS));
 })();
 
 function apiCalls2_guard(calls2) {
-  return calls2.some((c) => c.kind === 'manifest' && !c.url.startsWith('https://ghproxy.com/'))
-    && calls2.some((c) => c.kind === 'manifest' && c.url.startsWith('https://ghproxy.com/'));
+  return calls2.some((c) => c.kind === 'manifest' && !c.url.startsWith('https://ghproxy.net/'))
+    && calls2.some((c) => c.kind === 'manifest' && c.url.startsWith('https://ghproxy.net/'));
 }

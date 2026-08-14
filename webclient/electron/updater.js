@@ -19,12 +19,14 @@ try { electron = require('electron'); } catch (_) { /* 纯 Node 测试环境 */ 
 const CFG = {
   owner: 'TNEllya',
   repo: 'NEVO',
-  timeoutMs: 5000,          // 更新源请求超时（需求：5 秒）
+  timeoutMs: 10000,         // 更新源请求超时（大陆网络访问 GitHub 较慢，10s 兼顾成功率与响应性）
   checkIntervalMs: 3600 * 1000,
   maxRetries: 3,
   retryDelaysMs: [3000, 6000, 9000],
   deltaRatio: 0.5,          // 增量包小于全量包 50% 时用增量
-  mirrorPrefixes: ['https://ghproxy.com/', 'https://ghfast.top/', 'https://gh-proxy.com/'],
+  // 镜像可用性（2026-08-14 实测）：ghproxy.net / gh.ddlc.top 可用，gh-proxy.com 不稳定，
+  // ghfast.top / ghproxy.com / mirror.ghproxy.com 已失效（返回超时）。按可用性排序。
+  mirrorPrefixes: ['https://ghproxy.net/', 'https://gh.ddlc.top/', 'https://gh-proxy.com/'],
   maxLogEntries: 200,
   chunkSize: 65536,
   progressThrottleMs: 200,
@@ -302,10 +304,44 @@ function computeRetryDelays(retries, delays) {
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
+/**
+ * 发起 GET 请求（跟随 3xx 重定向）。
+ * 安全规则：仅允许 http/https 协议。
+ * Electron 主进程优先使用 electron.net —— 走 Chromium 网络栈（自动采用系统代理，
+ * 与主窗口一致）；纯 Node 环境（测试）回退 Node 原生 http/https。
+ */
 function httpGet(url, headers, timeoutMs) {
   return new Promise((resolve, reject) => {
     let parsed;
     try { parsed = new URL(url); } catch (e) { reject(e); return; }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      reject(new Error('unsupported protocol: ' + parsed.protocol));
+      return;
+    }
+    // Electron：走系统代理，避免 Node 原生请求绕过代理导致 GitHub 直连超时
+    if (electron && electron.net && electron.net.request) {
+      let settled = false;
+      const req = electron.net.request({
+        method: 'GET',
+        url: parsed.href,
+        headers: headers || {},
+        timeout: timeoutMs,
+      });
+      req.on('response', (res) => {
+        if (settled) return;
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          settled = true;
+          res.resume();
+          httpGet(res.headers.location, headers, timeoutMs).then(resolve, reject);
+          return;
+        }
+        settled = true;
+        resolve(res);
+      });
+      req.on('error', (err) => { if (!settled) { settled = true; reject(err); } });
+      req.end();
+      return;
+    }
     const mod = parsed.protocol === 'https:' ? https : http;
     const req = mod.request(parsed, { method: 'GET', headers, timeout: timeoutMs }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
@@ -552,15 +588,50 @@ function median(arr) {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
-/** 单线路单次探测：Range 请求 32KB，统计 TTFB 与速度。 */
+/** 单线路单次探测：Range 请求 32KB，统计 TTFB 与速度。Electron 下走系统代理。 */
 function probeOne(url, timeoutMs) {
   return new Promise((resolve, reject) => {
     let parsed;
     try { parsed = new URL(url); } catch (e) { reject(e); return; }
-    const mod = parsed.protocol === 'https:' ? https : http;
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      reject(new Error('unsupported protocol: ' + parsed.protocol));
+      return;
+    }
     const start = Date.now();
     let firstByteAt = 0;
     let bytes = 0;
+    const onData = (c) => {
+      if (!firstByteAt) firstByteAt = Date.now();
+      bytes += c.length;
+    };
+    const onEnd = () => {
+      const ttfbMs = firstByteAt ? firstByteAt - start : Date.now() - start;
+      const totalMs = (Date.now() - start) || 1;
+      resolve({ ok: true, ttfbMs, bytes, speedBps: Math.round((bytes / totalMs) * 1000), totalMs });
+    };
+    const onErr = (err) => reject(err);
+    if (electron && electron.net && electron.net.request) {
+      const req = electron.net.request({
+        method: 'GET',
+        url: parsed.href,
+        headers: { Range: 'bytes=0-32767', 'User-Agent': 'NEVO-Client/Updater' },
+        timeout: timeoutMs,
+      });
+      req.on('response', (res) => {
+        if (res.statusCode !== 200 && res.statusCode !== 206) {
+          res.resume();
+          reject(new Error('HTTP ' + res.statusCode));
+          return;
+        }
+        res.on('data', onData);
+        res.on('end', onEnd);
+        res.on('error', onErr);
+      });
+      req.on('error', onErr);
+      req.end();
+      return;
+    }
+    const mod = parsed.protocol === 'https:' ? https : http;
     const req = mod.request(parsed, {
       method: 'GET',
       headers: { Range: 'bytes=0-32767', 'User-Agent': 'NEVO-Client/Updater' },
@@ -571,19 +642,12 @@ function probeOne(url, timeoutMs) {
         reject(new Error('HTTP ' + res.statusCode));
         return;
       }
-      res.on('data', (c) => {
-        if (!firstByteAt) firstByteAt = Date.now();
-        bytes += c.length;
-      });
-      res.on('end', () => {
-        const ttfbMs = firstByteAt ? firstByteAt - start : Date.now() - start;
-        const totalMs = (Date.now() - start) || 1;
-        resolve({ ok: true, ttfbMs, bytes, speedBps: Math.round((bytes / totalMs) * 1000), totalMs });
-      });
-      res.on('error', reject);
+      res.on('data', onData);
+      res.on('end', onEnd);
+      res.on('error', onErr);
     });
     req.on('timeout', () => req.destroy(new Error('request timeout')));
-    req.on('error', reject);
+    req.on('error', onErr);
     req.end();
   });
 }
